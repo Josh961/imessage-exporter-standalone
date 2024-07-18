@@ -39,59 +39,63 @@ The [releases page](https://github.com/ReagentX/imessage-exporter/releases) prov
 ```txt
 -d, --diagnostics
         Print diagnostic information and exit
-        
+
 -f, --format <txt, html>
         Specify a single file format to export messages into
-        
+
 -c, --copy-method <compatible, efficient, disabled>
         Specify an optional method to use when copying message attachments
         Compatible will convert HEIC files to JPEG
         Efficient will copy files without converting anything
         If omitted, the default is `disabled`
-        
+
 -p, --db-path <path/to/source>
         Specify an optional custom path for the iMessage database location
         For macOS, specify a path to a `chat.db` file
         For iOS, specify a path to the root of an unencrypted backup directory
         If omitted, the default directory is ~/Library/Messages/chat.db
-        
+
 -r, --attachment-root <path/to/attachments>
         Specify an optional custom path to look for attachments in (macOS only)
         Only use this if attachments are stored separately from the database's default location
         The default location is ~/Library/Messages/Attachments
-        
+
 -a, --platform <macOS, iOS>
         Specify the platform the database was created on
         If omitted, the platform type is determined automatically
-        
+
 -o, --export-path <path/to/save/files>
         Specify an optional custom directory for outputting exported data
         If omitted, the default directory is ~/imessage_export
-        
+
 -s, --start-date <YYYY-MM-DD>
         The start date filter
         Only messages sent on or after this date will be included
-        
+
 -e, --end-date <YYYY-MM-DD>
         The end date filter
         Only messages sent before this date will be included
-        
+
 -l, --no-lazy
         Do not include `loading="lazy"` in HTML export `img` tags
         This will make pages load slower but PDF generation work
-        
+
 -m, --custom-name <custom-name>
         Specify an optional custom name for the database owner's messages in exports
         Conflicts with --use-caller-id
-        
+
 -i, --use-caller-id
         Use the database owner's caller ID in exports instead of "Me"
         Conflicts with --custom-name
-        
+
 -b, --ignore-disk-warning
         Bypass the disk space check when exporting data
         By default, exports will not run if there is not enough free disk space
-        
+
+-n, --phone-numbers
+        Export messages for these phone numbers only (includes group chats with these numbers)
+        Phone numbers should be separated by commas and should only contain digits
+
 -h, --help
         Print help
 -V, --version
@@ -127,7 +131,7 @@ $ imessage-exporter -f html -c disabled -p /Volumes/external/chat.db -o /Volumes
 Export as `html` from `/Volumes/external/chat.db` to `/Volumes/external/export` with attachments in `/Volumes/external/Attachments`:
 
 ```zsh
-$ imessage-exporter -f html -c efficient -p /Volumes/external/chat.db -r /Volumes/external/Attachments -o /Volumes/external/export 
+$ imessage-exporter -f html -c efficient -p /Volumes/external/chat.db -r /Volumes/external/Attachments -o /Volumes/external/export
 ```
 
 Export messages from `2020-01-01` to `2020-12-31` as `txt` from the default macOS iMessage Database location to `~/export-2020`:

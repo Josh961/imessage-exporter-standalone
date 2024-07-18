@@ -358,6 +358,30 @@ impl Config {
         }
         UNKNOWN
     }
+
+    pub fn should_export_message(&self, message: &Message) -> bool {
+        if let Some(phone_numbers) = &self.options.phone_numbers {
+            if let Some((chatroom, _)) = self.conversation(message) {
+                // For group chats, check if any participant matches the phone numbers
+                if let Some(participants) = self.chatroom_participants.get(&chatroom.rowid) {
+                    return participants.iter().any(|&handle_id| {
+                        if let Some(participant) = self.participants.get(&handle_id) {
+                            phone_numbers.iter().any(|phone| participant.contains(phone))
+                        } else {
+                            false
+                        }
+                    });
+                }
+            }
+            // For individual chats, check the handle_id as before
+            let handle_id = message.handle_id.unwrap_or(0);
+            if let Some(participant) = self.participants.get(&handle_id) {
+                return phone_numbers.iter().any(|phone| participant.contains(phone));
+            }
+            return false;
+        }
+        true
+    }
 }
 
 #[cfg(test)]
@@ -389,6 +413,7 @@ mod filename_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
+            phone_numbers: None,
         }
     }
 
@@ -620,6 +645,7 @@ mod who_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
+            phone_numbers: None,
         }
     }
 
@@ -872,6 +898,7 @@ mod directory_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
+            phone_numbers: None,
         }
     }
 

@@ -99,6 +99,12 @@ impl<'a> Exporter<'a> for TXT<'a> {
             }
             current_message_row = msg.rowid;
 
+            // Check if the message should be exported based on phone numbers
+            if !self.config.should_export_message(&msg) {
+                current_message += 1;
+                continue;
+            }
+
             // Render the announcement in-line
             if msg.is_announcement() {
                 let announcement = self.format_announcement(&msg);
@@ -992,6 +998,7 @@ mod tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
+            phone_numbers: None
         }
     }
 

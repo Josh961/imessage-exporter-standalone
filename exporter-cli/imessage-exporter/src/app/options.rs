@@ -32,6 +32,7 @@ pub const OPTION_CUSTOM_NAME: &str = "custom-name";
 pub const OPTION_PLATFORM: &str = "platform";
 pub const OPTION_BYPASS_FREE_SPACE_CHECK: &str = "ignore-disk-warning";
 pub const OPTION_USE_CALLER_ID: &str = "use-caller-id";
+pub const OPTION_PHONE_NUMBERS: &str = "phone-numbers";
 
 // Other CLI Text
 pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
@@ -69,6 +70,8 @@ pub struct Options {
     pub platform: Platform,
     /// If true, disable the free disk space check
     pub ignore_disk_space: bool,
+    /// Export messages for these phone numbers only
+    pub phone_numbers: Option<Vec<String>>,
 }
 
 impl Options {
@@ -86,6 +89,7 @@ impl Options {
         let use_caller_id = args.get_flag(OPTION_USE_CALLER_ID);
         let platform_type: Option<&String> = args.get_one(OPTION_PLATFORM);
         let ignore_disk_space = args.get_flag(OPTION_BYPASS_FREE_SPACE_CHECK);
+        let phone_numbers = args.get_many::<String>(OPTION_PHONE_NUMBERS);
 
         // Build the export type
         let export_type: Option<ExportType> = match export_file_type {
@@ -228,6 +232,12 @@ impl Options {
         // Validate the provided export path
         let export_path = validate_path(user_export_path, &export_type.as_ref())?;
 
+        // Only export messages for the provided phone numbers
+        let phone_numbers = match phone_numbers {
+            Some(values) => Some(values.cloned().collect()),
+            None => None,
+        };
+
         Ok(Options {
             db_path,
             attachment_root: attachment_root.cloned(),
@@ -241,6 +251,7 @@ impl Options {
             use_caller_id,
             platform,
             ignore_disk_space,
+            phone_numbers,
         })
     }
 
@@ -410,6 +421,17 @@ fn get_command() -> Command {
                 .action(ArgAction::SetTrue)
                 .display_order(12)
         )
+        .arg(
+            Arg::new(OPTION_PHONE_NUMBERS)
+                .short('n')
+                .long(OPTION_PHONE_NUMBERS)
+                .help("Export messages for these phone numbers only (includes group chats with these numbers)\nPhone numbers should be separated by commas and should only contain digits\n")
+                .value_name("PHONE_NUMBERS")
+                .num_args(1..)
+                .value_delimiter(',')
+                .action(ArgAction::Append)
+                .display_order(13)
+        )
 }
 
 /// Parse arguments from the command line
@@ -455,6 +477,7 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
+            phone_numbers: None,
         };
 
         assert_eq!(actual, expected);
@@ -566,6 +589,7 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
+            phone_numbers: None,
         };
 
         assert_eq!(actual, expected);
@@ -598,6 +622,7 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
+            phone_numbers: None,
         };
 
         assert_eq!(actual, expected);
@@ -718,6 +743,7 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
+            phone_numbers: None,
         };
 
         assert_eq!(actual, expected);
@@ -747,6 +773,7 @@ mod arg_tests {
             use_caller_id: true,
             platform: Platform::default(),
             ignore_disk_space: false,
+            phone_numbers: None,
         };
 
         assert_eq!(actual, expected);

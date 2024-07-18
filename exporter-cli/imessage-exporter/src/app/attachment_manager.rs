@@ -1,6 +1,8 @@
 use std::{
+    ffi::OsString,
     fmt::Display,
-    fs::{copy, create_dir_all, metadata},
+    fs::{copy, create_dir_all, File, metadata},
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
 
@@ -126,7 +128,23 @@ impl AttachmentManager {
     /// - Attachment `HEIC` files convert to `JPEG`
     /// - Other files are copied with their original formats
     fn copy_convert(from: &Path, to: &mut PathBuf, converter: &Converter, is_sticker: bool) {
-        let original_extension = from.extension().unwrap_or_default();
+        let mut original_extension = from.extension().unwrap_or_default().to_os_string();
+
+        if original_extension.is_empty() {
+            // Read the first few bytes of the file to determine its type
+            if let Ok(mut file) = File::open(from) {
+                let mut buffer = [0; 12];
+                if file.read_exact(&mut buffer).is_ok() {
+                    if &buffer[4..8] == b"ftyp" && &buffer[8..12] == b"heic" {
+                        original_extension = OsString::from("heic");
+                    } else if &buffer[4..8] == b"ftyp" && &buffer[8..12] == b"heix" {
+                        original_extension = OsString::from("heics");
+                    }
+                    // Reset file pointer to the beginning
+                    let _ = file.seek(SeekFrom::Start(0));
+                }
+            }
+        }
 
         // Handle sticker attachments
         if is_sticker {
@@ -138,7 +156,6 @@ impl AttachmentManager {
                 Some("heics" | "HEICS") => Some(ImageType::Gif),
                 _ => None,
             };
-
             match output_type {
                 Some(output_type) => {
                     to.set_extension(output_type.to_str());

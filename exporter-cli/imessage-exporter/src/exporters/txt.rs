@@ -998,7 +998,8 @@ mod tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
-            phone_numbers: None
+            phone_numbers: None,
+            list_contacts: false,
         }
     }
 

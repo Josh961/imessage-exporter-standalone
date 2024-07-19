@@ -234,6 +234,51 @@ impl Handle {
 
         Ok(row_to_id)
     }
+
+    pub fn get_message_counts(
+        db: &Connection,
+    ) -> Result<(HashMap<i32, (i32, i64)>, HashMap<i32, (i32, i64)>), TableError> {
+        // Get individual contact message counts and latest message date
+        let mut stmt = db
+            .prepare(
+                "
+            SELECT handle_id, COUNT(*) as message_count, MAX(date) as latest_date
+            FROM message
+            WHERE handle_id IS NOT NULL
+            GROUP BY handle_id
+            HAVING message_count >= 20
+        ",
+            )
+            .map_err(TableError::Handle)?;
+
+        let contact_message_counts = stmt
+            .query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))
+            .map_err(TableError::Handle)?
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(TableError::Handle)?;
+
+        // Get group chat message counts and latest message date
+        let mut stmt = db
+            .prepare(
+                "
+            SELECT chat_id, COUNT(*) as message_count, MAX(message.date) as latest_date
+            FROM message
+            JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
+            WHERE chat_id IS NOT NULL
+            GROUP BY chat_id
+            HAVING message_count >= 20
+        ",
+            )
+            .map_err(TableError::Handle)?;
+
+        let group_message_counts = stmt
+            .query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))
+            .map_err(TableError::Handle)?
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(TableError::Handle)?;
+
+        Ok((contact_message_counts, group_message_counts))
+    }
 }
 
 #[cfg(test)]

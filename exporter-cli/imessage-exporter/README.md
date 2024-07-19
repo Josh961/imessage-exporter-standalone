@@ -96,6 +96,10 @@ The [releases page](https://github.com/ReagentX/imessage-exporter/releases) prov
         Export messages for these phone numbers only (includes group chats with these numbers)
         Phone numbers should be separated by commas and should only contain digits
 
+-t, --list-contacts
+        List all contacts and group chats with at least 20 messages in the database
+        Type|Contact|Message Count|Last Message Date|Participants
+
 -h, --help
         Print help
 -V, --version

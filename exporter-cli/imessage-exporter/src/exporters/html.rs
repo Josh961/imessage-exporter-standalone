@@ -1492,6 +1492,7 @@ mod tests {
             platform: Platform::macOS,
             ignore_disk_space: false,
             phone_numbers: None,
+            list_contacts: false,
         }
     }
 

@@ -310,6 +310,8 @@ impl Config {
     pub fn start(&self) -> Result<(), RuntimeError> {
         if self.options.diagnostic {
             self.run_diagnostic().map_err(RuntimeError::DatabaseError)?;
+        } else if self.options.list_contacts {
+            self.list_contacts()?;
         } else if let Some(export_type) = &self.options.export_type {
             // Ensure the path we want to export to exists
             create_dir_all(&self.options.export_path).map_err(RuntimeError::DiskError)?;
@@ -366,7 +368,9 @@ impl Config {
                 if let Some(participants) = self.chatroom_participants.get(&chatroom.rowid) {
                     return participants.iter().any(|&handle_id| {
                         if let Some(participant) = self.participants.get(&handle_id) {
-                            phone_numbers.iter().any(|phone| participant.contains(phone))
+                            phone_numbers
+                                .iter()
+                                .any(|phone| participant.contains(phone))
                         } else {
                             false
                         }
@@ -376,11 +380,106 @@ impl Config {
             // For individual chats, check the handle_id as before
             let handle_id = message.handle_id.unwrap_or(0);
             if let Some(participant) = self.participants.get(&handle_id) {
-                return phone_numbers.iter().any(|phone| participant.contains(phone));
+                return phone_numbers
+                    .iter()
+                    .any(|phone| participant.contains(phone));
             }
             return false;
         }
         true
+    }
+
+    pub fn list_contacts(&self) -> Result<(), RuntimeError> {
+        println!("Listing all unique contacts and group chats with at least 20 messages:");
+
+        // Get message counts using the Handle struct method
+        let (contact_message_counts, group_message_counts) =
+            Handle::get_message_counts(&self.db).map_err(RuntimeError::DatabaseError)?;
+
+        // Create a HashMap to store unique contacts
+        let mut unique_contacts: HashMap<String, (String, i32, i64)> = HashMap::new();
+
+        // Process individual contacts
+        for (&handle_id, &(count, date)) in &contact_message_counts {
+            if let Some(contact) = self.participants.get(&handle_id) {
+                // Extract the phone number (assuming it's the last 10 digits)
+                let phone_number = contact
+                    .chars()
+                    .filter(|c| c.is_digit(10))
+                    .collect::<String>();
+                if phone_number.len() >= 10 {
+                    let key = phone_number[phone_number.len() - 10..].to_string();
+                    unique_contacts
+                        .entry(key)
+                        .and_modify(|e| {
+                            e.1 += count; // Add the message count
+                            if date > e.2 {
+                                e.2 = date; // Update to the latest date
+                            }
+                        })
+                        .or_insert((contact.clone(), count, date));
+                }
+            }
+        }
+
+        // Sort unique contacts by latest message date
+        let mut unique_contacts: Vec<_> = unique_contacts.values().collect();
+        unique_contacts.sort_by(|a, b| b.2.cmp(&a.2));
+
+        for (contact, count, date) in unique_contacts {
+            if *count >= 20 {
+                // Only print contacts with at least 20 messages
+                println!(
+                    "CONTACT|{}|{}|{}",
+                    contact,
+                    count,
+                    chrono::NaiveDateTime::from_timestamp(date / 1_000_000_000 + self.offset, 0),
+                );
+            }
+        }
+
+        // List group chats (this part remains unchanged)
+        let mut group_chats: Vec<(String, Vec<String>, i32, i64)> = Vec::new();
+        for (chat_id, participants) in &self.chatroom_participants {
+            if participants.len() > 1 {
+                if let Some(chat) = self.chatrooms.get(chat_id) {
+                    if let Some(&(count, date)) = group_message_counts.get(chat_id) {
+                        if count >= 20 {
+                            let chat_name = chat.display_name().unwrap_or("Unnamed Group Chat");
+                            let participant_names: Vec<String> = participants
+                                .iter()
+                                .filter_map(|&id| self.participants.get(&id))
+                                .filter(|&participant| {
+                                    participant.chars().filter(|c| c.is_digit(10)).count() >= 10
+                                })
+                                .cloned()
+                                .collect();
+
+                            group_chats.push((
+                                chat_name.to_string(),
+                                participant_names,
+                                count,
+                                date,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort group chats by latest message date
+        group_chats.sort_by(|a, b| b.3.cmp(&a.3));
+
+        for (chat_name, participants, count, date) in group_chats {
+            println!(
+                "GROUP|{}|{}|{}|{}",
+                chat_name,
+                count,
+                chrono::NaiveDateTime::from_timestamp(date / 1_000_000_000 + self.offset, 0),
+                participants.join(",")
+            );
+        }
+        Ok(())
     }
 }
 
@@ -414,6 +513,7 @@ mod filename_tests {
             platform: Platform::macOS,
             ignore_disk_space: false,
             phone_numbers: None,
+            list_contacts: false,
         }
     }
 
@@ -646,6 +746,7 @@ mod who_tests {
             platform: Platform::macOS,
             ignore_disk_space: false,
             phone_numbers: None,
+            list_contacts: false,
         }
     }
 
@@ -899,6 +1000,7 @@ mod directory_tests {
             platform: Platform::macOS,
             ignore_disk_space: false,
             phone_numbers: None,
+            list_contacts: false,
         }
     }
 

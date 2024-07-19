@@ -33,6 +33,7 @@ pub const OPTION_PLATFORM: &str = "platform";
 pub const OPTION_BYPASS_FREE_SPACE_CHECK: &str = "ignore-disk-warning";
 pub const OPTION_USE_CALLER_ID: &str = "use-caller-id";
 pub const OPTION_PHONE_NUMBERS: &str = "phone-numbers";
+pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
 
 // Other CLI Text
 pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
@@ -72,6 +73,8 @@ pub struct Options {
     pub ignore_disk_space: bool,
     /// Export messages for these phone numbers only
     pub phone_numbers: Option<Vec<String>>,
+    /// If true, list all phone numbers and group chats
+    pub list_contacts: bool,
 }
 
 impl Options {
@@ -90,6 +93,7 @@ impl Options {
         let platform_type: Option<&String> = args.get_one(OPTION_PLATFORM);
         let ignore_disk_space = args.get_flag(OPTION_BYPASS_FREE_SPACE_CHECK);
         let phone_numbers = args.get_many::<String>(OPTION_PHONE_NUMBERS);
+        let list_contacts = args.get_flag(OPTION_LIST_CONTACTS);
 
         // Build the export type
         let export_type: Option<ExportType> = match export_file_type {
@@ -238,6 +242,18 @@ impl Options {
             None => None,
         };
 
+        let list_contacts = match list_contacts {
+            true => true,
+            false => false,
+        };
+
+        // Add checks to ensure list_contacts is not used with incompatible options
+        if list_contacts && (export_file_type.is_some() || phone_numbers.is_some()) {
+            return Err(RuntimeError::InvalidOptions(
+                format!("Option {OPTION_LIST_CONTACTS} cannot be used with export type or phone numbers filtering")
+            ));
+        }
+
         Ok(Options {
             db_path,
             attachment_root: attachment_root.cloned(),
@@ -252,6 +268,7 @@ impl Options {
             platform,
             ignore_disk_space,
             phone_numbers,
+            list_contacts,
         })
     }
 
@@ -432,6 +449,15 @@ fn get_command() -> Command {
                 .action(ArgAction::Append)
                 .display_order(13)
         )
+        .arg(
+            Arg::new(OPTION_LIST_CONTACTS)
+                .short('t')
+                .long(OPTION_LIST_CONTACTS)
+                .help("List all phone numbers and group chats with at least 20 messages in the database\n")
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(&[OPTION_EXPORT_TYPE, OPTION_PHONE_NUMBERS])
+                .display_order(14)
+        )
 }
 
 /// Parse arguments from the command line
@@ -478,6 +504,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             phone_numbers: None,
+            list_contacts: false,
         };
 
         assert_eq!(actual, expected);
@@ -590,6 +617,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             phone_numbers: None,
+            list_contacts: false,
         };
 
         assert_eq!(actual, expected);
@@ -623,6 +651,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             phone_numbers: None,
+            list_contacts: false,
         };
 
         assert_eq!(actual, expected);
@@ -744,6 +773,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             phone_numbers: None,
+            list_contacts: false,
         };
 
         assert_eq!(actual, expected);
@@ -774,6 +804,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             phone_numbers: None,
+            list_contacts: false,
         };
 
         assert_eq!(actual, expected);

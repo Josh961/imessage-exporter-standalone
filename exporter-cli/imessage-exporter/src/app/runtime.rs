@@ -11,7 +11,8 @@ use rusqlite::Connection;
 use crate::{
     app::{
         attachment_manager::AttachmentManager, converter::Converter, error::RuntimeError,
-        export_type::ExportType, options::Options, sanitizers::sanitize_filename,
+        export_type::ExportType, options::normalize_phone_number, options::Options,
+        sanitizers::sanitize_filename,
     },
     Exporter, HTML, TXT,
 };
@@ -362,31 +363,32 @@ impl Config {
     }
 
     pub fn should_export_message(&self, message: &Message) -> bool {
-        if let Some(phone_numbers) = &self.options.phone_numbers {
-            if let Some((chatroom, _)) = self.conversation(message) {
-                // For group chats, check if any participant matches the phone numbers
-                if let Some(participants) = self.chatroom_participants.get(&chatroom.rowid) {
-                    return participants.iter().any(|&handle_id| {
-                        if let Some(participant) = self.participants.get(&handle_id) {
-                            phone_numbers
-                                .iter()
-                                .any(|phone| participant.contains(phone))
-                        } else {
-                            false
-                        }
-                    });
+        if let Some((chatroom, _)) = self.conversation(message) {
+            if let Some(individual_numbers) = &self.options.individual_numbers {
+                let chat_number = normalize_phone_number(&chatroom.chat_identifier);
+                if individual_numbers.contains(&chat_number) {
+                    return true;
                 }
             }
-            // For individual chats, check the handle_id as before
-            let handle_id = message.handle_id.unwrap_or(0);
-            if let Some(participant) = self.participants.get(&handle_id) {
-                return phone_numbers
-                    .iter()
-                    .any(|phone| participant.contains(phone));
+            if let Some(group_numbers) = &self.options.group_numbers {
+                if let Some(participants) = self.chatroom_participants.get(&chatroom.rowid) {
+                    let chat_numbers: HashSet<String> = participants
+                        .iter()
+                        .filter_map(|&handle_id| self.participants.get(&handle_id))
+                        .map(|participant| normalize_phone_number(participant))
+                        .collect();
+                    if group_numbers.iter().any(|group| {
+                        group.len() == chat_numbers.len()
+                            && group.iter().all(|number| chat_numbers.contains(number))
+                    }) {
+                        return true;
+                    }
+                }
             }
-            return false;
+            self.options.individual_numbers.is_none() && self.options.group_numbers.is_none()
+        } else {
+            false
         }
-        true
     }
 
     pub fn list_contacts(&self) -> Result<(), RuntimeError> {
@@ -512,7 +514,8 @@ mod filename_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
-            phone_numbers: None,
+            individual_numbers: None,
+            group_numbers: None,
             list_contacts: false,
         }
     }
@@ -745,7 +748,8 @@ mod who_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
-            phone_numbers: None,
+            individual_numbers: None,
+            group_numbers: None,
             list_contacts: false,
         }
     }
@@ -999,7 +1003,8 @@ mod directory_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
-            phone_numbers: None,
+            individual_numbers: None,
+            group_numbers: None,
             list_contacts: false,
         }
     }

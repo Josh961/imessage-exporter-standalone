@@ -93,8 +93,7 @@ The [releases page](https://github.com/ReagentX/imessage-exporter/releases) prov
         By default, exports will not run if there is not enough free disk space
 
 -n, --phone-numbers
-        Export messages for these phone numbers only (includes group chats with these numbers)
-        Phone numbers should be separated by commas and should only contain digits
+        Export messages for these phone numbers only. For group chats, provide all numbers separated by commas.
 
 -t, --list-contacts
         List all contacts and group chats with at least 20 messages in the database

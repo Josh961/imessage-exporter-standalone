@@ -1,0 +1,14 @@
+appId: com.imessageexporter.standalone
+productName: iMessage Exporter
+directories:
+  output: dist
+  buildResources: public
+files:
+  - dist/**/*
+  - package.json
+mac:
+  category: public.app-category.utilities
+win:
+  target: nsis
+linux:
+  target: AppImage

@@ -1,0 +1,41 @@
+{
+  "name": "imessage-exporter-gui",
+  "version": "1.0.0",
+  "description": "A GUI for exporting iMessage data",
+  "type": "module",
+  "main": "src/main.mjs",
+  "scripts": {
+    "start": "npm run build && electron .",
+    "build": "tailwindcss -i ./src/styles.css -o ./src/styles.output.css",
+    "watch": "tailwindcss -i ./src/styles.css -o ./src/styles.output.css --watch",
+    "dev": "concurrently \"npm run watch\" \"electron .\"",
+    "package": "npm run build && electron-builder build --mac --win --linux",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "electron-store": "^10.0.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.19",
+    "concurrently": "^8.2.2",
+    "electron": "^31.2.1",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.39",
+    "prettier": "^3.3.3",
+    "prettier-plugin-tailwindcss": "^0.5.13",
+    "tailwindcss": "^3.4.5"
+  },
+  "build": {
+    "appId": "com.imessageexporter.gui",
+    "productName": "iMessage Exporter GUI",
+    "mac": {
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}

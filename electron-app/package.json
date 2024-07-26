@@ -9,7 +9,9 @@
     "build": "tailwindcss -i ./src/styles.css -o ./src/styles.output.css",
     "watch": "tailwindcss -i ./src/styles.css -o ./src/styles.output.css --watch",
     "dev": "concurrently \"npm run watch\" \"electron .\"",
-    "package": "npm run build && electron-builder build --mac --win --linux",
+    "package": "npm run build && electron-builder build",
+    "package:mac": "npm run build && electron-builder build --mac",
+    "package:win": "npm run build && electron-builder build --win",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
@@ -28,14 +30,25 @@
   "build": {
     "appId": "com.imessageexporter.gui",
     "productName": "iMessage Exporter GUI",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "."
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
     "mac": {
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "target": ["dmg", "zip"]
     },
     "win": {
       "target": "nsis"
-    },
-    "linux": {
-      "target": "AppImage"
     }
   }
 }

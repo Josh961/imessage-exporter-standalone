@@ -14,7 +14,7 @@ This software can:
 
 ## Example Export
 
-![HTML Export Sample](/docs/hero.png)
+![HTML Export Sample](docs/hero.png)
 
 ## Binary
 
@@ -47,7 +47,7 @@ See more detail about supported features [here](docs/features.md).
 
 ## Frequently Asked Questions
 
-The FAQ document is located [here](/docs/faq.md).
+The FAQ document is located [here](docs/faq.md).
 
 ## Special Thanks
 

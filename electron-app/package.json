@@ -1,7 +1,8 @@
 {
-  "name": "imessage-exporter-gui",
+  "name": "imessage-exporter-standalone",
   "version": "1.0.0",
-  "description": "A GUI for exporting iMessage data",
+  "description": "Export your iMessage chats to backup files",
+  "author": "My Forever Books",
   "type": "module",
   "main": "src/main.mjs",
   "scripts": {
@@ -28,8 +29,8 @@
     "tailwindcss": "^3.4.5"
   },
   "build": {
-    "appId": "com.imessageexporter.gui",
-    "productName": "iMessage Exporter GUI",
+    "appId": "com.imessageexporter.standalone",
+    "productName": "iMessage Exporter",
     "files": [
       "src/**/*",
       "package.json"
@@ -40,6 +41,12 @@
         "to": "."
       }
     ],
+    "extraFiles": [
+      {
+        "from": "resources/ImageMagick-7.1.1-35-Q16-HDRI-x64-dll.exe",
+        "to": "ImageMagick-installer.exe"
+      }
+    ],
     "directories": {
       "output": "dist"
     },
@@ -48,7 +55,17 @@
       "target": ["dmg", "zip"]
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "include": "installer.nsh",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico"
     }
   }
 }

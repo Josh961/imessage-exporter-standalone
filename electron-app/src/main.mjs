@@ -6,14 +6,18 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import os from 'os';
 
-const EXECUTABLE_NAME = 'imessage-exporter.exe';
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const store = new Store();
 
 let mainWindow;
+
+// Define executables for different platforms
+const EXECUTABLES = {
+  darwin: 'imessage-exporter-mac',
+  win32: 'imessage-exporter-win.exe'
+};
 
 // Application lifecycle
 app.whenReady().then(() => {
@@ -156,7 +160,7 @@ ipcMain.handle('save-last-output-folder', (event, folder) => store.set('lastOutp
 
 // iMessage exporter operations
 ipcMain.handle('list-contacts', async (event, inputFolder) => {
-  const executablePath = getResourcePath(EXECUTABLE_NAME);
+  const executablePath = getResourcePath();
   const chatDbPath = getChatDbPath(inputFolder);
 
   return new Promise((resolve) => {
@@ -181,7 +185,7 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
 
   try {
     const uniqueOutputFolder = await createUniqueFolder(outputFolder);
-    const executablePath = getResourcePath(EXECUTABLE_NAME);
+    const executablePath = getResourcePath();
     const chatDbPath = getChatDbPath(inputFolder);
 
     let params = `-f txt -c compatible -p "${chatDbPath}" -o "${uniqueOutputFolder}"`;
@@ -209,10 +213,15 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
 });
 
 // Utility functions
-function getResourcePath(fileName) {
+function getResourcePath() {
+  const executableName = getExecutableName();
   return app.isPackaged
-    ? path.join(process.resourcesPath, fileName)
-    : path.join(__dirname, '..', 'resources', fileName);
+    ? path.join(process.resourcesPath, executableName)
+    : path.join(__dirname, '..', 'resources', executableName);
+}
+
+function getExecutableName() {
+  return EXECUTABLES[process.platform] || EXECUTABLES.win32; // Default to Windows executable if platform is not recognized
 }
 
 async function createUniqueFolder(basePath) {

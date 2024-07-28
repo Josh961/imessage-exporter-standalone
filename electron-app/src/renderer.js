@@ -79,11 +79,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     const possibleLocations = [
-      // macOS locations
+      // Direct macOS iMessage database location
+      '~/Library/Messages/',
+      // macOS iTunes backup locations
       '~/Library/Application Support/MobileSync/Backup/',
       '/Library/Application Support/MobileSync/Backup/',
-
-      // Windows locations
+      // Windows iTunes backup locations
       '%appdata%\\Apple Computer\\MobileSync\\Backup\\',
       '%appdata%\\Apple\\MobileSync\\Backup\\',
       '%USERPROFILE%\\Apple Computer\\MobileSync\\Backup\\',
@@ -93,22 +94,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     for (const location of possibleLocations) {
       try {
         let expandedPath = location;
-
-        // Only use expandPath for Windows paths (those with % signs)
-        if (location.includes('%')) {
+        // Expand paths for both Unix-like and Windows systems
+        if (location.includes('%') || location.startsWith('~')) {
           expandedPath = await window.electronAPI.expandPath(location);
         }
 
         const exists = await window.electronAPI.checkPathExists(expandedPath);
         if (exists) {
+          const platform = await window.electronAPI.getPlatform();
+
           // For Windows paths, check for nested folders
-          if (location.includes('%USERPROFILE%')) {
+          if (platform !== 'darwin' && location.includes('%USERPROFILE%')) {
             const nestedFolders = await window.electronAPI.getNestedFolders(expandedPath);
             if (nestedFolders && nestedFolders.length > 0) {
               expandedPath = nestedFolders[0]; // Select the first nested folder
             }
           }
-
           elements.inputFolder.value = expandedPath;
           await window.electronAPI.saveLastInputFolder(expandedPath);
           break;

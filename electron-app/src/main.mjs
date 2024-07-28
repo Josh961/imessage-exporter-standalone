@@ -12,9 +12,22 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const store = new Store();
+
 let mainWindow;
 
 // Application lifecycle
+app.whenReady().then(() => {
+  createWindow();
+
+  app.on('activate', function () {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -24,23 +37,49 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    icon: path.join(__dirname, '../assets/icon.png')
   });
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
+
+  // Check Full Disk Access after window is created
+  setTimeout(async () => {
+    const hasAccess = await checkFullDiskAccess();
+    if (!hasAccess) {
+      showPermissionsInstructions(mainWindow);
+    }
+  }, 2000); // 2 second delay
 }
 
-app.whenReady().then(createWindow);
+async function checkFullDiskAccess() {
+  if (process.platform === 'darwin') {
+    const messageDatabasePath = path.join(app.getPath('home'), 'Library', 'Messages', 'chat.db');
+    try {
+      await fs.access(messageDatabasePath, fs.constants.R_OK);
+      return true;
+    } catch (err) {
+      console.error('Full Disk Access check failed:', err);
+      return false;
+    }
+  }
+  return true; // For non-macOS platforms
+}
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+function showPermissionsInstructions(mainWindow) {
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Permissions Required',
+    message: 'This app requires Full Disk Access to read your iMessages database and access to your Documents folder to save exported chats.',
+    detail: 'Please follow these steps:\n\n1. Open System Settings\n2. Go to Privacy & Security \n3. Select "Full Disk Access" \n4. Click the + icon to add iMessage Exporter to the list\n5. Turn the toggle on to grant permissions\n\nAfter granting permissions, please restart the app.',
+    buttons: ['OK']
+  });
+}
 
 // IPC Handlers
+// System information
+ipcMain.handle('get-platform', () => {
+  return process.platform;
+});
+
 // File and folder operations
 ipcMain.handle('open-external-link', (event, url) => shell.openExternal(url));
 
@@ -118,9 +157,10 @@ ipcMain.handle('save-last-output-folder', (event, folder) => store.set('lastOutp
 // iMessage exporter operations
 ipcMain.handle('list-contacts', async (event, inputFolder) => {
   const executablePath = getResourcePath(EXECUTABLE_NAME);
+  const chatDbPath = getChatDbPath(inputFolder);
 
   return new Promise((resolve) => {
-    exec(`"${executablePath}" -p "${inputFolder}" -t`, (error, stdout, stderr) => {
+    exec(`"${executablePath}" -p "${chatDbPath}" -t`, (error, stdout, stderr) => {
       if (error) {
         resolve({ success: false, error: error.message });
       } else {
@@ -142,8 +182,9 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
   try {
     const uniqueOutputFolder = await createUniqueFolder(outputFolder);
     const executablePath = getResourcePath(EXECUTABLE_NAME);
+    const chatDbPath = getChatDbPath(inputFolder);
 
-    let params = `-f txt -c compatible -p "${inputFolder}" -o "${uniqueOutputFolder}"`;
+    let params = `-f txt -c compatible -p "${chatDbPath}" -o "${uniqueOutputFolder}"`;
     if (startDate) params += ` -s ${startDate}`;
     if (endDate) params += ` -e ${endDate}`;
 
@@ -192,4 +233,11 @@ async function createUniqueFolder(basePath) {
 
   await fs.mkdir(fullPath, { recursive: true });
   return fullPath;
+}
+
+function getChatDbPath(inputPath) {
+  if (process.platform === 'darwin' && (inputPath.endsWith('Library/Messages') || inputPath.endsWith('Library/Messages/'))) {
+    return path.join(inputPath, 'chat.db');
+  }
+  return inputPath;
 }

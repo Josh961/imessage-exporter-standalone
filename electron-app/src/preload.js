@@ -1,17 +1,24 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  runExporter: (params) => ipcRenderer.invoke('run-exporter', params),
-  selectFolder: () => ipcRenderer.invoke('select-folder'),
-  expandPath: (path) => ipcRenderer.invoke('expand-path', path),
-  checkPathExists: (path) => ipcRenderer.invoke('check-path-exists', path),
-  getNestedFolders: (path) => ipcRenderer.invoke('get-nested-folders', path),
+  // System information
+  getPlatform: () => ipcRenderer.invoke('get-platform'),
+
+  // File and folder operations
+  openExternalLink: (url) => ipcRenderer.invoke('open-external-link', url),
+  expandPath: (inputPath) => ipcRenderer.invoke('expand-path', inputPath),
+  checkPathExists: (checkPath) => ipcRenderer.invoke('check-path-exists', checkPath),
+  getNestedFolders: (folderPath) => ipcRenderer.invoke('get-nested-folders', folderPath),
   getDocumentsFolder: () => ipcRenderer.invoke('get-documents-folder'),
   selectFolder: (currentPath, type) => ipcRenderer.invoke('select-folder', currentPath, type),
+
+  // Store operations
   getLastInputFolder: () => ipcRenderer.invoke('get-last-input-folder'),
   getLastOutputFolder: () => ipcRenderer.invoke('get-last-output-folder'),
-  openExternalLink: (url) => ipcRenderer.invoke('open-external-link', url),
   saveLastInputFolder: (folder) => ipcRenderer.invoke('save-last-input-folder', folder),
   saveLastOutputFolder: (folder) => ipcRenderer.invoke('save-last-output-folder', folder),
-  listContacts: (inputFolder) => ipcRenderer.invoke('list-contacts', inputFolder)
+
+  // iMessage exporter operations
+  listContacts: (inputFolder) => ipcRenderer.invoke('list-contacts', inputFolder),
+  runExporter: (exportParams) => ipcRenderer.invoke('run-exporter', exportParams)
 });

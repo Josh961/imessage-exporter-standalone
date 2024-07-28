@@ -41,22 +41,41 @@
         "to": "."
       }
     ],
-    "extraFiles": [
-      {
-        "from": "resources/ImageMagick-7.1.1-35-Q16-HDRI-x64-dll.exe",
-        "to": "ImageMagick-installer.exe"
-      }
-    ],
     "directories": {
       "output": "dist"
     },
     "mac": {
       "category": "public.app-category.utilities",
-      "target": ["dmg", "zip"]
+      "target": ["dmg", "zip"],
+      "icon": "assets/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     },
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "extraFiles": [
+        {
+          "from": "resources/ImageMagick-7.1.1-35-Q16-HDRI-x64-dll.exe",
+          "to": "ImageMagick-installer.exe"
+        }
+      ]
     },
     "nsis": {
       "include": "installer.nsh",

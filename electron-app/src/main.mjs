@@ -199,10 +199,11 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
     }
 
     return new Promise((resolve) => {
-      exec(`"${executablePath}" ${params}`, (error, stdout, stderr) => {
+      exec(`"${executablePath}" ${params}`, async (error, stdout, stderr) => {
         if (error) {
           resolve({ success: false, error: error.message });
         } else {
+          await sanitizeFileNames(uniqueOutputFolder);
           resolve({ success: true, outputFolder: uniqueOutputFolder });
         }
       });
@@ -249,4 +250,37 @@ function getChatDbPath(inputPath) {
     return path.join(inputPath, 'chat.db');
   }
   return inputPath;
+}
+
+async function sanitizeFileNames(directory) {
+  try {
+    const files = await fs.readdir(directory);
+    for (const file of files) {
+      if (file.endsWith('.txt')) {
+        const oldPath = path.join(directory, file);
+        const newFileName = sanitizeFileName(file);
+        const newPath = path.join(directory, newFileName);
+
+        if (oldPath !== newPath) {
+          await fs.rename(oldPath, newPath);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error sanitizing file names:', error);
+  }
+}
+
+function sanitizeFileName(fileName) {
+  // Remove emoji and special characters, replace spaces with underscores
+  return fileName
+    .replace(/[\u{1F600}-\u{1F64F}]/gu, '') // Remove emoji
+    .replace(/[\u{1F300}-\u{1F5FF}]/gu, '') // Remove symbols & pictographs
+    .replace(/[\u{1F680}-\u{1F6FF}]/gu, '') // Remove transport & map symbols
+    .replace(/[\u{2600}-\u{26FF}]/gu, '')   // Remove miscellaneous symbols
+    .replace(/[\u{2700}-\u{27BF}]/gu, '')   // Remove dingbats
+    .replace(/_+/g, '_')                    // Replace multiple underscores with a single one
+    .replace(/^_|_$/g, '')                  // Remove leading and trailing underscores
+    .replace(/^\.+|\.+$/g, '')              // Remove leading and trailing dots
+    .replace(/\.{2,}/g, '.')                // Replace multiple dots with a single one
 }

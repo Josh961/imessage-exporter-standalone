@@ -395,7 +395,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     clearInterval(exportAnimationInterval);
 
     if (result.success) {
-      elements.status.textContent = `✅ Export completed successfully! Output folder: ${result.outputFolder}`;
+      elements.status.textContent = `✅ Export completed successfully! Output folder: ${result.zipPath}`;
       elements.status.className = 'text-center font-semibold';
     } else {
       elements.status.textContent = `❌ Export failed: ${result.error}`;

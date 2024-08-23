@@ -1,10 +1,12 @@
+import archiver from 'archiver';
 import { exec } from 'child_process';
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import Store from 'electron-store';
-import fs from 'fs/promises';
+import { createWriteStream } from 'fs';
+import fs, { rm } from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import os from 'os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -184,11 +186,12 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
   const { inputFolder, outputFolder, startDate, endDate, selectedContacts } = exportParams;
 
   try {
-    const uniqueOutputFolder = await createUniqueFolder(outputFolder);
+    const uniqueTempFolder = await createUniqueFolder(outputFolder);
+    const uniqueZipPath = await getUniqueZipPath(outputFolder);
     const executablePath = getResourcePath();
     const chatDbPath = getChatDbPath(inputFolder);
 
-    let params = `-f txt -c compatible -p "${chatDbPath}" -o "${uniqueOutputFolder}"`;
+    let params = `-f txt -c compatible -p "${chatDbPath}" -o "${uniqueTempFolder}"`;
     if (startDate) params += ` -s ${startDate}`;
     if (endDate) params += ` -e ${endDate}`;
 
@@ -203,8 +206,13 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
         if (error) {
           resolve({ success: false, error: error.message });
         } else {
-          await sanitizeFileNames(uniqueOutputFolder);
-          resolve({ success: true, outputFolder: uniqueOutputFolder });
+          try {
+            await sanitizeFileNames(uniqueTempFolder);
+            const finalZipPath = await zipFolder(uniqueTempFolder, uniqueZipPath);
+            resolve({ success: true, zipPath: finalZipPath });
+          } catch (err) {
+            resolve({ success: false, error: err.message });
+          }
         }
       });
     });
@@ -226,23 +234,44 @@ function getExecutableName() {
 }
 
 async function createUniqueFolder(basePath) {
-  let folderName = 'imessage-export';
-  let fullPath = path.join(basePath, folderName);
-  let counter = 2;
+  const { uniqueName, fullPath } = await createUniqueName(basePath, 'imessage-export-temp');
+  await fs.mkdir(fullPath, { recursive: true });
+  return fullPath;
+}
+
+async function getUniqueZipPath(basePath) {
+  const { fullPath } = await createUniqueName(basePath, 'imessage-export', '.zip');
+  return fullPath;
+}
+
+async function createUniqueName(basePath, prefix, extension = '') {
+  let counter = 2; // Start at 2
+  let uniqueName = prefix;
+  let fullPath = path.join(basePath, uniqueName + extension);
+
+  try {
+    await fs.access(fullPath);
+    // If the file exists without a number, immediately move to numbered versions
+    uniqueName = `${prefix}(${counter})`;
+    fullPath = path.join(basePath, uniqueName + extension);
+    counter++;
+  } catch {
+    // If the file doesn't exist, we can use the name without a number
+    return { uniqueName, fullPath };
+  }
 
   while (true) {
     try {
       await fs.access(fullPath);
-      folderName = `imessage-export(${counter})`;
-      fullPath = path.join(basePath, folderName);
+      uniqueName = `${prefix}(${counter})`;
+      fullPath = path.join(basePath, uniqueName + extension);
       counter++;
     } catch {
       break;
     }
   }
 
-  await fs.mkdir(fullPath, { recursive: true });
-  return fullPath;
+  return { uniqueName, fullPath };
 }
 
 function getChatDbPath(inputPath) {
@@ -282,5 +311,27 @@ function sanitizeFileName(fileName) {
     .replace(/_+/g, '_')                    // Replace multiple underscores with a single one
     .replace(/^_|_$/g, '')                  // Remove leading and trailing underscores
     .replace(/^\.+|\.+$/g, '')              // Remove leading and trailing dots
-    .replace(/\.{2,}/g, '.')                // Replace multiple dots with a single one
+    .replace(/\.{2,}/g, '.');                // Replace multiple dots with a single one
+}
+
+async function zipFolder(folderPath, zipPath) {
+  const output = createWriteStream(zipPath);
+  const archive = archiver('zip');
+
+  return new Promise((resolve, reject) => {
+    output.on('close', async () => {
+      try {
+        await rm(folderPath, { recursive: true, force: true });
+        resolve(zipPath);
+      } catch (error) {
+        console.error('Error deleting original folder:', error);
+        resolve(zipPath);
+      }
+    });
+    archive.on('error', reject);
+
+    archive.pipe(output);
+    archive.directory(folderPath, false);
+    archive.finalize();
+  });
 }

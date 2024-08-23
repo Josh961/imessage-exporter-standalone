@@ -347,7 +347,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     elements.exportButton.disabled = true;
     elements.exportButton.classList.remove('hover:bg-sky-600');
-    elements.exportButton.classList.add('hover:bg-sky-500');
+    elements.exportButton.classList.add('hover:bg-sky-500', 'opacity-60');
 
     elements.status.innerHTML = 'Exporting, please wait<span id="animatedDots">.</span>';
     const dotsElement = document.getElementById('animatedDots');
@@ -386,7 +386,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       clearInterval(exportAnimationInterval);
 
       elements.exportButton.disabled = false;
-      elements.exportButton.classList.remove('hover:bg-sky-500');
+      elements.exportButton.classList.remove('hover:bg-sky-500', 'opacity-60');
       elements.exportButton.classList.add('hover:bg-sky-600');
     }
   }

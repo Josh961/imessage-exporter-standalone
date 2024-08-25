@@ -225,7 +225,43 @@
         </div>
       </div>
     </div>
-    <!-- Div to generate class names for use in renderer.js -->
+    <div id="permissions-modal" class="fixed inset-0 z-50 hidden overflow-y-auto bg-black bg-opacity-50">
+      <div class="flex min-h-screen items-center justify-center">
+        <div class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+          <span class="block text-xl font-bold text-slate-900">Full disk access required</span>
+          <span class="mt-2 block text-sm text-slate-700">This app needs access to your iMessages and to save exported chats. Please follow these steps:</span>
+          <ol class="mt-2 flex list-decimal flex-col space-y-2 pl-6 text-sm text-slate-700">
+            <li>Click the "Open system settings" button below</li>
+            <li>Toggle the switch next to "iMessage Exporter" to grant access</li>
+          </ol>
+          <div class="mt-4 flex flex-col gap-4">
+            <button
+              id="open-system-preferences"
+              class="rounded border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2">
+              Open system settings
+            </button>
+          </div>
+          <hr class="my-6" />
+          <div class="mt-4 flex flex-col gap-4">
+            <span id="permissions-instructions" class="text-sm text-slate-700"
+              >Once you've granted permissions, click the button below to check if they were successfully applied:</span
+            >
+            <button
+              id="check-permissions"
+              class="w-full rounded border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2">
+              Check permissions
+            </button>
+            <span id="permissions-granted" class="hidden text-sm font-semibold text-green-600">The app has the necessary permissions.</span>
+            <button
+              id="restart-app"
+              class="hidden w-full rounded border border-green-500 bg-white px-4 py-2 font-semibold text-green-600 hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
+              Restart app
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- div to generate class names for use in renderer.js -->
     <div class="opacity-60"></div>
     <script src="utils.js"></script>
     <script src="renderer.js"></script>

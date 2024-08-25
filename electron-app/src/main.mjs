@@ -47,43 +47,61 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
-  // Check Full Disk Access after window is created
-  setTimeout(async () => {
-    const hasAccess = await checkFullDiskAccess();
-    if (!hasAccess) {
-      showPermissionsInstructions(mainWindow);
-    }
-  }, 2000); // 2 second delay
+  mainWindow.webContents.on('did-finish-load', () => {
+    checkFullDiskAccess();
+  });
 }
+
 
 async function checkFullDiskAccess() {
-  if (process.platform === 'darwin') {
-    const messageDatabasePath = path.join(app.getPath('home'), 'Library', 'Messages', 'chat.db');
-    try {
-      await fs.access(messageDatabasePath, fs.constants.R_OK);
-      return true;
-    } catch (err) {
-      console.error('Full Disk Access check failed:', err);
-      return false;
-    }
+  const hasAccess = await checkFullDiskAccessPermission();
+  if (!hasAccess) {
+    mainWindow.webContents.send('show-permissions-modal');
   }
-  return true; // For non-macOS platforms
 }
 
-function showPermissionsInstructions(mainWindow) {
-  dialog.showMessageBox(mainWindow, {
-    type: 'info',
-    title: 'Permissions Required',
-    message: 'This app requires Full Disk Access to read your iMessages database and access to your Documents folder to save exported chats.',
-    detail: 'Please follow these steps:\n\n1. Open System Settings\n2. Go to Privacy & Security \n3. Select "Full Disk Access" \n4. Click the + icon to add iMessage Exporter to the list\n5. Turn the toggle on to grant permissions\n\nAfter granting permissions, please restart the app.',
-    buttons: ['OK']
-  });
+async function checkFullDiskAccessPermission() {
+  if (process.platform === 'darwin') {
+    const protectedDirs = [
+      path.join(app.getPath('home'), 'Library', 'Messages'),
+      path.join(app.getPath('home'), 'Library', 'Mail'),
+      path.join(app.getPath('home'), 'Library', 'Safari'),
+      path.join(app.getPath('home'), 'Library', 'Cookies'),
+      path.join(app.getPath('home'), 'Library', 'HomeKit'),
+      path.join(app.getPath('home'), 'Library', 'IdentityServices')
+    ];
+
+    for (const dir of protectedDirs) {
+      try {
+        await fs.readdir(dir);
+        return true; // If we can read any directory, we have full disk access
+      } catch (err) {
+        if (err.code !== 'ENOENT') { // Ignore "no such file or directory" errors
+          console.log(`Access denied to ${dir}`);
+        }
+        // Continue checking other directories
+      }
+    }
+    return false; // If we couldn't read any of the directories, we don't have full disk access
+  }
+  return true; // For non-macOS platforms
 }
 
 // IPC Handlers
 // System information
 ipcMain.handle('get-platform', () => {
   return process.platform;
+});
+
+ipcMain.handle('open-system-preferences', () => {
+  shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles');
+});
+
+ipcMain.handle('check-full-disk-access', checkFullDiskAccessPermission);
+
+ipcMain.handle('restart-app', () => {
+  app.relaunch();
+  app.exit(0);
 });
 
 // File and folder operations
@@ -311,7 +329,7 @@ function sanitizeFileName(fileName) {
     .replace(/_+/g, '_')                    // Replace multiple underscores with a single one
     .replace(/^_|_$/g, '')                  // Remove leading and trailing underscores
     .replace(/^\.+|\.+$/g, '')              // Remove leading and trailing dots
-    .replace(/\.{2,}/g, '.');                // Replace multiple dots with a single one
+    .replace(/\.{2,}/g, '.');               // Replace multiple dots with a single one
 }
 
 async function zipFolder(folderPath, zipPath) {

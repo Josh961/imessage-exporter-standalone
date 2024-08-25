@@ -32,7 +32,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     selectAllGroup: document.querySelector('.select-all-group'),
     clearAllGroup: document.querySelector('.clear-all-group'),
     selectedContactsCount: document.getElementById('selected-contacts-count'),
-    selectedContactsCountTwo: document.getElementById('selected-contacts-count-two')
+    selectedContactsCountTwo: document.getElementById('selected-contacts-count-two'),
+    permissionsModal: document.getElementById('permissions-modal'),
+    openSystemPreferencesButton: document.getElementById('open-system-preferences'),
+    checkPermissionsButton: document.getElementById('check-permissions'),
+    restartAppButton: document.getElementById('restart-app'),
+    permissionsInstructions: document.getElementById('permissions-instructions'),
+    permissionsGranted: document.getElementById('permissions-granted')
   };
 
   // State
@@ -146,6 +152,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupFolderSelectionListeners();
     setupContactSelectionListeners();
     setupExportButtonListener();
+    setupPermissionsModalListeners();
+  }
+
+  function setupPermissionsModalListeners() {
+    elements.openSystemPreferencesButton.addEventListener('click', () => {
+      window.electronAPI.openSystemPreferences();
+    });
+
+    elements.checkPermissionsButton.addEventListener('click', async () => {
+      const hasAccess = await window.electronAPI.checkFullDiskAccess();
+      if (hasAccess) {
+        elements.checkPermissionsButton.classList.add('hidden');
+        elements.permissionsInstructions.classList.add('hidden');
+        elements.permissionsGranted.classList.remove('hidden');
+        elements.restartAppButton.classList.remove('hidden');
+      } else {
+        alert('Full Disk Access has not been granted yet. Please try again.');
+      }
+    });
+
+    elements.restartAppButton.addEventListener('click', () => {
+      window.electronAPI.restartApp();
+    });
+  }
+
+  window.electronAPI.onShowPermissionsModal(() => {
+    showPermissionsModal();
+  });
+
+  function showPermissionsModal() {
+    elements.permissionsModal.classList.remove('hidden');
   }
 
   function setupModalListeners() {

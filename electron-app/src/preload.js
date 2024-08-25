@@ -4,6 +4,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // System information
   getPlatform: () => ipcRenderer.invoke('get-platform'),
 
+  // Permissions modal operations
+  onShowPermissionsModal: (callback) => ipcRenderer.on('show-permissions-modal', callback),
+  openSystemPreferences: () => ipcRenderer.invoke('open-system-preferences'),
+  checkFullDiskAccess: () => ipcRenderer.invoke('check-full-disk-access'),
+  restartApp: () => ipcRenderer.invoke('restart-app'),
+
   // File and folder operations
   openExternalLink: (url) => ipcRenderer.invoke('open-external-link', url),
   expandPath: (inputPath) => ipcRenderer.invoke('expand-path', inputPath),

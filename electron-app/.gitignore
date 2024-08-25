@@ -131,3 +131,6 @@ dist
 
 # Styles output
 src/styles.output.css
+
+# DS store file
+.DS_Store

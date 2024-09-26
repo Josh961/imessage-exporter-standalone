@@ -17,7 +17,11 @@ let mainWindow;
 
 // Define executables for different platforms
 const EXECUTABLES = {
-  darwin: 'imessage-exporter-mac',
+  darwin: {
+    arm: 'imessage-exporter-mac-arm',
+    arm64: 'imessage-exporter-mac-arm',
+    x64: 'imessage-exporter-mac-x86'
+  },
   win32: 'imessage-exporter-win.exe'
 };
 
@@ -248,7 +252,10 @@ function getResourcePath() {
 }
 
 function getExecutableName() {
-  return EXECUTABLES[process.platform] || EXECUTABLES.win32; // Default to Windows executable if platform is not recognized
+  if (process.platform === 'darwin') {
+    return EXECUTABLES.darwin[process.arch] || EXECUTABLES.darwin.x64;
+  }
+  return EXECUTABLES[process.platform] || EXECUTABLES.win32;
 }
 
 async function createUniqueFolder(basePath) {

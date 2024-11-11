@@ -108,6 +108,12 @@ impl<'a> Exporter<'a> for TXT<'a> {
             }
             current_message_row = msg.rowid;
 
+            // Check if message should be exported based on phone numbers
+            if !self.config.should_export_message(&msg) {
+                current_message += 1;
+                continue;
+            }
+
             // Generate the text of the message
             let _ = msg.generate_text(&self.config.db);
 
@@ -1093,6 +1099,8 @@ mod tests {
             platform: Platform::macOS,
             ignore_disk_space: false,
             list_contacts: false,
+            individual_numbers: None,
+            group_numbers: None,
         }
     }
 

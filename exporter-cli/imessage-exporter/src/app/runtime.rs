@@ -497,6 +497,56 @@ impl Config {
 
         Ok(())
     }
+
+    pub fn should_export_message(&self, message: &Message) -> bool {
+        // If no phone numbers specified, export all messages
+        if self.options.individual_numbers.is_none() && self.options.group_numbers.is_none() {
+            return true;
+        }
+
+        if let Some((chatroom, _)) = self.conversation(message) {
+            // For group chats, check if any participant matches the phone numbers
+            if let Some(participants) = self.chatroom_participants.get(&chatroom.rowid) {
+                let participant_identifiers: HashSet<String> = participants
+                    .iter()
+                    .filter_map(|&handle_id| self.participants.get(&handle_id))
+                    .map(|identifier| Config::normalize_identifier(identifier))
+                    .collect();
+
+                // For group chats (more than 1 participant)
+                if participants.len() > 1 {
+                    // Only export if we have group filters and this group exactly matches one of them
+                    if let Some(ref group_numbers) = self.options.group_numbers {
+                        return group_numbers.iter().any(|group| {
+                            // Must have same number of participants
+                            group.len() == participant_identifiers.len() &&
+                            // All numbers in our filter must be present
+                            group.iter().all(|n| participant_identifiers.contains(n)) &&
+                            // All participants must be in our filter
+                            participant_identifiers.iter().all(|n| group.contains(n))
+                        });
+                    }
+                    return false;
+                }
+                // For individual chats (1 participant)
+                else if let Some(ref individual_numbers) = self.options.individual_numbers {
+                    return individual_numbers
+                        .iter()
+                        .any(|identifier| participant_identifiers.contains(identifier));
+                }
+            }
+        }
+
+        false
+    }
+
+    fn normalize_identifier(identifier: &str) -> String {
+        if identifier.contains('@') {
+            identifier.to_lowercase()
+        } else {
+            identifier.chars().filter(|c| c.is_ascii_digit()).collect()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -529,6 +579,8 @@ mod filename_tests {
             platform: Platform::macOS,
             ignore_disk_space: false,
             list_contacts: false,
+            individual_numbers: None,
+            group_numbers: None,
         }
     }
 
@@ -761,6 +813,8 @@ mod who_tests {
             platform: Platform::macOS,
             ignore_disk_space: false,
             list_contacts: false,
+            individual_numbers: None,
+            group_numbers: None,
         }
     }
 
@@ -1017,6 +1071,8 @@ mod directory_tests {
             platform: Platform::macOS,
             ignore_disk_space: false,
             list_contacts: false,
+            individual_numbers: None,
+            group_numbers: None,
         }
     }
 

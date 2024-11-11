@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use clap::{crate_version, Arg, ArgAction, ArgMatches, Command};
@@ -33,6 +34,7 @@ pub const OPTION_PLATFORM: &str = "platform";
 pub const OPTION_BYPASS_FREE_SPACE_CHECK: &str = "ignore-disk-warning";
 pub const OPTION_USE_CALLER_ID: &str = "use-caller-id";
 pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
+pub const OPTION_PHONE_NUMBERS: &str = "phone-numbers";
 
 // Other CLI Text
 pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
@@ -72,6 +74,10 @@ pub struct Options {
     pub ignore_disk_space: bool,
     /// If true, list the contacts in the database
     pub list_contacts: bool,
+    /// Individual numbers to filter messages
+    pub individual_numbers: Option<Vec<String>>,
+    /// Group numbers to filter messages
+    pub group_numbers: Option<Vec<HashSet<String>>>,
 }
 
 impl Options {
@@ -232,6 +238,67 @@ impl Options {
         // Validate the provided export path
         let export_path = validate_path(user_export_path, &export_type.as_ref())?;
 
+        // Parse phone numbers directly into individual and group numbers
+        let raw_numbers: Vec<String> = args
+            .get_many::<String>(OPTION_PHONE_NUMBERS)
+            .map(|values| values.cloned().collect())
+            .unwrap_or_default();
+
+        // Print the raw numbers for debugging
+        println!("Raw phone numbers: {:?}", raw_numbers);
+
+        let (individual_numbers, group_numbers) = parse_phone_numbers(raw_numbers)?;
+
+        // Print the parsed phone numbers
+        println!("Individual numbers: {:?}", individual_numbers);
+        println!("Group numbers: {:?}", group_numbers);
+
+        // Validate phone number filters if provided
+        if let Some(ref numbers) = individual_numbers {
+            if numbers.is_empty() {
+                return Err(RuntimeError::InvalidOptions(
+                    "Individual phone numbers filter cannot be empty".to_string(),
+                ));
+            }
+            // Check each number is valid
+            for number in numbers {
+                if number.is_empty() {
+                    return Err(RuntimeError::InvalidOptions(
+                        "Phone numbers cannot be empty".to_string(),
+                    ));
+                }
+            }
+        }
+
+        if let Some(ref groups) = group_numbers {
+            if groups.is_empty() {
+                return Err(RuntimeError::InvalidOptions(
+                    "Group phone numbers filter cannot be empty".to_string(),
+                ));
+            }
+            // Check each group is valid
+            for group in groups {
+                if group.is_empty() {
+                    return Err(RuntimeError::InvalidOptions(
+                        "Group phone numbers cannot be empty".to_string(),
+                    ));
+                }
+                if group.len() < 2 {
+                    return Err(RuntimeError::InvalidOptions(
+                        "Groups must contain at least 2 phone numbers".to_string(),
+                    ));
+                }
+                // Check each number in group is valid
+                for number in group {
+                    if number.is_empty() {
+                        return Err(RuntimeError::InvalidOptions(
+                            "Phone numbers cannot be empty".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+
         Ok(Options {
             db_path,
             attachment_root: attachment_root.cloned(),
@@ -246,6 +313,8 @@ impl Options {
             platform,
             ignore_disk_space,
             list_contacts,
+            individual_numbers,
+            group_numbers,
         })
     }
 
@@ -304,6 +373,81 @@ fn validate_path(
     };
 
     Ok(resolved_path)
+}
+
+/// Parse phone numbers into individual and group sets
+///
+/// Individual numbers are single phone numbers that will match 1-on-1 chats
+/// Group numbers are sets of phone numbers that will match group chats with exactly those participants
+///
+/// # Examples
+///
+/// ```
+/// // Individual number
+/// -n 1234567890
+///
+/// // Group chat with exactly these 3 participants
+/// -n "1234567890,9876543210,5555555555"
+///
+/// // Multiple filters
+/// -n 1234567890 -n "9876543210,5555555555"
+/// ```
+fn parse_phone_numbers(
+    phone_numbers: Vec<String>,
+) -> Result<(Option<Vec<String>>, Option<Vec<HashSet<String>>>), RuntimeError> {
+    if phone_numbers.is_empty() {
+        return Ok((None, None));
+    }
+
+    let mut individual = Vec::new();
+    let mut groups = Vec::new();
+
+    for number_set in phone_numbers {
+        // If the number contains a comma, treat it as a group
+        if number_set.contains(',') {
+            let numbers: Vec<&str> = number_set.split(',').map(|s| s.trim()).collect();
+            let group: HashSet<String> = numbers
+                .into_iter()
+                .map(|n| normalize_phone_number(n))
+                .collect();
+            groups.push(group);
+        } else {
+            // This is an individual number
+            individual.push(normalize_phone_number(&number_set));
+        }
+    }
+
+    let individual_option = if !individual.is_empty() {
+        Some(individual)
+    } else {
+        None
+    };
+
+    let groups_option = if !groups.is_empty() {
+        Some(groups)
+    } else {
+        None
+    };
+
+    Ok((individual_option, groups_option))
+}
+
+/// Normalize a phone number or email by removing non-digit characters from phone numbers
+/// and leaving emails unchanged
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(normalize_phone_number("+1 (555) 867-5309"), "15558675309");
+/// assert_eq!(normalize_phone_number("555.867.5309"), "5558675309");
+/// assert_eq!(normalize_phone_number("user@example.com"), "user@example.com");
+/// ```
+fn normalize_phone_number(number: &str) -> String {
+    if number.contains('@') {
+        number.to_string()
+    } else {
+        number.chars().filter(|c| c.is_ascii_digit()).collect()
+    }
 }
 
 /// Build the command line argument parser
@@ -422,7 +566,17 @@ fn get_command() -> Command {
                 .help("List all contacts and group chats in the database\n")
                 .action(ArgAction::SetTrue)
                 .conflicts_with_all(&[OPTION_EXPORT_TYPE])
-                .display_order(14)
+                .display_order(13)
+        )
+        .arg(
+            Arg::new(OPTION_PHONE_NUMBERS)
+            .short('n')
+            .long(OPTION_PHONE_NUMBERS)
+            .help("Export messages for these phone numbers only. For group chats, provide all numbers separated by commas.")
+            .value_name("phone_numbers")
+            .num_args(1..)
+            .action(ArgAction::Append)
+            .display_order(14)
         )
 }
 
@@ -470,6 +624,8 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             list_contacts: false,
+            individual_numbers: None,
+            group_numbers: None,
         };
 
         assert_eq!(actual, expected);
@@ -582,6 +738,8 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             list_contacts: false,
+            individual_numbers: None,
+            group_numbers: None,
         };
 
         assert_eq!(actual, expected);
@@ -615,6 +773,8 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             list_contacts: false,
+            individual_numbers: None,
+            group_numbers: None,
         };
 
         assert_eq!(actual, expected);
@@ -736,6 +896,8 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             list_contacts: false,
+            individual_numbers: None,
+            group_numbers: None,
         };
 
         assert_eq!(actual, expected);
@@ -766,6 +928,8 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             list_contacts: false,
+            individual_numbers: None,
+            group_numbers: None,
         };
 
         assert_eq!(actual, expected);

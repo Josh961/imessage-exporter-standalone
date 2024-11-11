@@ -24,7 +24,7 @@ fn main() {
             Ok(options) => match Config::new(options) {
                 Ok(app) => {
                     if let Err(why) = app.start() {
-                        eprintln!("Unable to start: {why}");
+                        eprintln!("Unable to export: {why}");
                     }
                 }
                 Err(why) => {

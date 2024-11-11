@@ -29,26 +29,26 @@ pub enum ScreenEffect {
     Spotlight,
 }
 
-/// Expressive effect container
+/// Expressive effect container.
 ///
-/// Read more about expressive messages [here](https://www.imore.com/how-to-use-bubble-and-screen-effects-imessage-iphone-ipad)
+/// Read more about expressive messages [here](https://www.imore.com/how-to-use-bubble-and-screen-effects-imessage-iphone-ipad).
 ///
 /// Bubble:
-/// - com.apple.MobileSMS.expressivesend.gentle
-/// - com.apple.MobileSMS.expressivesend.impact
-/// - com.apple.MobileSMS.expressivesend.invisibleink
-/// - com.apple.MobileSMS.expressivesend.loud
+/// - `com.apple.MobileSMS.expressivesend.gentle`
+/// - `com.apple.MobileSMS.expressivesend.impact`
+/// - `com.apple.MobileSMS.expressivesend.invisibleink`
+/// - `com.apple.MobileSMS.expressivesend.loud`
 ///
 /// Screen:
-/// - com.apple.messages.effect.CKConfettiEffect
-/// - com.apple.messages.effect.CKEchoEffect
-/// - com.apple.messages.effect.CKFireworksEffect
-/// - com.apple.messages.effect.CKHappyBirthdayEffect
-/// - com.apple.messages.effect.CKHeartEffect
-/// - com.apple.messages.effect.CKLasersEffect
-/// - com.apple.messages.effect.CKShootingStarEffect
-/// - com.apple.messages.effect.CKSparklesEffect
-/// - com.apple.messages.effect.CKSpotlightEffect
+/// - `com.apple.messages.effect.CKConfettiEffect`
+/// - `com.apple.messages.effect.CKEchoEffect`
+/// - `com.apple.messages.effect.CKFireworksEffect`
+/// - `com.apple.messages.effect.CKHappyBirthdayEffect`
+/// - `com.apple.messages.effect.CKHeartEffect`
+/// - `com.apple.messages.effect.CKLasersEffect`
+/// - `com.apple.messages.effect.CKShootingStarEffect`
+/// - `com.apple.messages.effect.CKSparklesEffect`
+/// - `com.apple.messages.effect.CKSpotlightEffect`
 #[derive(Debug, PartialEq, Eq)]
 pub enum Expressive<'a> {
     /// Effects that use the entire screen

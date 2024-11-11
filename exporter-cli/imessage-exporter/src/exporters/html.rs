@@ -1,5 +1,9 @@
 use std::{
-    collections::HashMap,
+    borrow::Cow,
+    collections::{
+        hash_map::Entry::{Occupied, Vacant},
+        HashMap,
+    },
     fs::File,
     io::{BufWriter, Write},
 };
@@ -9,26 +13,27 @@ use crate::{
         error::RuntimeError, progress::build_progress_bar_export, runtime::Config,
         sanitizers::sanitize_html,
     },
-    exporters::exporter::{BalloonFormatter, Exporter, Writer},
+    exporters::exporter::{BalloonFormatter, Exporter, TextEffectFormatter, Writer},
 };
 
 use imessage_database::{
-    error::{message::MessageError, plist::PlistParseError, table::TableError},
+    error::{plist::PlistParseError, table::TableError},
     message_types::{
         app::AppMessage,
         app_store::AppStoreMessage,
         collaboration::CollaborationMessage,
-        edited::EditedMessage,
+        edited::{EditStatus, EditedMessage},
         expressives::{BubbleEffect, Expressive, ScreenEffect},
         handwriting::HandwrittenMessage,
         music::MusicMessage,
         placemark::PlacemarkMessage,
+        text_effects::{Animation, Style, TextEffect, Unit},
         url::URLMessage,
         variants::{Announcement, BalloonProvider, CustomBalloon, URLOverride, Variant},
     },
     tables::{
         attachment::{Attachment, MediaType},
-        messages::{BubbleType, Message},
+        messages::{models::BubbleComponent, Message},
         table::{Table, FITNESS_RECEIVER, ME, ORPHANED, YOU},
     },
     util::{
@@ -52,20 +57,21 @@ pub struct HTML<'a> {
 }
 
 impl<'a> Exporter<'a> for HTML<'a> {
-    fn new(config: &'a Config) -> Self {
+    fn new(config: &'a Config) -> Result<Self, RuntimeError> {
         let mut orphaned = config.options.export_path.clone();
         orphaned.push(ORPHANED);
         orphaned.set_extension("html");
         let file = File::options()
             .append(true)
             .create(true)
-            .open(orphaned)
-            .unwrap();
-        HTML {
+            .open(&orphaned)
+            .map_err(|err| RuntimeError::CreateError(err, orphaned))?;
+
+        Ok(HTML {
             config,
             files: HashMap::new(),
             orphaned: BufWriter::new(file),
-        }
+        })
     }
 
     fn iter_messages(&mut self) -> Result<(), RuntimeError> {
@@ -107,24 +113,20 @@ impl<'a> Exporter<'a> for HTML<'a> {
             }
             current_message_row = msg.rowid;
 
-            // Check if the message should be exported based on phone numbers
-            if !self.config.should_export_message(&msg) {
-                current_message += 1;
-                continue;
-            }
+            // Generate the text of the message
+            let _ = msg.generate_text(&self.config.db);
 
             // Render the announcement in-line
             if msg.is_announcement() {
                 let announcement = self.format_announcement(&msg);
-                HTML::write_to_file(self.get_or_create_file(&msg), &announcement)?;
+                HTML::write_to_file(self.get_or_create_file(&msg)?, &announcement)?;
             }
-            // Message replies and reactions are rendered in context, so no need to render them separately
-            else if !msg.is_reaction() {
-                let _ = msg.gen_text(&self.config.db);
+            // Message replies and tapbacks are rendered in context, so no need to render them separately
+            else if !msg.is_tapback() {
                 let message = self
                     .format_message(&msg, 0)
                     .map_err(RuntimeError::DatabaseError)?;
-                HTML::write_to_file(self.get_or_create_file(&msg), &message)?;
+                HTML::write_to_file(self.get_or_create_file(&msg)?, &message)?;
             }
             current_message += 1;
             if current_message % 99 == 0 {
@@ -143,36 +145,43 @@ impl<'a> Exporter<'a> for HTML<'a> {
     }
 
     /// Create a file for the given chat, caching it so we don't need to build it later
-    fn get_or_create_file(&mut self, message: &Message) -> &mut BufWriter<File> {
+    fn get_or_create_file(
+        &mut self,
+        message: &Message,
+    ) -> Result<&mut BufWriter<File>, RuntimeError> {
         match self.config.conversation(message) {
             Some((chatroom, _)) => {
                 let filename = self.config.filename(chatroom);
-                self.files.entry(filename).or_insert_with(|| {
-                    let mut path = self.config.options.export_path.clone();
-                    path.push(self.config.filename(chatroom));
-                    path.set_extension("html");
 
-                    // If the file already exists, don't write the headers again
-                    // This can happen if multiple chats use the same group name
-                    let file_exists = path.exists();
+                return match self.files.entry(filename) {
+                    Occupied(entry) => Ok(entry.into_mut()),
+                    Vacant(entry) => {
+                        let mut path = self.config.options.export_path.clone();
+                        path.push(self.config.filename(chatroom));
+                        path.set_extension("html");
 
-                    let file = File::options()
-                        .append(true)
-                        .create(true)
-                        .open(path.clone())
-                        .unwrap();
+                        // If the file already exists, don't write the headers again
+                        // This can happen if multiple chats use the same group name
+                        let file_exists = path.exists();
 
-                    let mut buf = BufWriter::new(file);
+                        let file = File::options()
+                            .append(true)
+                            .create(true)
+                            .open(&path)
+                            .map_err(|err| RuntimeError::CreateError(err, path))?;
 
-                    // Write headers if the file does not exist
-                    if !file_exists {
-                        let _ = HTML::write_headers(&mut buf);
+                        let mut buf = BufWriter::new(file);
+
+                        // Write headers if the file does not exist
+                        if !file_exists {
+                            let _ = HTML::write_headers(&mut buf);
+                        }
+
+                        Ok(entry.insert(buf))
                     }
-
-                    buf
-                })
+                };
             }
-            None => &mut self.orphaned,
+            None => Ok(&mut self.orphaned),
         }
     }
 }
@@ -249,7 +258,7 @@ impl<'a> Writer<'a> for HTML<'a> {
             "</span></p>",
         );
 
-        // If message was deleted, annotate it
+        // If message was deleted (not unsent), annotate it
         if message.is_deleted() {
             self.add_line(
                 &mut formatted_message,
@@ -275,21 +284,6 @@ impl<'a> Writer<'a> for HTML<'a> {
                 &sanitize_html(subject),
                 "<p>Subject: <span class=\"subject\">",
                 "</span></p>",
-            );
-        }
-
-        // If message was removed, display it
-        if message_parts.is_empty() && message.is_edited() {
-            // If this works, we want to format it as an announcement, so we early return for the Ok()
-            let edited = match self.format_edited(message, "") {
-                Ok(s) => return Ok(s),
-                Err(why) => format!("{}, {}", message.guid, why),
-            };
-            self.add_line(
-                &mut formatted_message,
-                &edited,
-                "<div class=\"edited\">",
-                "</div>",
             );
         }
 
@@ -323,43 +317,68 @@ impl<'a> Writer<'a> for HTML<'a> {
                 "",
             );
 
-            // Render edited messages
-            if message.is_edited() {
-                let edited = match self.format_edited(message, "") {
-                    Ok(s) => s,
-                    Err(why) => format!("{}, {}", message.guid, why),
-                };
-                self.add_line(
-                    &mut formatted_message,
-                    &edited,
-                    "<div class=\"edited\">",
-                    "</div>",
-                );
-            }
-
             match message_part {
-                BubbleType::Text(text) => {
-                    // Render the message body if the message was not edited
-                    // If it was edited, it was rendered already
-                    if !message.is_edited() {
-                        if text.starts_with(FITNESS_RECEIVER) {
-                            self.add_line(
-                                &mut formatted_message,
-                                &text.replace(FITNESS_RECEIVER, YOU),
-                                "<span class=\"bubble\">",
-                                "</span>",
-                            );
+                BubbleComponent::Text(text_attrs) => {
+                    if let Some(text) = &message.text {
+                        // Render edited message content, if applicable
+                        if message.is_part_edited(idx) {
+                            if let Some(edited_parts) = &message.edited_parts {
+                                if let Some(edited) =
+                                    self.format_edited(message, edited_parts, idx, "")
+                                {
+                                    self.add_line(
+                                        &mut formatted_message,
+                                        &edited,
+                                        "<div class=\"edited\">",
+                                        "</div>",
+                                    );
+                                };
+                            }
                         } else {
-                            self.add_line(
-                                &mut formatted_message,
-                                &sanitize_html(text),
-                                "<span class=\"bubble\">",
-                                "</span>",
-                            );
+                            let mut formatted_text = String::with_capacity(text.len());
+
+                            for text_attr in text_attrs {
+                                // We cannot sanitize the html beforehand because it may change the length of the text
+                                if let Some(message_content) =
+                                    text.get(text_attr.start..text_attr.end)
+                                {
+                                    formatted_text.push_str(&self.format_attributed(
+                                        &sanitize_html(message_content),
+                                        &text_attr.effect,
+                                    ))
+                                }
+                            }
+
+                            // If we failed to parse any text above, make sure we sanitize if before using it
+                            if formatted_text.is_empty() {
+                                formatted_text.push_str(&sanitize_html(text));
+                            }
+
+                            // Render the message body if the message or message part was not edited
+                            // If it was edited, it was rendered already
+                            // if match &edited_parts {
+                            //     Some(edited_parts) => edited_parts.is_unedited_at(idx),
+                            //     None => !message.is_edited(),
+                            // } {
+                            if formatted_text.starts_with(FITNESS_RECEIVER) {
+                                self.add_line(
+                                    &mut formatted_message,
+                                    &formatted_text.replace(FITNESS_RECEIVER, YOU),
+                                    "<span class=\"bubble\">",
+                                    "</span>",
+                                );
+                            } else {
+                                self.add_line(
+                                    &mut formatted_message,
+                                    &formatted_text,
+                                    "<span class=\"bubble\">",
+                                    "</span>",
+                                );
+                            }
                         }
                     }
                 }
-                BubbleType::Attachment => {
+                BubbleComponent::Attachment(_) => {
                     match attachments.get_mut(attachment_index) {
                         Some(attachment) => {
                             if attachment.is_sticker {
@@ -396,12 +415,12 @@ impl<'a> Writer<'a> for HTML<'a> {
                         None => self.add_line(
                             &mut formatted_message,
                             "Attachment does not exist!",
-                            "",
-                            "",
+                            "<span class=\"attachment_error\">",
+                            "</span>",
                         ),
                     }
                 }
-                BubbleType::App => match self.format_app(message, &mut attachments, "") {
+                BubbleComponent::App => match self.format_app(message, &mut attachments, "") {
                     Ok(ok_bubble) => self.add_line(
                         &mut formatted_message,
                         &ok_bubble,
@@ -415,6 +434,18 @@ impl<'a> Writer<'a> for HTML<'a> {
                         "</div>",
                     ),
                 },
+                BubbleComponent::Retracted => {
+                    if let Some(edited_parts) = &message.edited_parts {
+                        if let Some(edited) = self.format_edited(message, edited_parts, idx, "") {
+                            self.add_line(
+                                &mut formatted_message,
+                                &edited,
+                                "<span class=\"unsent\">",
+                                "</span>",
+                            );
+                        };
+                    }
+                }
             };
 
             // Write the part div end
@@ -430,34 +461,34 @@ impl<'a> Writer<'a> for HTML<'a> {
                 );
             }
 
-            // Handle Reactions
-            if let Some(reactions_map) = self.config.reactions.get(&message.guid) {
-                if let Some(reactions) = reactions_map.get(&idx) {
-                    let mut formatted_reactions = String::new();
+            // Handle Tapbacks
+            if let Some(tapbacks_map) = self.config.tapbacks.get(&message.guid) {
+                if let Some(tapbacks) = tapbacks_map.get(&idx) {
+                    let mut formatted_tapbacks = String::new();
 
-                    reactions
+                    tapbacks
                         .iter()
-                        .try_for_each(|reaction| -> Result<(), TableError> {
-                            let formatted = self.format_reaction(reaction)?;
+                        .try_for_each(|tapback| -> Result<(), TableError> {
+                            let formatted = self.format_tapback(tapback)?;
                             if !formatted.is_empty() {
                                 self.add_line(
-                                    &mut formatted_reactions,
-                                    &self.format_reaction(reaction)?,
-                                    "<div class=\"reaction\">",
+                                    &mut formatted_tapbacks,
+                                    &self.format_tapback(tapback)?,
+                                    "<div class=\"tapback\">",
                                     "</div>",
                                 );
                             }
                             Ok(())
                         })?;
 
-                    if !formatted_reactions.is_empty() {
+                    if !formatted_tapbacks.is_empty() {
                         self.add_line(
                             &mut formatted_message,
-                            "<hr><p>Reactions:</p>",
-                            "<div class=\"reactions\">",
+                            "<hr><p>Tapbacks:</p>",
+                            "<div class=\"tapbacks\">",
                             "",
                         );
-                        self.add_line(&mut formatted_message, &formatted_reactions, "", "");
+                        self.add_line(&mut formatted_message, &formatted_tapbacks, "", "");
                     }
                     self.add_line(&mut formatted_message, "</div>", "", "");
                 }
@@ -469,8 +500,8 @@ impl<'a> Writer<'a> for HTML<'a> {
                 replies
                     .iter_mut()
                     .try_for_each(|reply| -> Result<(), TableError> {
-                        let _ = reply.gen_text(&self.config.db);
-                        if !reply.is_reaction() {
+                        let _ = reply.generate_text(&self.config.db);
+                        if !reply.is_tapback() {
                             // Set indent to 1 so we know this is a recursive call
                             self.add_line(
                                 &mut formatted_message,
@@ -581,9 +612,14 @@ impl<'a> Writer<'a> for HTML<'a> {
         if let Variant::App(balloon) = message.variant() {
             let mut app_bubble = String::new();
 
-            // Handwritten messages use a different payload type, so handle that first
-            if matches!(balloon, CustomBalloon::Handwriting) {
-                return Ok(self.format_handwriting(&HandwrittenMessage::new(), message));
+            // Handwritten messages use a different payload type, so check that first
+            if message.is_handwriting() {
+                if let Some(payload) = message.raw_payload_data(&self.config.db) {
+                    return match HandwrittenMessage::from_payload(&payload) {
+                        Ok(bubble) => Ok(self.format_handwriting(message, &bubble, message)),
+                        Err(why) => Err(PlistParseError::HandwritingError(why)),
+                    };
+                }
             }
 
             if let Some(payload) = message.payload_data(&self.config.db) {
@@ -591,7 +627,7 @@ impl<'a> Writer<'a> for HTML<'a> {
                     let parsed = parse_plist(&payload)?;
                     let bubble = URLMessage::get_url_message_override(&parsed)?;
                     match bubble {
-                        URLOverride::Normal(balloon) => self.format_url(&balloon, message),
+                        URLOverride::Normal(balloon) => self.format_url(message, &balloon, message),
                         URLOverride::AppleMusic(balloon) => self.format_music(&balloon, message),
                         URLOverride::Collaboration(balloon) => {
                             self.format_collaboration(&balloon, message)
@@ -648,15 +684,15 @@ impl<'a> Writer<'a> for HTML<'a> {
         }
     }
 
-    fn format_reaction(&self, msg: &Message) -> Result<String, TableError> {
+    fn format_tapback(&self, msg: &Message) -> Result<String, TableError> {
         match msg.variant() {
-            Variant::Reaction(_, added, reaction) => {
+            Variant::Tapback(_, added, tapback) => {
                 if !added {
                     return Ok(String::new());
                 }
                 Ok(format!(
-                    "<span class=\"reaction\"><b>{:?}</b> by {}</span>",
-                    reaction,
+                    "<span class=\"tapback\"><b>{}</b> by {}</span>",
+                    tapback,
                     self.config
                         .who(msg.handle_id, msg.is_from_me(), &msg.destination_caller_id),
                 ))
@@ -668,9 +704,12 @@ impl<'a> Writer<'a> for HTML<'a> {
                         .who(msg.handle_id, msg.is_from_me(), &msg.destination_caller_id);
                 // Sticker messages have only one attachment, the sticker image
                 Ok(match paths.get_mut(0) {
-                    Some(sticker) => self.format_sticker(sticker, msg),
+                    Some(sticker) => format!(
+                        "{} <div class=\"sticker_tapback\">&nbsp;by {who}</div>",
+                        self.format_sticker(sticker, msg)
+                    ),
                     None => {
-                        format!("<span class=\"reaction\">Sticker from {who} not found!</span>")
+                        format!("<span class=\"tapback\">Sticker from {who} not found!</span>")
                     }
                 })
             }
@@ -730,6 +769,11 @@ impl<'a> Writer<'a> for HTML<'a> {
                         "\n<div class =\"announcement\"><p><span class=\"timestamp\">{timestamp}</span> {who} performed unknown action {num}</p></div>\n"
                     )
                 }
+                Announcement::FullyUnsent => {
+                    format!(
+                        "<div class =\"announcement\"><p><span class=\"timestamp\">{timestamp}</span> {who} unsent a message.</p></div>"
+                    )
+                }
             },
             None => String::from(
                 "\n<div class =\"announcement\"><p>Unable to format announcement!</p></div>\n",
@@ -751,56 +795,88 @@ impl<'a> Writer<'a> for HTML<'a> {
         "<hr>Shared location!"
     }
 
-    fn format_edited(&self, msg: &'a Message, _: &str) -> Result<String, MessageError> {
-        if let Some(payload) = msg.message_summary_info(&self.config.db) {
-            let edited_message =
-                EditedMessage::from_map(&payload).map_err(MessageError::PlistParseError)?;
-
+    fn format_edited(
+        &self,
+        msg: &'a Message,
+        edited_message: &'a EditedMessage,
+        message_part_idx: usize,
+        _: &str,
+    ) -> Option<String> {
+        if let Some(edited_message_part) = edited_message.part(message_part_idx) {
             let mut out_s = String::new();
             let mut previous_timestamp: Option<&i64> = None;
 
-            if edited_message.is_deleted() {
-                let who = if msg.is_from_me() {
-                    self.config.options.custom_name.as_deref().unwrap_or(YOU)
-                } else {
-                    "They"
-                };
-                let timestamp = format(&msg.date(&self.config.offset));
+            match edited_message_part.status {
+                EditStatus::Edited => {
+                    out_s.push_str("<table>");
 
-                out_s.push_str(&format!(
-                    "<div class =\"announcement\"><p><span class=\"timestamp\">{timestamp}</span> {who} deleted a message.</p></div>"
-                ));
-            } else {
-                out_s.push_str("<table>");
+                    for (idx, event) in edited_message_part.edit_history.iter().enumerate() {
+                        let last = idx == edited_message_part.edit_history.len() - 1;
+                        let clean_text = sanitize_html(&event.text);
+                        match previous_timestamp {
+                            None => out_s.push_str(&self.edited_to_html("", &clean_text, last)),
+                            Some(prev_timestamp) => {
+                                let end = get_local_time(&event.date, &self.config.offset);
+                                let start = get_local_time(prev_timestamp, &self.config.offset);
 
-                for (idx, event) in edited_message.events.iter().enumerate() {
-                    let last = idx == edited_message.items() - 1;
-                    let clean_text = sanitize_html(&event.text);
-                    match previous_timestamp {
-                        None => out_s.push_str(&self.edited_to_html("", &clean_text, last)),
-                        Some(prev_timestamp) => {
-                            let end = get_local_time(&event.date, &self.config.offset);
-                            let start = get_local_time(prev_timestamp, &self.config.offset);
-
-                            let diff = readable_diff(start, end).unwrap_or_default();
-                            out_s.push_str(&self.edited_to_html(
-                                &format!("Edited {diff} later"),
-                                &clean_text,
-                                last,
-                            ));
+                                let diff = readable_diff(start, end).unwrap_or_default();
+                                out_s.push_str(&self.edited_to_html(
+                                    &format!("Edited {diff} later"),
+                                    &clean_text,
+                                    last,
+                                ));
+                            }
                         }
+
+                        // Update the previous timestamp for the next loop
+                        previous_timestamp = Some(&event.date);
                     }
 
-                    // Update the previous timestamp for the next loop
-                    previous_timestamp = Some(&event.date);
+                    out_s.push_str("</table>");
                 }
+                EditStatus::Unsent => {
+                    let who = if msg.is_from_me() {
+                        self.config.options.custom_name.as_deref().unwrap_or(YOU)
+                    } else {
+                        self.config
+                            .who(msg.handle_id, msg.is_from_me(), &msg.destination_caller_id)
+                    };
 
-                out_s.push_str("</table>");
+                    match readable_diff(
+                        msg.date(&self.config.offset),
+                        msg.date_edited(&self.config.offset),
+                    ) {
+                        Some(diff) => {
+                            out_s.push_str(&format!(
+                                "<span class=\"unsent\">{who} unsent this message part {diff} after sending!</span>"
+                            ))
+                        },
+                        None => {
+                            out_s.push_str(&format!(
+                                "<span class=\"unsent\">{who} unsent this message part!</span>"
+                            ))
+                        },
+                    }
+                }
+                EditStatus::Original => {
+                    return None;
+                }
             }
-
-            return Ok(out_s);
+            return Some(out_s);
         }
-        Err(MessageError::PlistParseError(PlistParseError::NoPayload))
+        None
+    }
+
+    fn format_attributed(&'a self, text: &'a str, attribute: &'a TextEffect) -> Cow<str> {
+        match attribute {
+            TextEffect::Default => Cow::Borrowed(text),
+            TextEffect::Mention(mentioned) => Cow::Owned(self.format_mention(text, mentioned)),
+            TextEffect::Link(url) => Cow::Owned(self.format_link(text, url)),
+            TextEffect::OTP => Cow::Owned(self.format_otp(text)),
+            TextEffect::Styles(styles) => Cow::Owned(self.format_styles(text, styles)),
+            TextEffect::Animated(animation) => Cow::Owned(self.format_animated(text, animation)),
+            TextEffect::Conversion(unit) => Cow::Owned(self.format_conversion(text, unit)),
+        }
     }
 
     fn write_to_file(file: &mut BufWriter<File>, text: &str) -> Result<(), RuntimeError> {
@@ -810,14 +886,22 @@ impl<'a> Writer<'a> for HTML<'a> {
 }
 
 impl<'a> BalloonFormatter<&'a Message> for HTML<'a> {
-    fn format_url(&self, balloon: &URLMessage, _: &Message) -> String {
+    fn format_url(&self, msg: &Message, balloon: &URLMessage, _: &Message) -> String {
         let mut out_s = String::new();
 
         // Make the whole bubble clickable
+        let mut close_url = false;
         if let Some(url) = balloon.get_url() {
             out_s.push_str("<a href=\"");
             out_s.push_str(url);
             out_s.push_str("\">");
+            close_url = true;
+        } else if let Some(text) = &msg.text {
+            // Fallback if the balloon data does not contain the URL
+            out_s.push_str("<a href=\"");
+            out_s.push_str(text);
+            out_s.push_str("\">");
+            close_url = true;
         }
 
         // Header section
@@ -841,6 +925,11 @@ impl<'a> BalloonFormatter<&'a Message> for HTML<'a> {
         } else if let Some(url) = balloon.get_url() {
             out_s.push_str("<div class=\"name\">");
             out_s.push_str(url);
+            out_s.push_str("</div>");
+        } else if let Some(text) = &msg.text {
+            // Fallback if the balloon data does not contain the URL
+            out_s.push_str("<div class=\"name\">");
+            out_s.push_str(text);
             out_s.push_str("</div>");
         }
 
@@ -870,7 +959,7 @@ impl<'a> BalloonFormatter<&'a Message> for HTML<'a> {
         }
 
         // End the link
-        if balloon.get_url().is_some() {
+        if close_url {
             out_s.push_str("</a>");
         }
         out_s
@@ -1124,8 +1213,9 @@ impl<'a> BalloonFormatter<&'a Message> for HTML<'a> {
         out_s
     }
 
-    fn format_handwriting(&self, _: &HandwrittenMessage, _: &Message) -> String {
-        String::from("Handwritten messages are not yet supported!")
+    fn format_handwriting(&self, _: &Message, balloon: &HandwrittenMessage, _: &Message) -> String {
+        // svg can be embedded directly into the html
+        balloon.render_svg()
     }
 
     fn format_apple_pay(&self, balloon: &AppMessage, _: &Message) -> String {
@@ -1270,6 +1360,47 @@ impl<'a> BalloonFormatter<&'a Message> for HTML<'a> {
         message: &Message,
     ) -> String {
         self.balloon_to_html(balloon, bundle_id, attachments, message)
+    }
+}
+
+impl<'a> TextEffectFormatter for HTML<'a> {
+    fn format_mention(&self, text: &str, mentioned: &str) -> String {
+        format!("<span title=\"{mentioned}\"><b>{text}</b></span>")
+    }
+
+    fn format_link(&self, text: &str, url: &str) -> String {
+        format!("<a href=\"{url}\">{text}</a>")
+    }
+
+    fn format_otp(&self, text: &str) -> String {
+        format!("<u>{text}</u>")
+    }
+
+    fn format_conversion(&self, text: &str, _: &Unit) -> String {
+        format!("<u>{text}</u>")
+    }
+
+    fn format_styles(&self, text: &str, styles: &[Style]) -> String {
+        let (prefix, suffix): (String, String) = styles.iter().rev().fold(
+            (String::new(), String::new()),
+            |(mut prefix, mut suffix), style| {
+                let (open, close) = match style {
+                    Style::Bold => ("<b>", "</b>"),
+                    Style::Italic => ("<i>", "</i>"),
+                    Style::Strikethrough => ("<s>", "</s>"),
+                    Style::Underline => ("<u>", "</u>"),
+                };
+                prefix.push_str(open);
+                suffix.insert_str(0, close);
+                (prefix, suffix)
+            },
+        );
+
+        format!("{prefix}{text}{suffix}")
+    }
+
+    fn format_animated(&self, text: &str, animation: &Animation) -> String {
+        format!("<span class=\"animation{animation:?}\">{text}</span>")
     }
 }
 
@@ -1427,9 +1558,8 @@ mod tests {
     };
 
     use crate::{
-        app::{attachment_manager::AttachmentManager, converter::Converter},
-        exporters::exporter::Writer,
-        Config, Exporter, Options, HTML,
+        app::attachment_manager::AttachmentManager, exporters::exporter::Writer, Config, Exporter,
+        Options, HTML,
     };
     use imessage_database::{
         tables::{
@@ -1443,7 +1573,7 @@ mod tests {
         },
     };
 
-    pub fn blank() -> Message {
+    pub(super) fn blank() -> Message {
         Message {
             rowid: i32::default(),
             guid: String::default(),
@@ -1471,13 +1601,16 @@ mod tests {
             thread_originator_part: None,
             date_edited: 0,
             chat_id: None,
+            associated_message_emoji: None,
             num_attachments: 0,
             deleted_from: None,
             num_replies: 0,
+            components: None,
+            edited_parts: None,
         }
     }
 
-    pub fn fake_options() -> Options {
+    pub(super) fn fake_options() -> Options {
         Options {
             db_path: default_db_path(),
             attachment_root: None,
@@ -1491,13 +1624,10 @@ mod tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
-            individual_numbers: None,
-            group_numbers: None,
-            list_contacts: false,
         }
     }
 
-    pub fn fake_config(options: Options) -> Config {
+    pub(super) fn fake_config(options: Options) -> Config {
         let db = get_connection(&options.get_db_path()).unwrap();
         Config {
             chatrooms: HashMap::new(),
@@ -1505,15 +1635,15 @@ mod tests {
             chatroom_participants: HashMap::new(),
             participants: HashMap::new(),
             real_participants: HashMap::new(),
-            reactions: HashMap::new(),
+            tapbacks: HashMap::new(),
             options,
             offset: get_offset(),
             db,
-            converter: Converter::determine(),
+            converter: None,
         }
     }
 
-    pub fn fake_attachment() -> Attachment {
+    pub(super) fn fake_attachment() -> Attachment {
         Attachment {
             rowid: 0,
             filename: Some("a/b/c/d.jpg".to_string()),
@@ -1531,7 +1661,7 @@ mod tests {
     fn can_create() {
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
         assert_eq!(exporter.files.len(), 0);
     }
 
@@ -1544,7 +1674,7 @@ mod tests {
         let options = fake_options();
         let config = fake_config(options);
         // let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         // Create fake message
         let mut message = blank();
@@ -1569,7 +1699,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         // Create fake message
         let mut message = blank();
@@ -1587,7 +1717,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         // Create sample data
         let mut s = String::new();
@@ -1601,7 +1731,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         // Create sample data
         let mut s = String::new();
@@ -1615,7 +1745,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         // Create sample data
         let mut s = String::new();
@@ -1632,7 +1762,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         // May 17, 2022  8:29:42 PM
@@ -1655,7 +1785,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         // May 17, 2022  8:29:42 PM
@@ -1678,12 +1808,12 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         // May 17, 2022  8:29:42 PM
-        message.date = 674526582885055488;
         message.text = Some("Hello world".to_string());
+        message.date = 674526582885055488;
         message.is_from_me = true;
         message.deleted_from = Some(0);
 
@@ -1701,7 +1831,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         message.text = Some("Hello world".to_string());
@@ -1729,7 +1859,7 @@ mod tests {
         config
             .participants
             .insert(999999, "Sample Contact".to_string());
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         // May 17, 2022  8:29:42 PM
@@ -1754,7 +1884,7 @@ mod tests {
         config
             .participants
             .insert(999999, "Sample Contact".to_string());
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         message.handle_id = Some(999999);
@@ -1785,7 +1915,7 @@ mod tests {
         config
             .participants
             .insert(999999, "Sample Contact".to_string());
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         message.handle_id = Some(999999);
@@ -1814,7 +1944,7 @@ mod tests {
         let mut config = fake_config(options);
         config.participants.insert(0, ME.to_string());
 
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         // May 17, 2022  8:29:42 PM
@@ -1837,7 +1967,7 @@ mod tests {
         let mut config = fake_config(options);
         config.participants.insert(0, ME.to_string());
 
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         // May 17, 2022  8:29:42 PM
@@ -1862,7 +1992,7 @@ mod tests {
         let mut config = fake_config(options);
         config.participants.insert(0, ME.to_string());
 
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         // May 17, 2022  8:29:42 PM
@@ -1876,7 +2006,7 @@ mod tests {
     }
 
     #[test]
-    fn can_format_html_reaction_me() {
+    fn can_format_html_tapback_me() {
         // Set timezone to PST for consistent Local time
         set_var("TZ", "PST");
 
@@ -1885,7 +2015,7 @@ mod tests {
         let mut config = fake_config(options);
         config.participants.insert(0, ME.to_string());
 
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         // May 17, 2022  8:29:42 PM
@@ -1893,14 +2023,14 @@ mod tests {
         message.associated_message_type = Some(2000);
         message.associated_message_guid = Some("fake_guid".to_string());
 
-        let actual = exporter.format_reaction(&message).unwrap();
-        let expected = "<span class=\"reaction\"><b>Loved</b> by Me</span>";
+        let actual = exporter.format_tapback(&message).unwrap();
+        let expected = "<span class=\"tapback\"><b>Loved</b> by Me</span>";
 
         assert_eq!(actual, expected);
     }
 
     #[test]
-    fn can_format_html_reaction_them() {
+    fn can_format_html_tapback_them() {
         // Set timezone to PST for consistent Local time
         set_var("TZ", "PST");
 
@@ -1910,7 +2040,7 @@ mod tests {
         config
             .participants
             .insert(999999, "Sample Contact".to_string());
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         // May 17, 2022  8:29:42 PM
@@ -1919,8 +2049,63 @@ mod tests {
         message.associated_message_guid = Some("fake_guid".to_string());
         message.handle_id = Some(999999);
 
-        let actual = exporter.format_reaction(&message).unwrap();
-        let expected = "<span class=\"reaction\"><b>Loved</b> by Sample Contact</span>";
+        let actual = exporter.format_tapback(&message).unwrap();
+        let expected = "<span class=\"tapback\"><b>Loved</b> by Sample Contact</span>";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_format_html_tapback_custom_emoji() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let mut config = fake_config(options);
+        config
+            .participants
+            .insert(999999, "Sample Contact".to_string());
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.associated_message_type = Some(2006);
+        message.associated_message_guid = Some("fake_guid".to_string());
+        message.handle_id = Some(999999);
+        message.associated_message_emoji = Some("☕️".to_string());
+
+        let actual = exporter.format_tapback(&message).unwrap();
+        // The result contains `&nbsp;`
+        let expected = "<span class=\"tapback\"><b>☕\u{fe0f}</b> by Sample Contact</span>";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_format_html_tapback_custom_sticker() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let mut config = fake_config(options);
+        config
+            .participants
+            .insert(999999, "Sample Contact".to_string());
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.associated_message_type = Some(2007);
+        message.associated_message_guid = Some("fake_guid".to_string());
+        message.handle_id = Some(999999);
+        message.associated_message_emoji = Some("☕️".to_string());
+
+        let actual = exporter.format_tapback(&message).unwrap();
+        let expected = "<span class=\"tapback\">Sticker from Sample Contact not found!</span>";
 
         assert_eq!(actual, expected);
     }
@@ -1933,7 +2118,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         message.is_from_me = false;
@@ -1956,7 +2141,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         message.is_from_me = false;
@@ -1979,7 +2164,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         message.handle_id = None;
@@ -2003,7 +2188,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         message.handle_id = None;
@@ -2024,7 +2209,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let message = blank();
 
@@ -2042,7 +2227,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let message = blank();
 
@@ -2061,7 +2246,7 @@ mod tests {
         let mut config = fake_config(options);
         config.options.no_lazy = true;
         config.options.platform = Platform::iOS;
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
         let message = blank();
 
         let mut attachment = fake_attachment();
@@ -2078,7 +2263,7 @@ mod tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let message = blank();
 
@@ -2097,7 +2282,7 @@ mod tests {
         options.export_path = current_dir().unwrap().parent().unwrap().to_path_buf();
 
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let mut message = blank();
         // Set message to sticker variant
@@ -2147,7 +2332,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = URLMessage {
             title: Some("title"),
@@ -2161,7 +2346,7 @@ mod balloon_format_tests {
             placeholder: false,
         };
 
-        let expected = exporter.format_url(&balloon, &blank());
+        let expected = exporter.format_url(&blank(), &balloon, &blank());
         let actual = "<a href=\"url\"><div class=\"app_header\"><img src=\"images\" loading=\"lazy\", onerror=\"this.style.display='none'\"><div class=\"name\">site_name</div></div><div class=\"app_footer\"><div class=\"caption\">title</div><div class=\"subcaption\">summary</div></div></a>";
 
         assert_eq!(expected, actual);
@@ -2173,7 +2358,7 @@ mod balloon_format_tests {
         let mut options = fake_options();
         options.no_lazy = true;
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = URLMessage {
             title: Some("title"),
@@ -2187,7 +2372,7 @@ mod balloon_format_tests {
             placeholder: false,
         };
 
-        let expected = exporter.format_url(&balloon, &blank());
+        let expected = exporter.format_url(&blank(), &balloon, &blank());
         let actual = "<a href=\"url\"><div class=\"app_header\"><img src=\"images\" onerror=\"this.style.display='none'\"><div class=\"name\">site_name</div></div><div class=\"app_footer\"><div class=\"caption\">title</div><div class=\"subcaption\">summary</div></div></a>";
 
         assert_eq!(expected, actual);
@@ -2198,7 +2383,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = MusicMessage {
             url: Some("url"),
@@ -2219,7 +2404,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = CollaborationMessage {
             original_url: Some("original_url"),
@@ -2241,7 +2426,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = AppMessage {
             image: Some("image"),
@@ -2267,7 +2452,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = AppMessage {
             image: Some("image"),
@@ -2293,7 +2478,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = AppMessage {
             image: Some("image"),
@@ -2319,7 +2504,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = AppMessage {
             image: Some("image"),
@@ -2348,7 +2533,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = AppMessage {
             image: None,
@@ -2377,7 +2562,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = AppMessage {
             image: None,
@@ -2406,7 +2591,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = AppMessage {
             image: None,
@@ -2432,7 +2617,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = AppStoreMessage {
             url: Some("url"),
@@ -2454,7 +2639,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = PlacemarkMessage {
             url: Some("url"),
@@ -2485,7 +2670,7 @@ mod balloon_format_tests {
         // Create exporter
         let options = fake_options();
         let config = fake_config(options);
-        let exporter = HTML::new(&config);
+        let exporter = HTML::new(&config).unwrap();
 
         let balloon = AppMessage {
             image: Some("image"),
@@ -2504,5 +2689,569 @@ mod balloon_format_tests {
         let actual = "<a href=\"url\"><div class=\"app_header\"><img src=\"image\"><div class=\"name\">app_name</div><div class=\"image_title\">title</div><div class=\"image_subtitle\">subtitle</div><div class=\"ldtext\">ldtext</div></div><div class=\"app_footer\"><div class=\"caption\">caption</div><div class=\"subcaption\">subcaption</div><div class=\"trailing_caption\">trailing_caption</div><div class=\"trailing_subcaption\">trailing_subcaption</div></div></a>";
 
         assert_eq!(expected, actual);
+    }
+}
+
+#[cfg(test)]
+mod text_effect_tests {
+    use super::tests::{blank, fake_config, fake_options};
+    use crate::{
+        exporters::exporter::{TextEffectFormatter, Writer},
+        Exporter, HTML,
+    };
+    use imessage_database::{
+        message_types::text_effects::{Style, TextEffect, Unit},
+        util::typedstream::parser::TypedStreamReader,
+    };
+    use std::{
+        env::{current_dir, set_var},
+        fs::File,
+        io::Read,
+    };
+
+    #[test]
+    fn can_format_html_default() {
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let expected = exporter.format_attributed("Chris", &TextEffect::Default);
+        let actual = "Chris";
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn can_format_html_mention() {
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let expected = exporter.format_mention("Chris", "+15558675309");
+        let actual = "<span title=\"+15558675309\"><b>Chris</b></span>";
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn can_format_html_link() {
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let expected = exporter.format_link("chrissardegna.com", "https://chrissardegna.com");
+        let actual = "<a href=\"https://chrissardegna.com\">chrissardegna.com</a>";
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn can_format_html_otp() {
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let expected = exporter.format_otp("123456");
+        let actual = "<u>123456</u>";
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn can_format_html_style_single() {
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let expected = exporter.format_styles("Bold", &[Style::Bold]);
+        let actual = "<b>Bold</b>";
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn can_format_html_style_multiple() {
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let expected = exporter.format_styles("Bold", &[Style::Bold, Style::Strikethrough]);
+        let actual = "<s><b>Bold</b></s>";
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn can_format_html_style_all() {
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let expected = exporter.format_styles(
+            "Bold",
+            &[
+                Style::Bold,
+                Style::Strikethrough,
+                Style::Italic,
+                Style::Underline,
+            ],
+        );
+        let actual = "<u><i><s><b>Bold</b></s></i></u>";
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn can_format_html_conversion() {
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let expected = exporter.format_conversion("100 Miles", &Unit::Distance);
+        let actual = "<u>100 Miles</u>";
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn can_format_html_mention_end_to_end() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.text = Some("Test Dad ".to_string());
+        message.is_from_me = true;
+        message.chat_id = Some(0);
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/typedstream/Mention");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        message.components = parser.parse().ok();
+
+        let actual = exporter.format_message(&message, 0).unwrap();
+        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\">Test <span title=\"+15558675309\"><b>Dad</b></span> </span>\n</div>\n</div>\n</div>\n";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_format_html_otp_end_to_end() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.text = Some("000123 is your security code. Don't share your code.".to_string());
+        message.is_from_me = true;
+        message.chat_id = Some(0);
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/typedstream/Code");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        message.components = parser.parse().ok();
+
+        let actual = exporter.format_message(&message, 0).unwrap();
+        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\"><u>000123</u> is your security code. Don&apos;t share your code.</span>\n</div>\n</div>\n</div>\n";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_format_html_link_end_to_end() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.text = Some("https://twitter.com/xxxxxxxxx/status/0000223300009216128".to_string());
+        message.is_from_me = true;
+        message.chat_id = Some(0);
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/typedstream/URLMessage");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        message.components = parser.parse().ok();
+
+        let actual = exporter.format_message(&message, 0).unwrap();
+        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\"><a href=\"https://twitter.com/xxxxxxxxx/status/0000223300009216128\">https://twitter.com/xxxxxxxxx/status/0000223300009216128</a></span>\n</div>\n</div>\n</div>\n";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_format_html_conversion_end_to_end() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.text = Some("Hi. Right now or tomorrow?".to_string());
+        message.is_from_me = true;
+        message.chat_id = Some(0);
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/typedstream/Date");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        message.components = parser.parse().ok();
+
+        let actual = exporter.format_message(&message, 0).unwrap();
+        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\">Hi. Right now or <u>tomorrow</u>?</span>\n</div>\n</div>\n</div>\n";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_format_html_text_effect_end_to_end() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.text = Some("Big small shake nod explode ripple bloom jitter".to_string());
+        message.is_from_me = true;
+        message.chat_id = Some(0);
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/typedstream/TextEffects");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        message.components = parser.parse().ok();
+
+        let actual = exporter.format_message(&message, 0).unwrap();
+        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\"><span class=\"animationBig\">Big</span> <span class=\"animationSmall\">small </span><span class=\"animationShake\">shake</span> <span class=\"animationNod\">nod</span> <span class=\"animationExplode\">explode </span><span class=\"animationRipple\">ripple</span> <span class=\"animationBloom\">bloom</span> <span class=\"animationJitter\">jitter</span></span>\n</div>\n</div>\n</div>\n";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_format_html_text_styles_end_to_end() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.text = Some("Bold underline italic strikethrough all four".to_string());
+        message.is_from_me = true;
+        message.chat_id = Some(0);
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/typedstream/TextStyles");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        message.components = parser.parse().ok();
+
+        let actual = exporter.format_message(&message, 0).unwrap();
+        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\"><b>Bold</b> <u>underline</u> <i>italic</i> <s>strikethrough</s> all <i><u><s><b>four</b></s></u></i></span>\n</div>\n</div>\n</div>\n";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_format_html_text_styles_single_end_to_end() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.text = Some("Everything".to_string());
+        message.is_from_me = true;
+        message.chat_id = Some(0);
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/typedstream/TextStylesSingleRange");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        message.components = parser.parse().ok();
+
+        let actual = exporter.format_message(&message, 0).unwrap();
+        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\"><i><u><s><b>Everything</b></s></u></i></span>\n</div>\n</div>\n</div>\n";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_format_html_text_styles_mixed_end_to_end() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.text = Some("Underline normal jitter normal".to_string());
+        message.is_from_me = true;
+        message.chat_id = Some(0);
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/typedstream/TextStylesMixed");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        message.components = parser.parse().ok();
+
+        let actual = exporter.format_message(&message, 0).unwrap();
+        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\"><u>Underline</u> normal <span class=\"animationJitter\">jitter</span> normal</span>\n</div>\n</div>\n</div>\n";
+
+        assert_eq!(actual, expected);
+    }
+}
+
+#[cfg(test)]
+mod edited_tests {
+    use std::{
+        env::{current_dir, set_var},
+        fs::File,
+        io::Read,
+    };
+
+    use super::tests::{blank, fake_config, fake_options};
+
+    use crate::{exporters::exporter::Writer, Exporter, HTML};
+    use imessage_database::{
+        message_types::edited::{EditStatus, EditedMessage, EditedMessagePart},
+        util::typedstream::parser::TypedStreamReader,
+    };
+
+    #[test]
+    fn can_format_html_conversion_final_unsent() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.date_edited = 674530231992568192;
+        message.text = Some(
+            "From arbitrary byte stream:\r\u{FFFC}To native Rust data structures:\r".to_string(),
+        );
+        message.is_from_me = true;
+        message.chat_id = Some(0);
+        message.edited_parts = Some(EditedMessage {
+            parts: vec![
+                EditedMessagePart {
+                    status: EditStatus::Original,
+                    edit_history: vec![],
+                },
+                EditedMessagePart {
+                    status: EditStatus::Original,
+                    edit_history: vec![],
+                },
+                EditedMessagePart {
+                    status: EditStatus::Original,
+                    edit_history: vec![],
+                },
+                EditedMessagePart {
+                    status: EditStatus::Unsent,
+                    edit_history: vec![],
+                },
+            ],
+        });
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/typedstream/MultiPartWithDeleted");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        message.components = parser.parse().ok();
+
+        let actual = exporter.format_message(&message, 0).unwrap();
+        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\">From arbitrary byte stream:\r</span>\n</div>\n<hr><div class=\"message_part\">\n<span class=\"attachment_error\">Attachment does not exist!</span>\n</div>\n<hr><div class=\"message_part\">\n<span class=\"bubble\">To native Rust data structures:\r</span>\n</div>\n<hr><div class=\"message_part\">\n<span class=\"unsent\"><span class=\"unsent\">You unsent this message part 1 hour, 49 seconds after sending!</span></span>\n</div>\n</div>\n</div>\n";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_format_html_conversion_no_edits() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.text = Some(
+            "From arbitrary byte stream:\r\u{FFFC}To native Rust data structures:\r".to_string(),
+        );
+        message.is_from_me = true;
+        message.chat_id = Some(0);
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/typedstream/MultiPartWithDeleted");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        message.components = parser.parse().ok();
+
+        let actual = exporter.format_message(&message, 0).unwrap();
+        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\">From arbitrary byte stream:\r</span>\n</div>\n<hr><div class=\"message_part\">\n<span class=\"attachment_error\">Attachment does not exist!</span>\n</div>\n<hr><div class=\"message_part\">\n<span class=\"bubble\">To native Rust data structures:\r</span>\n</div>\n</div>\n</div>\n";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_format_html_conversion_fully_unsent() {
+        // Set timezone to PST for consistent Local time
+        set_var("TZ", "PST");
+
+        // Create exporter
+        let options = fake_options();
+        let config = fake_config(options);
+        let exporter = HTML::new(&config).unwrap();
+
+        let mut message = blank();
+        // May 17, 2022  8:29:42 PM
+        message.date = 674526582885055488;
+        message.date_edited = 674530231992568192;
+        message.text = None;
+        message.is_from_me = true;
+        message.chat_id = Some(0);
+        message.edited_parts = Some(EditedMessage {
+            parts: vec![EditedMessagePart {
+                status: EditStatus::Unsent,
+                edit_history: vec![],
+            }],
+        });
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/typedstream/Blank");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        message.components = parser.parse().ok();
+
+        let actual = exporter.format_announcement(&message);
+        let expected = "<div class =\"announcement\"><p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span> You unsent a message.</p></div>";
+
+        assert_eq!(actual, expected);
     }
 }

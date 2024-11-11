@@ -12,6 +12,12 @@ xmp {
 	margin: 0px;
 }
 
+svg {
+	width: 100vw;
+	max-width: 100%;
+	height: auto;
+}
+
 a[href^="#"] {
 	text-decoration: none;
 	color: darkblue;
@@ -222,6 +228,10 @@ span.timestamp {
 	opacity: 60%;
 }
 
+span.unsent {
+	opacity: 75%;
+}
+
 span.reply_anchor {
 	opacity: 100%;
 }
@@ -251,17 +261,22 @@ span.expressive {
 	opacity: 60%;
 }
 
-span.reactions {
+span.tapbacks {
 	opacity: 60%;
 }
 
-div.reactions img {
+div.tapbacks img {
 	max-width: 5em;
+	padding-right: 1em;
 }
 
-div.reaction {
+div.tapback {
 	display: flex;
 	align-items: center;
+}
+
+span[class^="animation"] {
+	text-shadow: #000 0 0 10px;
 }
 
 div.sticker_effect {

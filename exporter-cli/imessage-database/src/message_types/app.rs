@@ -1,5 +1,5 @@
 /*!
-  App messages are a specific type of message that developers can generate with their apps.
+  App messages are messages that developers can generate with their apps.
   Some built-in functionality also uses App Messages, like Apple Pay or Handwriting.
 */
 

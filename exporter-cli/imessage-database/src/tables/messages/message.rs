@@ -11,65 +11,31 @@ use rusqlite::{blob::Blob, Connection, Error, Result, Row, Statement};
 use crate::{
     error::{message::MessageError, table::TableError},
     message_types::{
+        edited::{EditStatus, EditedMessage},
         expressives::{BubbleEffect, Expressive, ScreenEffect},
-        variants::{Announcement, CustomBalloon, Reaction, Variant},
+        variants::{Announcement, BalloonProvider, CustomBalloon, Tapback, Variant},
     },
-    tables::table::{
-        Cacheable, Diagnostic, Table, ATTRIBUTED_BODY, CHAT_MESSAGE_JOIN, MESSAGE,
-        MESSAGE_ATTACHMENT_JOIN, MESSAGE_PAYLOAD, MESSAGE_SUMMARY_INFO, RECENTLY_DELETED,
+    tables::{
+        messages::{
+            body::{parse_body_legacy, parse_body_typedstream},
+            models::{BubbleComponent, Service},
+        },
+        table::{
+            Cacheable, Diagnostic, Table, ATTRIBUTED_BODY, CHAT_MESSAGE_JOIN, MESSAGE,
+            MESSAGE_ATTACHMENT_JOIN, MESSAGE_PAYLOAD, MESSAGE_SUMMARY_INFO, RECENTLY_DELETED,
+        },
     },
     util::{
         dates::{get_local_time, readable_diff},
         output::{done_processing, processing},
         query_context::QueryContext,
-        streamtyped, typedstream,
+        streamtyped,
+        typedstream::{models::Archivable, parser::TypedStreamReader},
     },
 };
 
-/// Character found in message body text that indicates attachment position
-const ATTACHMENT_CHAR: char = '\u{FFFC}';
-/// Character found in message body text that indicates app message position
-const APP_CHAR: char = '\u{FFFD}';
-/// A collection of characters that represent non-text content within body text
-const REPLACEMENT_CHARS: [char; 2] = [ATTACHMENT_CHAR, APP_CHAR];
 /// The required columns, interpolated into the most recent schema due to performance considerations
 const COLS: &str = "rowid, guid, text, service, handle_id, destination_caller_id, subject, date, date_read, date_delivered, is_from_me, is_read, item_type, other_handle, share_status, share_direction, group_title, group_action_type, associated_message_guid, associated_message_type, balloon_bundle_id, expressive_send_style_id, thread_originator_guid, thread_originator_part, date_edited, chat_id";
-
-/// Represents a broad category of messages: standalone, thread originators, and thread replies.
-#[derive(Debug)]
-pub enum MessageType<'a> {
-    /// A normal message not associated with any others
-    Normal(Variant<'a>, Expressive<'a>),
-    /// A message that has replies
-    Thread(Variant<'a>, Expressive<'a>),
-    /// A message that is a reply to another message
-    Reply(Variant<'a>, Expressive<'a>),
-}
-
-/// Defines the parts of a message bubble, i.e. the content that can exist in a single message.
-#[derive(Debug, PartialEq, Eq)]
-pub enum BubbleType<'a> {
-    /// A normal text message
-    Text(&'a str),
-    /// An attachment
-    Attachment,
-    /// An app integration
-    App,
-}
-
-/// Defines different types of services we can receive messages from.
-#[derive(Debug)]
-pub enum Service<'a> {
-    /// An iMessage
-    #[allow(non_camel_case_types)]
-    iMessage,
-    /// A message sent as SMS
-    SMS,
-    /// Any other type of message
-    Other(&'a str),
-    /// Used when service field is not set
-    Unknown,
-}
 
 /// Represents a single row in the `message` table.
 #[derive(Debug)]
@@ -77,7 +43,7 @@ pub enum Service<'a> {
 pub struct Message {
     pub rowid: i32,
     pub guid: String,
-    /// The text of the message, which may require calling [`gen_text()`](crate::tables::messages::Message::gen_text) to populate
+    /// The text of the message, which may require calling [`Self::generate_text()`] to populate
     pub text: Option<String>,
     /// The service the message was sent from
     pub service: Option<String>,
@@ -96,7 +62,7 @@ pub struct Message {
     pub is_from_me: bool,
     /// `true` if the message was read by the recipient, else `false`
     pub is_read: bool,
-    /// Intermediate data for determining the [`variant`](crate::message_types::variants) of a message
+    /// Intermediate data for determining the [`Variant`] of a message
     pub item_type: i32,
     /// Optional handle for the recipient of a message that includes shared content
     pub other_handle: i32,
@@ -104,13 +70,13 @@ pub struct Message {
     pub share_status: bool,
     /// Boolean determining the direction shared data was sent; `false` indicates it was sent from the database owner, `true` indicates it was sent to the database owner
     pub share_direction: bool,
-    /// If the message updates the [`display_name`](crate::tables::chat::Chat::display_name) of the chat
+    /// If the message updates the [`display_name`](crate::tables::chat::Chat::display_name) of the chat, this field will be populated
     pub group_title: Option<String>,
     /// If the message modified for a group, this will be nonzero
     pub group_action_type: i32,
     /// The message GUID of a message associated with this one
     pub associated_message_guid: Option<String>,
-    /// Intermediate data for determining the [`variant`](crate::message_types::variants) of a message
+    /// Intermediate data for determining the [`Variant`] of a message
     pub associated_message_type: Option<i32>,
     /// The [bundle ID](https://developer.apple.com/help/app-store-connect/reference/app-bundle-information) of the app that generated the [`AppMessage`](crate::message_types::app::AppMessage)
     pub balloon_bundle_id: Option<String>,
@@ -122,6 +88,8 @@ pub struct Message {
     pub thread_originator_part: Option<String>,
     /// The date the message was most recently edited
     pub date_edited: i64,
+    /// If present, this is the emoji associated with a custom emoji tapback
+    pub associated_message_emoji: Option<String>,
     /// The [`identifier`](crate::tables::chat::Chat::chat_identifier) of the chat the message belongs to
     pub chat_id: Option<i32>,
     /// The number of attached files included in the message
@@ -130,6 +98,10 @@ pub struct Message {
     pub deleted_from: Option<i32>,
     /// The number of replies to the message
     pub num_replies: i32,
+    /// The components of the message body, parsed by [`TypedStreamReader`]
+    pub components: Option<Vec<Archivable>>,
+    /// The components of the message that may or may not have been edited or unsent
+    pub edited_parts: Option<EditedMessage>,
 }
 
 impl Table for Message {
@@ -160,10 +132,13 @@ impl Table for Message {
             thread_originator_guid: row.get("thread_originator_guid").unwrap_or(None),
             thread_originator_part: row.get("thread_originator_part").unwrap_or(None),
             date_edited: row.get("date_edited").unwrap_or(0),
+            associated_message_emoji: row.get("associated_message_emoji").unwrap_or(None),
             chat_id: row.get("chat_id").unwrap_or(None),
             num_attachments: row.get("num_attachments")?,
             deleted_from: row.get("deleted_from").unwrap_or(None),
             num_replies: row.get("num_replies")?,
+            components: None,
+            edited_parts: None,
         })
     }
 
@@ -316,7 +291,7 @@ impl Diagnostic for Message {
 impl Cacheable for Message {
     type K = String;
     type V = HashMap<usize, Vec<Self>>;
-    /// Used for reactions that do not exist in a foreign key table
+    /// Used for tapbacks that do not exist in a foreign key table
     ///
     /// Builds a map like:
     ///
@@ -329,7 +304,7 @@ impl Cacheable for Message {
     /// }
     /// ```
     ///
-    /// Where the `0` and `1` are the reaction indexes in the body of the message mapped by `message_guid`
+    /// Where the `0` and `1` are the tapback indexes in the body of the message mapped by `message_guid`
     fn cache(db: &Connection) -> Result<HashMap<Self::K, Self::V>, TableError> {
         // Create cache for user IDs
         let mut map: HashMap<Self::K, Self::V> = HashMap::new();
@@ -355,23 +330,23 @@ impl Cacheable for Message {
                 .map_err(TableError::Messages)?;
 
             // Iterate over the messages and update the map
-            for reaction in messages {
-                let reaction = Self::extract(reaction)?;
-                if reaction.is_reaction() {
-                    if let Some((idx, reaction_target_guid)) = reaction.clean_associated_guid() {
-                        match map.get_mut(reaction_target_guid) {
-                            Some(reactions) => match reactions.get_mut(&idx) {
-                                Some(reactions_vec) => {
-                                    reactions_vec.push(reaction);
+            for message in messages {
+                let message = Self::extract(message)?;
+                if message.is_tapback() {
+                    if let Some((idx, tapback_target_guid)) = message.clean_associated_guid() {
+                        match map.get_mut(tapback_target_guid) {
+                            Some(tapbacks) => match tapbacks.get_mut(&idx) {
+                                Some(tapbacks_vec) => {
+                                    tapbacks_vec.push(message);
                                 }
                                 None => {
-                                    reactions.insert(idx, vec![reaction]);
+                                    tapbacks.insert(idx, vec![message]);
                                 }
                             },
                             None => {
                                 map.insert(
-                                    reaction_target_guid.to_string(),
-                                    HashMap::from([(idx, vec![reaction])]),
+                                    tapback_target_guid.to_string(),
+                                    HashMap::from([(idx, vec![message])]),
                                 );
                             }
                         }
@@ -385,19 +360,36 @@ impl Cacheable for Message {
 }
 
 impl Message {
-    /// Get the body text of a message, parsing it as [`typedstream`] (and falling back to [`streamtyped`]) data if necessary.
-    pub fn gen_text<'a>(&'a mut self, db: &'a Connection) -> Result<&'a str, MessageError> {
-        if self.text.is_none() {
-            let body = self.attributed_body(db).ok_or(MessageError::MissingData)?;
-            // TODO: Use this to generate the `text` as well as update the logic in `body()` when it is present
-            let mut s = typedstream::TypedStreamReader::new(&body);
-            let v = s.parse();
-            if v.is_err() {
-                eprintln!("Unable to parse {}", self.guid);
+    /// Generate the text of a message, deserializing it as [`typedstream`](crate::util::typedstream) (and falling back to [`streamtyped`]) data if necessary.
+    pub fn generate_text<'a>(&'a mut self, db: &'a Connection) -> Result<&'a str, MessageError> {
+        // Grab the body data from the table
+        if let Some(body) = self.attributed_body(db) {
+            // Attempt to deserialize the typedstream data
+            let mut typedstream = TypedStreamReader::from(&body);
+            self.components = typedstream.parse().ok();
+
+            // If we deserialize the typedstream, use that data
+            self.text = self
+                .components
+                .as_ref()
+                .and_then(|items| items.first())
+                .and_then(|item| item.as_nsstring())
+                .map(String::from);
+
+            // If the above parsing failed, fall back to the legacy parser instead
+            if self.text.is_none() {
+                self.text =
+                    Some(streamtyped::parse(body).map_err(MessageError::StreamTypedParseError)?);
             }
-            self.text =
-                Some(streamtyped::parse(body).map_err(MessageError::StreamTypedParseError)?);
         }
+
+        // Generate the edited message data
+        self.edited_parts = self
+            .is_edited()
+            .then(|| self.message_summary_info(db))
+            .flatten()
+            .as_ref()
+            .and_then(|payload| EditedMessage::from_map(payload).ok());
 
         if let Some(t) = &self.text {
             Ok(t)
@@ -406,59 +398,56 @@ impl Message {
         }
     }
 
-    /// Get a vector of a message's components
+    /// Get a vector of a message body's components. If the text has not been captured with [`Self::generate_text()`], the vector will be empty.
+    ///
+    /// # Parsing
+    ///
+    /// There are two different ways this crate will attempt to parse this data.
+    ///
+    /// ## Default parsing
+    ///
+    /// In most cases, the message body will be deserialized using the [`typedstream`](crate::util::typedstream) deserializer.
+    ///
+    /// Note: message body text can be formatted with a [`Vec`] of [`TextAttributes`](crate::tables::messages::models::TextAttributes).
+    ///
+    /// An iMessage that contains body text like:
+    ///
+    /// ```
+    /// let message_text = "\u{FFFC}Check out this photo!";
+    /// ```
+    ///
+    /// Will have a `body()` of:
+    ///
+    /// ```
+    /// use imessage_database::message_types::text_effects::TextEffect;
+    /// use imessage_database::tables::messages::models::{TextAttributes, BubbleComponent};
+    ///  
+    /// let result = vec![
+    ///     BubbleComponent::Attachment(""),
+    ///     BubbleComponent::Text(vec![TextAttributes::new(3, 24, TextEffect::Default)]),
+    /// ];
+    /// ```
+    ///
+    /// ## Legacy parsing
+    ///
+    /// If the `typedstream` data cannot be deserialized, this method falls back to a legacy string parsing algorithm that
+    /// only supports unstyled text.
     ///
     /// If the message has attachments, there will be one [`U+FFFC`](https://www.compart.com/en/unicode/U+FFFC) character
     /// for each attachment and one [`U+FFFD`](https://www.compart.com/en/unicode/U+FFFD) for app messages that we need
     /// to format.
-    ///
-    /// An iMessage that contains body text like:
-    ///
-    /// `\u{FFFC}Check out this photo!`
-    ///
-    /// Will have a `body()` of:
-    ///
-    /// `[BubbleType::Attachment, BubbleType::Text("Check out this photo!")]`
-    pub fn body(&self) -> Vec<BubbleType> {
-        let mut out_v = vec![];
-
+    pub fn body(&self) -> Vec<BubbleComponent> {
         // If the message is an app, it will be rendered differently, so just escape there
         if self.balloon_bundle_id.is_some() {
-            out_v.push(BubbleType::App);
-            return out_v;
+            return vec![BubbleComponent::App];
         }
 
-        match &self.text {
-            Some(text) => {
-                let mut start: usize = 0;
-                let mut end: usize = 0;
-
-                for (idx, char) in text.char_indices() {
-                    if REPLACEMENT_CHARS.contains(&char) {
-                        if start < end {
-                            out_v.push(BubbleType::Text(text[start..idx].trim()));
-                        }
-                        start = idx + 1;
-                        end = idx;
-                        match char {
-                            ATTACHMENT_CHAR => out_v.push(BubbleType::Attachment),
-                            APP_CHAR => out_v.push(BubbleType::App),
-                            _ => {}
-                        };
-                    } else {
-                        if start > end {
-                            start = idx;
-                        }
-                        end = idx;
-                    }
-                }
-                if start <= end && start < text.len() {
-                    out_v.push(BubbleType::Text(text[start..].trim()));
-                }
-                out_v
-            }
-            None => out_v,
+        if let Some(body) = parse_body_typedstream(self) {
+            return body;
         }
+
+        // Naive logic for when `typedstream` component parsing fails
+        parse_body_legacy(self)
     }
 
     /// Calculates the date a message was written to the database.
@@ -486,7 +475,7 @@ impl Message {
     ///
     /// This field is stored as a unix timestamp with an epoch of `2001-01-01 00:00:00` in the local time zone
     pub fn date_edited(&self, offset: &i64) -> Result<DateTime<Local>, MessageError> {
-        get_local_time(&self.date_read, offset)
+        get_local_time(&self.date_edited, offset)
     }
 
     /// Gets the time until the message was read. This can happen in two ways:
@@ -517,23 +506,23 @@ impl Message {
         self.thread_originator_guid.is_some()
     }
 
-    /// `true` if the message renames a thread, else `false`
+    /// `true` if the message is an [`Announcement`], else `false`
     pub fn is_announcement(&self) -> bool {
-        self.group_title.is_some() || self.group_action_type != 0
+        self.group_title.is_some() || self.group_action_type != 0 || self.is_fully_unsent()
     }
 
-    /// `true` if the message is a reaction to another message, else `false`
-    pub fn is_reaction(&self) -> bool {
-        matches!(self.variant(), Variant::Reaction(..))
+    /// `true` if the message is a [`Tapback`] to another message, else `false`
+    pub fn is_tapback(&self) -> bool {
+        matches!(self.variant(), Variant::Tapback(..))
             | (self.is_sticker() && self.associated_message_guid.is_some())
     }
 
-    /// `true` if the message is sticker, else `false`
+    /// `true` if the message is a sticker, else `false`
     pub fn is_sticker(&self) -> bool {
         matches!(self.variant(), Variant::Sticker(_))
     }
 
-    /// `true` if the message has an expressive presentation, else `false`
+    /// `true` if the message has an [`Expressive`], else `false`
     pub fn is_expressive(&self) -> bool {
         self.expressive_send_style_id.is_some()
     }
@@ -543,9 +532,33 @@ impl Message {
         matches!(self.variant(), Variant::App(CustomBalloon::URL))
     }
 
-    /// `true` if the message was edited, else `false`
+    /// `true` if the message is a [`HandwrittenMessage`](crate::message_types::handwriting::models::HandwrittenMessage), else `false`
+    pub fn is_handwriting(&self) -> bool {
+        matches!(self.variant(), Variant::App(CustomBalloon::Handwriting))
+    }
+
+    /// `true` if the message was [`Edited`](crate::message_types::edited), else `false`
     pub fn is_edited(&self) -> bool {
         self.date_edited != 0
+    }
+
+    /// `true` if the specified message component was edited, else `false`
+    pub fn is_part_edited(&self, index: usize) -> bool {
+        if let Some(edited_parts) = &self.edited_parts {
+            if let Some(part) = edited_parts.part(index) {
+                return matches!(part.status, EditStatus::Edited);
+            }
+        }
+        false
+    }
+
+    /// `true` if all message components were unsent, else `false`
+    pub fn is_fully_unsent(&self) -> bool {
+        self.edited_parts.as_ref().map_or(false, |ep| {
+            ep.parts
+                .iter()
+                .all(|part| matches!(part.status, EditStatus::Unsent))
+        })
     }
 
     /// `true` if the message has attachments, else `false`
@@ -587,6 +600,8 @@ impl Message {
     ///
     /// Messages that have expired from this restoration process are permanently deleted and
     /// cannot be recovered.
+    ///
+    /// Note: This is not the same as an [`Unsent`](crate::message_types::edited::EditStatus::Unsent) message.
     pub fn is_deleted(&self) -> bool {
         self.deleted_from.is_some()
     }
@@ -691,7 +706,7 @@ impl Message {
             )).map_err(TableError::Messages)?))
     }
 
-    /// See [`Reaction`] for details on this data.
+    /// See [`Tapback`] for details on this data.
     fn clean_associated_guid(&self) -> Option<(usize, &str)> {
         if let Some(guid) = &self.associated_message_guid {
             if guid.starts_with("p:") {
@@ -709,8 +724,8 @@ impl Message {
         None
     }
 
-    /// Parse the index of a reaction from it's associated GUID field
-    fn reaction_index(&self) -> usize {
+    /// Parse the index of a tapback from it's associated GUID field
+    fn tapback_index(&self) -> usize {
         match self.clean_associated_guid() {
             Some((x, _)) => x,
             None => 0,
@@ -718,13 +733,13 @@ impl Message {
     }
 
     /// Build a `HashMap` of message component index to messages that react to that component
-    pub fn get_reactions(
+    pub fn get_tapbacks(
         &self,
         db: &Connection,
-        reactions: &HashMap<String, Vec<String>>,
+        tapbacks: &HashMap<String, Vec<String>>,
     ) -> Result<HashMap<usize, Vec<Self>>, TableError> {
         let mut out_h: HashMap<usize, Vec<Self>> = HashMap::new();
-        if let Some(rxs) = reactions.get(&self.guid) {
+        if let Some(rxs) = tapbacks.get(&self.guid) {
             let filter: Vec<String> = rxs.iter().map(|guid| format!("\"{guid}\"")).collect();
             // Create query
             let mut statement = db.prepare(&format!(
@@ -750,7 +765,7 @@ impl Message {
 
             for message in messages {
                 let msg = Message::extract(message)?;
-                if let Variant::Reaction(idx, _, _) | Variant::Sticker(idx) = msg.variant() {
+                if let Variant::Tapback(idx, _, _) | Variant::Sticker(idx) = msg.variant() {
                     match out_h.get_mut(&idx) {
                         Some(body_part) => body_part.push(msg),
                         None => {
@@ -861,21 +876,33 @@ impl Message {
                 },
 
                 // Stickers overlaid on messages
-                1000 => Variant::Sticker(self.reaction_index()),
+                1000 => Variant::Sticker(self.tapback_index()),
 
-                // Reactions
-                2000 => Variant::Reaction(self.reaction_index(), true, Reaction::Loved),
-                2001 => Variant::Reaction(self.reaction_index(), true, Reaction::Liked),
-                2002 => Variant::Reaction(self.reaction_index(), true, Reaction::Disliked),
-                2003 => Variant::Reaction(self.reaction_index(), true, Reaction::Laughed),
-                2004 => Variant::Reaction(self.reaction_index(), true, Reaction::Emphasized),
-                2005 => Variant::Reaction(self.reaction_index(), true, Reaction::Questioned),
-                3000 => Variant::Reaction(self.reaction_index(), false, Reaction::Loved),
-                3001 => Variant::Reaction(self.reaction_index(), false, Reaction::Liked),
-                3002 => Variant::Reaction(self.reaction_index(), false, Reaction::Disliked),
-                3003 => Variant::Reaction(self.reaction_index(), false, Reaction::Laughed),
-                3004 => Variant::Reaction(self.reaction_index(), false, Reaction::Emphasized),
-                3005 => Variant::Reaction(self.reaction_index(), false, Reaction::Questioned),
+                // Tapbacks
+                2000 => Variant::Tapback(self.tapback_index(), true, Tapback::Loved),
+                2001 => Variant::Tapback(self.tapback_index(), true, Tapback::Liked),
+                2002 => Variant::Tapback(self.tapback_index(), true, Tapback::Disliked),
+                2003 => Variant::Tapback(self.tapback_index(), true, Tapback::Laughed),
+                2004 => Variant::Tapback(self.tapback_index(), true, Tapback::Emphasized),
+                2005 => Variant::Tapback(self.tapback_index(), true, Tapback::Questioned),
+                2006 => Variant::Tapback(
+                    self.tapback_index(),
+                    true,
+                    Tapback::Emoji(self.associated_message_emoji.as_deref()),
+                ),
+                2007 => Variant::Sticker(self.tapback_index()),
+                3000 => Variant::Tapback(self.tapback_index(), false, Tapback::Loved),
+                3001 => Variant::Tapback(self.tapback_index(), false, Tapback::Liked),
+                3002 => Variant::Tapback(self.tapback_index(), false, Tapback::Disliked),
+                3003 => Variant::Tapback(self.tapback_index(), false, Tapback::Laughed),
+                3004 => Variant::Tapback(self.tapback_index(), false, Tapback::Emphasized),
+                3005 => Variant::Tapback(self.tapback_index(), false, Tapback::Questioned),
+                3006 => Variant::Tapback(
+                    self.tapback_index(),
+                    false,
+                    Tapback::Emoji(self.associated_message_emoji.as_deref()),
+                ),
+                3007 => Variant::Sticker(self.tapback_index()),
 
                 // Unknown
                 x => Variant::Unknown(x),
@@ -894,6 +921,10 @@ impl Message {
     pub fn get_announcement(&self) -> Option<Announcement> {
         if let Some(name) = &self.group_title {
             return Some(Announcement::NameChange(name));
+        }
+
+        if self.is_fully_unsent() {
+            return Some(Announcement::FullyUnsent);
         }
 
         return match &self.group_action_type {
@@ -935,6 +966,20 @@ impl Message {
     /// This column contains data used by iMessage app balloons.
     pub fn payload_data(&self, db: &Connection) -> Option<Value> {
         Value::from_reader(self.get_blob(db, MESSAGE_PAYLOAD)?).ok()
+    }
+
+    /// Get a message's raw data from the `payload_data` BLOB column
+    ///
+    /// Calling this hits the database, so it is expensive and should
+    /// only get invoked when needed.
+    ///
+    /// This column contains data used by [`HandwrittenMessage`](crate::message_types::handwriting::HandwrittenMessage)s.
+    pub fn raw_payload_data(&self, db: &Connection) -> Option<Vec<u8>> {
+        let mut buf = Vec::new();
+        self.get_blob(db, MESSAGE_PAYLOAD)?
+            .read_to_end(&mut buf)
+            .ok()?;
+        Some(buf)
     }
 
     /// Get a message's plist from the `message_summary_info` BLOB column
@@ -1011,10 +1056,11 @@ impl Message {
 mod tests {
     use crate::{
         message_types::{
+            edited::{EditStatus, EditedMessage, EditedMessagePart},
             expressives,
             variants::{CustomBalloon, Variant},
         },
-        tables::messages::{BubbleType, Message},
+        tables::messages::Message,
         util::dates::get_offset,
     };
 
@@ -1045,93 +1091,19 @@ mod tests {
             thread_originator_guid: None,
             thread_originator_part: None,
             date_edited: 0,
+            associated_message_emoji: None,
             chat_id: None,
             num_attachments: 0,
             deleted_from: None,
             num_replies: 0,
+            components: None,
+            edited_parts: None,
         }
     }
 
     #[test]
     fn can_gen_message() {
         blank();
-    }
-
-    #[test]
-    fn can_get_message_body_single_emoji() {
-        let mut m = blank();
-        m.text = Some("🙈".to_string());
-        assert_eq!(m.body(), vec![BubbleType::Text("🙈")]);
-    }
-
-    #[test]
-    fn can_get_message_body_multiple_emoji() {
-        let mut m = blank();
-        m.text = Some("🙈🙈🙈".to_string());
-        assert_eq!(m.body(), vec![BubbleType::Text("🙈🙈🙈")]);
-    }
-
-    #[test]
-    fn can_get_message_body_text_only() {
-        let mut m = blank();
-        m.text = Some("Hello world".to_string());
-        assert_eq!(m.body(), vec![BubbleType::Text("Hello world")]);
-    }
-
-    #[test]
-    fn can_get_message_body_attachment_text() {
-        let mut m = blank();
-        m.text = Some("\u{FFFC}Hello world".to_string());
-        assert_eq!(
-            m.body(),
-            vec![BubbleType::Attachment, BubbleType::Text("Hello world")]
-        );
-    }
-
-    #[test]
-    fn can_get_message_body_app_text() {
-        let mut m = blank();
-        m.text = Some("\u{FFFD}Hello world".to_string());
-        assert_eq!(
-            m.body(),
-            vec![BubbleType::App, BubbleType::Text("Hello world")]
-        );
-    }
-
-    #[test]
-    fn can_get_message_body_app_attachment_text_mixed_start_text() {
-        let mut m = blank();
-        m.text = Some("One\u{FFFD}\u{FFFC}Two\u{FFFC}Three\u{FFFC}four".to_string());
-        assert_eq!(
-            m.body(),
-            vec![
-                BubbleType::Text("One"),
-                BubbleType::App,
-                BubbleType::Attachment,
-                BubbleType::Text("Two"),
-                BubbleType::Attachment,
-                BubbleType::Text("Three"),
-                BubbleType::Attachment,
-                BubbleType::Text("four")
-            ]
-        );
-    }
-
-    #[test]
-    fn can_get_message_body_app_attachment_text_mixed_start_app() {
-        let mut m = blank();
-        m.text = Some("\u{FFFD}\u{FFFC}Two\u{FFFC}Three\u{FFFC}".to_string());
-        assert_eq!(
-            m.body(),
-            vec![
-                BubbleType::App,
-                BubbleType::Attachment,
-                BubbleType::Text("Two"),
-                BubbleType::Attachment,
-                BubbleType::Text("Three"),
-                BubbleType::Attachment
-            ]
-        );
     }
 
     #[test]
@@ -1305,5 +1277,121 @@ mod tests {
         m.associated_message_guid = Some("bp:FAKE_GUID".to_string());
 
         assert_eq!(None, m.clean_associated_guid());
+    }
+
+    #[test]
+    fn can_get_fully_unsent_true_single() {
+        let mut m = blank();
+        m.edited_parts = Some(EditedMessage {
+            parts: vec![EditedMessagePart {
+                status: EditStatus::Unsent,
+                edit_history: vec![],
+            }],
+        });
+
+        assert!(m.is_fully_unsent());
+    }
+
+    #[test]
+    fn can_get_fully_unsent_true_multiple() {
+        let mut m = blank();
+        m.edited_parts = Some(EditedMessage {
+            parts: vec![
+                EditedMessagePart {
+                    status: EditStatus::Unsent,
+                    edit_history: vec![],
+                },
+                EditedMessagePart {
+                    status: EditStatus::Unsent,
+                    edit_history: vec![],
+                },
+            ],
+        });
+
+        assert!(m.is_fully_unsent());
+    }
+
+    #[test]
+    fn can_get_fully_unsent_false() {
+        let mut m = blank();
+        m.edited_parts = Some(EditedMessage {
+            parts: vec![EditedMessagePart {
+                status: EditStatus::Original,
+                edit_history: vec![],
+            }],
+        });
+
+        assert!(!m.is_fully_unsent());
+    }
+
+    #[test]
+    fn can_get_fully_unsent_false_multiple() {
+        let mut m = blank();
+        m.edited_parts = Some(EditedMessage {
+            parts: vec![
+                EditedMessagePart {
+                    status: EditStatus::Unsent,
+                    edit_history: vec![],
+                },
+                EditedMessagePart {
+                    status: EditStatus::Original,
+                    edit_history: vec![],
+                },
+            ],
+        });
+
+        assert!(!m.is_fully_unsent());
+    }
+
+    #[test]
+    fn can_get_part_edited_true() {
+        let mut m = blank();
+        m.edited_parts = Some(EditedMessage {
+            parts: vec![
+                EditedMessagePart {
+                    status: EditStatus::Edited,
+                    edit_history: vec![],
+                },
+                EditedMessagePart {
+                    status: EditStatus::Original,
+                    edit_history: vec![],
+                },
+            ],
+        });
+
+        assert!(m.is_part_edited(0));
+    }
+
+    #[test]
+    fn can_get_part_edited_false() {
+        let mut m = blank();
+        m.edited_parts = Some(EditedMessage {
+            parts: vec![
+                EditedMessagePart {
+                    status: EditStatus::Edited,
+                    edit_history: vec![],
+                },
+                EditedMessagePart {
+                    status: EditStatus::Original,
+                    edit_history: vec![],
+                },
+            ],
+        });
+
+        assert!(!m.is_part_edited(1));
+    }
+
+    #[test]
+    fn can_get_part_edited_blank() {
+        let m = blank();
+
+        assert!(!m.is_part_edited(0));
+    }
+
+    #[test]
+    fn can_get_fully_unsent_none() {
+        let m = blank();
+
+        assert!(!m.is_fully_unsent());
     }
 }

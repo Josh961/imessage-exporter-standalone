@@ -1,19 +1,21 @@
 use std::{
-    ffi::OsString,
     fmt::Display,
-    fs::{copy, create_dir_all, File, metadata},
-    io::{Read, Seek, SeekFrom},
+    fs::{copy, create_dir_all, metadata, write},
     path::{Path, PathBuf},
 };
-
-use filetime::{set_file_times, FileTime};
-use imessage_database::tables::{attachment::Attachment, messages::Message};
-use uuid::Uuid;
 
 use crate::app::{
     converter::{convert_heic, Converter, ImageType},
     runtime::Config,
 };
+
+use imessage_database::message_types::handwriting::HandwrittenMessage;
+use imessage_database::tables::{
+    attachment::{Attachment, MediaType},
+    messages::Message,
+};
+
+use filetime::{set_file_times, FileTime};
 
 /// Represents different ways the app can interact with attachment data
 #[derive(Debug, PartialEq, Eq)]
@@ -35,6 +37,53 @@ impl AttachmentManager {
             "disabled" => Some(Self::Disabled),
             _ => None,
         }
+    }
+
+    /// Handle a handwriting message, optionally writing it to an SVG file
+    pub fn handle_handwriting(
+        &self,
+        message: &Message,
+        handwriting: &HandwrittenMessage,
+        config: &Config,
+    ) -> Option<PathBuf> {
+        if !matches!(self, AttachmentManager::Disabled) {
+            // Create a path to copy the file to
+            let mut to = config.attachment_path();
+
+            // Add the subdirectory
+            let sub_dir = config.conversation_attachment_path(message.chat_id);
+            to.push(sub_dir);
+
+            // Add the filename
+            // Each handwriting has a unique id, so cache then all in the same place
+            to.push(&handwriting.id);
+
+            // Set the new file's extension to svg
+            to.set_extension("svg");
+            if to.exists() {
+                return Some(to);
+            }
+
+            // Ensure the directory tree exists
+            if let Some(folder) = to.parent() {
+                if !folder.exists() {
+                    if let Err(why) = create_dir_all(folder) {
+                        eprintln!("Unable to create {folder:?}: {why}");
+                    }
+                }
+            }
+
+            // Attempt the svg render
+            if let Err(why) = write(to.to_str()?, handwriting.render_svg()) {
+                eprintln!("Unable to write to {to:?}: {why}");
+            };
+
+            // Update file metadata
+            update_file_metadata(&to, &to, message, config);
+
+            return Some(to);
+        }
+        None
     }
 
     /// Handle an attachment, copying and converting if requested
@@ -69,16 +118,26 @@ impl AttachmentManager {
             let sub_dir = config.conversation_attachment_path(message.chat_id);
             to.push(sub_dir);
 
-            // Add a random filename
-            to.push(Uuid::new_v4().to_string());
+            // Add a stable filename
+            to.push(attachment.rowid.to_string());
 
             // Set the new file's extension to the original one
             to.set_extension(attachment.extension()?);
+            if to.exists() {
+                attachment.copied_path = Some(to);
+                return Some(());
+            }
 
             match self {
                 AttachmentManager::Compatible => match &config.converter {
                     Some(converter) => {
-                        Self::copy_convert(from, &mut to, converter, attachment.is_sticker);
+                        Self::copy_convert(
+                            from,
+                            &mut to,
+                            converter,
+                            attachment.is_sticker,
+                            attachment.mime_type(),
+                        );
                     }
                     None => Self::copy_raw(from, &to),
                 },
@@ -87,20 +146,7 @@ impl AttachmentManager {
             };
 
             // Update file metadata
-            if let Ok(metadata) = metadata(from) {
-                let mtime = match &message.date(&config.offset) {
-                    Ok(date) => {
-                        FileTime::from_unix_time(date.timestamp(), date.timestamp_subsec_nanos())
-                    }
-                    Err(_) => FileTime::from_last_modification_time(&metadata),
-                };
-
-                let atime = FileTime::from_last_access_time(&metadata);
-
-                if let Err(why) = set_file_times(&to, atime, mtime) {
-                    eprintln!("Unable to update {to:?} metadata: {why}");
-                }
-            }
+            update_file_metadata(from, &to, message, config);
             attachment.copied_path = Some(to);
         }
         Some(())
@@ -127,35 +173,23 @@ impl AttachmentManager {
     /// - Sticker `HEICS` files convert to `GIF`
     /// - Attachment `HEIC` files convert to `JPEG`
     /// - Other files are copied with their original formats
-    fn copy_convert(from: &Path, to: &mut PathBuf, converter: &Converter, is_sticker: bool) {
-        let mut original_extension = from.extension().unwrap_or_default().to_os_string();
-
-        if original_extension.is_empty() {
-            // Read the first few bytes of the file to determine its type
-            if let Ok(mut file) = File::open(from) {
-                let mut buffer = [0; 12];
-                if file.read_exact(&mut buffer).is_ok() {
-                    if &buffer[4..8] == b"ftyp" && &buffer[8..12] == b"heic" {
-                        original_extension = OsString::from("heic");
-                    } else if &buffer[4..8] == b"ftyp" && &buffer[8..12] == b"heix" {
-                        original_extension = OsString::from("heics");
-                    }
-                    // Reset file pointer to the beginning
-                    let _ = file.seek(SeekFrom::Start(0));
-                }
-            }
-        }
-
+    fn copy_convert(
+        from: &Path,
+        to: &mut PathBuf,
+        converter: &Converter,
+        is_sticker: bool,
+        mime_type: MediaType,
+    ) {
         // Handle sticker attachments
         if is_sticker {
             // Determine the output type of the sticker
-            let output_type: Option<ImageType> = match original_extension.to_str() {
+            let output_type: Option<ImageType> = match mime_type {
                 // Normal stickers get converted to png
-                Some("heic" | "HEIC") => Some(ImageType::Png),
-                // Animated stickers get converted to gif
-                Some("heics" | "HEICS") => Some(ImageType::Gif),
+                MediaType::Image("heic") | MediaType::Image("HEIC") => Some(ImageType::Png),
+                MediaType::Image("heics") | MediaType::Image("HEICS") => Some(ImageType::Gif),
                 _ => None,
             };
+
             match output_type {
                 Some(output_type) => {
                     to.set_extension(output_type.to_str());
@@ -167,7 +201,10 @@ impl AttachmentManager {
             }
         }
         // Normal attachments always get converted to jpeg
-        else if original_extension == "heic" || original_extension == "HEIC" {
+        else if matches!(
+            mime_type,
+            MediaType::Image("heic") | MediaType::Image("HEIC")
+        ) {
             let output_type = ImageType::Jpeg;
             // Update extension for conversion
             to.set_extension(output_type.to_str());
@@ -192,6 +229,25 @@ impl Display for AttachmentManager {
             AttachmentManager::Disabled => write!(fmt, "disabled"),
             AttachmentManager::Compatible => write!(fmt, "compatible"),
             AttachmentManager::Efficient => write!(fmt, "efficient"),
+        }
+    }
+}
+
+/// Update the metadata of a copied file, falling back to the original file's metadata if necessary
+fn update_file_metadata(from: &Path, to: &Path, message: &Message, config: &Config) {
+    // Update file metadata
+    if let Ok(metadata) = metadata(from) {
+        // The modification time is the message's date, otherwise the the original file's creation time
+        let mtime = match message.date(&config.offset) {
+            Ok(date) => FileTime::from_unix_time(date.timestamp(), date.timestamp_subsec_nanos()),
+            Err(_) => FileTime::from_last_modification_time(&metadata),
+        };
+
+        // The new last access time comes from the metadata of the original file
+        let atime = FileTime::from_last_access_time(&metadata);
+
+        if let Err(why) = set_file_times(to, atime, mtime) {
+            eprintln!("Unable to update {to:?} metadata: {why}");
         }
     }
 }

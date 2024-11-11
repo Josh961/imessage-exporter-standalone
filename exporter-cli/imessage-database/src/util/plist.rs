@@ -10,7 +10,7 @@ use crate::error::plist::PlistParseError;
 /// that follows the references in the XML document's UID pointers. First, we find the root of the
 /// document, then walk the structure, promoting values to the places where their pointers are stored.
 ///
-/// For example, a document with a root pointing to some XML like
+/// For example, a document with a root pointing to some `XML` like
 ///
 /// ```xml
 /// <array>
@@ -36,9 +36,9 @@ use crate::error::plist::PlistParseError;
 /// Some detail on this format is described [here](https://en.wikipedia.org/wiki/Property_list#Serializing_to_plist):
 ///
 /// > Internally, `NSKeyedArchiver` somewhat recapitulates the binary plist format by
-/// storing an object table array called `$objects` in the dictionary. Everything else,
-/// including class information, is referenced by a UID pointer. A `$top` entry under
-/// the dict points to the top-level object the programmer was meaning to encode.
+/// > storing an object table array called `$objects` in the dictionary. Everything else,
+/// > including class information, is referenced by a UID pointer. A `$top` entry under
+/// > the dict points to the top-level object the programmer was meaning to encode.
 pub fn parse_plist(plist: &Value) -> Result<Value, PlistParseError> {
     let body = plist.as_dictionary().ok_or_else(|| {
         PlistParseError::InvalidType("body".to_string(), "dictionary".to_string())
@@ -160,7 +160,7 @@ pub fn extract_dictionary<'a>(
 }
 
 /// Extract an array from a specific key in a collection
-fn extract_array_key<'a>(
+pub fn extract_array_key<'a>(
     body: &'a Dictionary,
     key: &str,
 ) -> Result<&'a Vec<Value>, PlistParseError> {

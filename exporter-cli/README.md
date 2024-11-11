@@ -1,6 +1,6 @@
 # imessage-exporter
 
-This crate provides both a library to interact with iMessage data as well as a binary that can perform some useful read-only operations using that data.
+This crate provides both a library to interact with iMessage data as well as a binary that can perform some useful read-only operations using that data. The aim of this project is to provide the most comprehensive and accurate representation of iMessage data available.
 
 This software can:
 
@@ -14,7 +14,7 @@ This software can:
 
 ## Example Export
 
-![HTML Export Sample](docs/hero.png)
+![HTML Export Sample](/docs/hero.png)
 
 ## Binary
 
@@ -30,24 +30,26 @@ Documentation for the library is located [here](imessage-database/README.md).
 
 ### Supported Features
 
-This crate supports every iMessage feature as of macOS 14.5 (23F79) and iOS 17.5.1 (21F90):
+This crate supports every iMessage feature as of macOS 15.1 (24B83) and iOS 18.1 (22B83):
 
 - Multi-part messages
 - Replies/Threads
+- Formatted text
 - Attachments
 - Expressives
-- Reactions
+- Tapbacks
 - Stickers
 - Apple Pay
 - URL Previews
 - App Integrations
 - Edited messages
+- Handwritten messages
 
 See more detail about supported features [here](docs/features.md).
 
 ## Frequently Asked Questions
 
-The FAQ document is located [here](docs/faq.md).
+The FAQ document is located [here](/docs/faq.md).
 
 ## Special Thanks
 

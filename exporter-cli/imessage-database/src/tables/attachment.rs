@@ -125,13 +125,14 @@ impl Attachment {
     pub fn mime_type(&'_ self) -> MediaType<'_> {
         match &self.mime_type {
             Some(mime) => {
-                if let Some(mime_str) = mime.split('/').next() {
-                    match mime_str {
-                        "image" => MediaType::Image(mime),
-                        "video" => MediaType::Video(mime),
-                        "audio" => MediaType::Audio(mime),
-                        "text" => MediaType::Text(mime),
-                        "application" => MediaType::Application(mime),
+                let mut mime_parts = mime.split('/');
+                if let (Some(category), Some(subtype)) = (mime_parts.next(), mime_parts.next()) {
+                    match category {
+                        "image" => MediaType::Image(subtype),
+                        "video" => MediaType::Video(subtype),
+                        "audio" => MediaType::Audio(subtype),
+                        "text" => MediaType::Text(subtype),
+                        "application" => MediaType::Application(subtype),
                         _ => MediaType::Other(mime),
                     }
                 } else {
@@ -155,6 +156,9 @@ impl Attachment {
     }
 
     /// Read the attachment from the disk into a vector of bytes in memory
+    ///
+    /// `db_path` is the path to the root of the backup directory.
+    /// This is the same path used by [`get_connection()`](crate::tables::table::get_connection).
     pub fn as_bytes(
         &self,
         platform: &Platform,
@@ -176,6 +180,9 @@ impl Attachment {
     }
 
     /// Determine the [`StickerEffect`] of a sticker message
+    ///
+    /// `db_path` is the path to the root of the backup directory.
+    /// This is the same path used by [`get_connection()`](crate::tables::table::get_connection).
     pub fn get_sticker_effect(
         &self,
         platform: &Platform,
@@ -204,7 +211,7 @@ impl Attachment {
         }
     }
 
-    /// Get the extension of an attachment, if it exists
+    /// Get the file name extension of an attachment, if it exists
     pub fn extension(&self) -> Option<&str> {
         match self.path() {
             Some(path) => match path.extension() {
@@ -216,6 +223,8 @@ impl Attachment {
     }
 
     /// Get a reasonable filename for an attachment
+    ///
+    /// If the [`transfer_name`](Self::transfer_name) field is populated, use that. If it is not present, fall back to the `filename` field.
     pub fn filename(&self) -> &str {
         if let Some(transfer_name) = &self.transfer_name {
             return transfer_name;
@@ -270,11 +279,14 @@ impl Attachment {
     /// Given a platform and database source, resolve the path for the current attachment
     ///
     /// For macOS, `db_path` is unused. For iOS, `db_path` is the path to the root of the backup directory.
+    /// This is the same path used by [`get_connection()`](crate::tables::table::get_connection).
     ///
-    /// iOS Parsing logic source is from [here](https://github.com/nprezant/iMessageBackup/blob/940d001fb7be557d5d57504eb26b3489e88de26e/imessage_backup_tools.py#L83-L85).
+    /// On iOS, file names are derived from SHA-1 hash of: `MediaDomain-` concatenated with the relative [`self.filename()`](Self::filename)
+    /// Between the domain and the path there is a dash. Read more [here](https://theapplewiki.com/index.php?title=ITunes_Backup).
     ///
-    /// Use the optional `custom_attachment_root` parameter when the attachments are not stored in the same place as the database expects. The expected location is [`DEFAULT_ATTACHMENT_ROOT`].
-    /// A custom attachment root like `/custom/path` will overwrite a path like `~/Library/Messages/Attachments/3d/...` to `/custom/path/3d...`
+    /// Use the optional `custom_attachment_root` parameter when the attachments are not stored in
+    /// the same place as the database expects.The expected location is [`DEFAULT_ATTACHMENT_ROOT`].
+    /// A custom attachment root like `/custom/path` will overwrite a path like `~/Library/Messages/Attachments/3d/...` to `/custom/path/3d/...`
     pub fn resolved_attachment_path(
         &self,
         platform: &Platform,
@@ -315,6 +327,9 @@ impl Attachment {
     /// let conn = get_connection(&db_path).unwrap();
     /// Attachment::run_diagnostic(&conn, &db_path, &Platform::macOS);
     /// ```
+    ///
+    /// `db_path` is the path to the root of the backup directory.
+    /// This is the same path used by [`get_connection()`](crate::tables::table::get_connection).
     pub fn run_diagnostic(
         db: &Connection,
         db_path: &Path,
@@ -434,7 +449,7 @@ mod tests {
             rowid: 1,
             filename: Some("a/b/c.png".to_string()),
             uti: Some("public.png".to_string()),
-            mime_type: Some("image".to_string()),
+            mime_type: Some("image/png".to_string()),
             transfer_name: Some("c.png".to_string()),
             total_bytes: 100,
             is_sticker: false,
@@ -470,16 +485,23 @@ mod tests {
     }
 
     #[test]
-    fn can_get_mime_type() {
+    fn can_get_mime_type_png() {
         let attachment = sample_attachment();
-        assert_eq!(attachment.mime_type(), MediaType::Image("image"));
+        assert_eq!(attachment.mime_type(), MediaType::Image("png"));
+    }
+
+    #[test]
+    fn can_get_mime_type_heic() {
+        let mut attachment = sample_attachment();
+        attachment.mime_type = Some("image/heic".to_string());
+        assert_eq!(attachment.mime_type(), MediaType::Image("heic"));
     }
 
     #[test]
     fn can_get_mime_type_fake() {
         let mut attachment = sample_attachment();
-        attachment.mime_type = Some("bloop".to_string());
-        assert_eq!(attachment.mime_type(), MediaType::Other("bloop"));
+        attachment.mime_type = Some("fake/bloop".to_string());
+        assert_eq!(attachment.mime_type(), MediaType::Other("fake/bloop"));
     }
 
     #[test]

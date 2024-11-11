@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::path::PathBuf;
 
 use clap::{crate_version, Arg, ArgAction, ArgMatches, Command};
 
@@ -32,8 +32,6 @@ pub const OPTION_CUSTOM_NAME: &str = "custom-name";
 pub const OPTION_PLATFORM: &str = "platform";
 pub const OPTION_BYPASS_FREE_SPACE_CHECK: &str = "ignore-disk-warning";
 pub const OPTION_USE_CALLER_ID: &str = "use-caller-id";
-pub const OPTION_PHONE_NUMBERS: &str = "phone-numbers";
-pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
 
 // Other CLI Text
 pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
@@ -71,12 +69,6 @@ pub struct Options {
     pub platform: Platform,
     /// If true, disable the free disk space check
     pub ignore_disk_space: bool,
-    /// Only export messages for these phone numbers
-    pub individual_numbers: Option<Vec<String>>,
-    /// Only export messages for these group chats
-    pub group_numbers: Option<Vec<HashSet<String>>>,
-    /// If true, list all phone numbers and group chats
-    pub list_contacts: bool,
 }
 
 impl Options {
@@ -94,7 +86,6 @@ impl Options {
         let use_caller_id = args.get_flag(OPTION_USE_CALLER_ID);
         let platform_type: Option<&String> = args.get_one(OPTION_PLATFORM);
         let ignore_disk_space = args.get_flag(OPTION_BYPASS_FREE_SPACE_CHECK);
-        let list_contacts = args.get_flag(OPTION_LIST_CONTACTS);
 
         // Build the export type
         let export_type: Option<ExportType> = match export_file_type {
@@ -237,30 +228,6 @@ impl Options {
         // Validate the provided export path
         let export_path = validate_path(user_export_path, &export_type.as_ref())?;
 
-        // Parse phone numbers
-        let phone_numbers: Vec<String> = args
-            .get_many::<String>(OPTION_PHONE_NUMBERS)
-            .map(|values| values.cloned().collect())
-            .unwrap_or_default();
-
-        let (individual_numbers, group_numbers) = parse_phone_numbers(phone_numbers)?;
-
-        let list_contacts = match list_contacts {
-            true => true,
-            false => false,
-        };
-
-        // Add checks to ensure list_contacts is not used with incompatible options
-        if list_contacts
-            && (export_file_type.is_some()
-                || individual_numbers.is_some()
-                || group_numbers.is_some())
-        {
-            return Err(RuntimeError::InvalidOptions(
-                format!("Option {OPTION_LIST_CONTACTS} cannot be used with export type or phone numbers filtering")
-            ));
-        }
-
         Ok(Options {
             db_path,
             attachment_root: attachment_root.cloned(),
@@ -274,9 +241,6 @@ impl Options {
             use_caller_id,
             platform,
             ignore_disk_space,
-            individual_numbers,
-            group_numbers,
-            list_contacts,
         })
     }
 
@@ -287,61 +251,6 @@ impl Options {
             Platform::macOS => self.db_path.clone(),
         }
     }
-}
-
-/// Parse phone numbers into individual and group sets
-fn parse_phone_numbers(
-    phone_numbers: Vec<String>,
-) -> Result<(Option<Vec<String>>, Option<Vec<HashSet<String>>>), RuntimeError> {
-    if !phone_numbers.is_empty() {
-        let mut individual = Vec::new();
-        let mut groups = Vec::new();
-
-        for number_set in phone_numbers {
-            if number_set.contains(',') {
-                // This is a group
-                let group: HashSet<String> = number_set
-                    .split(',')
-                    .map(|s| normalize_phone_number(s.trim()))
-                    .collect();
-                if group.len() > 1 {
-                    groups.push(group);
-                }
-            } else {
-                // This is an individual number
-                individual.push(normalize_phone_number(number_set.trim()));
-            }
-        }
-
-        let individual_option = if !individual.is_empty() {
-            Some(individual)
-        } else {
-            None
-        };
-        let groups_option = if !groups.is_empty() {
-            Some(groups)
-        } else {
-            None
-        };
-
-        Ok((individual_option, groups_option))
-    } else {
-        Ok((None, None))
-    }
-}
-
-pub fn normalize_phone_number(number: &str) -> String {
-    number
-        .chars()
-        .filter(|c| c.is_digit(10))
-        .collect::<String>()
-        .chars()
-        .rev()
-        .take(10)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect()
 }
 
 /// Ensure export path is empty or does not contain files of the existing export type
@@ -418,7 +327,7 @@ fn get_command() -> Command {
             Arg::new(OPTION_ATTACHMENT_MANAGER)
             .short('c')
             .long(OPTION_ATTACHMENT_MANAGER)
-            .help(format!("Specify an optional method to use when copying message attachments\nCompatible will convert HEIC files to JPEG\nEfficient will copy files without converting anything\nIf omitted, the default is `{}`\n", AttachmentManager::default()))
+            .help(format!("Specify an optional method to use when copying message attachments\nCompatible will convert HEIC files to JPEG\nEfficient will copy files without converting anything\nIf omitted, the default is `{}`\nImageMagick is required to convert images on non-macOS platforms.\n", AttachmentManager::default()))
             .display_order(2)
             .value_name(SUPPORTED_ATTACHMENT_MANAGER_MODES),
         )
@@ -501,25 +410,6 @@ fn get_command() -> Command {
                 .action(ArgAction::SetTrue)
                 .display_order(12)
         )
-        .arg(
-            Arg::new(OPTION_PHONE_NUMBERS)
-                .short('n')
-                .long(OPTION_PHONE_NUMBERS)
-                .help("Export messages for these phone numbers only. For group chats, provide all numbers separated by commas.")
-                .value_name("PHONE_NUMBERS")
-                .num_args(1..)
-                .action(ArgAction::Append)
-                .display_order(13)
-        )
-        .arg(
-            Arg::new(OPTION_LIST_CONTACTS)
-                .short('t')
-                .long(OPTION_LIST_CONTACTS)
-                .help("List all phone numbers and group chats with at least 20 messages in the database\n")
-                .action(ArgAction::SetTrue)
-                .conflicts_with_all(&[OPTION_EXPORT_TYPE, OPTION_PHONE_NUMBERS])
-                .display_order(14)
-        )
 }
 
 /// Parse arguments from the command line
@@ -565,9 +455,6 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
-            individual_numbers: None,
-            group_numbers: None,
-            list_contacts: false,
         };
 
         assert_eq!(actual, expected);
@@ -679,9 +566,6 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
-            individual_numbers: None,
-            group_numbers: None,
-            list_contacts: false,
         };
 
         assert_eq!(actual, expected);
@@ -714,9 +598,6 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
-            individual_numbers: None,
-            group_numbers: None,
-            list_contacts: false,
         };
 
         assert_eq!(actual, expected);
@@ -837,9 +718,6 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
-            individual_numbers: None,
-            group_numbers: None,
-            list_contacts: false,
         };
 
         assert_eq!(actual, expected);
@@ -869,9 +747,6 @@ mod arg_tests {
             use_caller_id: true,
             platform: Platform::default(),
             ignore_disk_space: false,
-            individual_numbers: None,
-            group_numbers: None,
-            list_contacts: false,
         };
 
         assert_eq!(actual, expected);

@@ -3,6 +3,7 @@
 */
 
 pub mod attachment;
+pub mod handwriting;
 pub mod message;
 pub mod plist;
 pub mod query_context;

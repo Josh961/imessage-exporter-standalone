@@ -1,5 +1,7 @@
 /*!
- Contains logic to parse text from `attributedBody`'s `typedstream` data. This module contains legacy simple `typedstream` parser.
+ The legacy/fallback simple `typedstream` parser.
+
+ Contains logic to parse text from `attributedBody`'s `typedstream` data.
 
  It is called `streamtyped` because that is the header string contained in the data.
 */

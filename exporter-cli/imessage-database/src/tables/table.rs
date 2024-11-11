@@ -10,7 +10,7 @@ use crate::error::table::TableError;
 
 /// Defines behavior for SQL Table data
 pub trait Table {
-    /// Serializes a single row of data to an instance of the struct that implements this Trait
+    /// Deserializes a single row of data into an instance of the struct that implements this Trait
     fn from_row(row: &Row) -> Result<Self>
     where
         Self: Sized;

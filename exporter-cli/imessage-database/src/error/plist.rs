@@ -2,9 +2,9 @@
  Errors that can happen when parsing plist data.
 */
 
-use std::fmt::{Display, Formatter, Result};
-
+use crate::error::handwriting::HandwritingError;
 use crate::error::streamtyped::StreamTypedError;
+use std::fmt::{Display, Formatter, Result};
 
 /// Errors that can happen when parsing the plist data stored in the `payload_data` field
 #[derive(Debug)]
@@ -18,6 +18,7 @@ pub enum PlistParseError {
     WrongMessageType,
     InvalidEditedMessage(String),
     StreamTypedError(StreamTypedError),
+    HandwritingError(HandwritingError),
 }
 
 impl Display for PlistParseError {
@@ -46,6 +47,7 @@ impl Display for PlistParseError {
                 write!(fmt, "Unable to parse message from binary data: {message}")
             }
             PlistParseError::StreamTypedError(why) => write!(fmt, "{why}"),
+            PlistParseError::HandwritingError(why) => write!(fmt, "{why}"),
         }
     }
 }

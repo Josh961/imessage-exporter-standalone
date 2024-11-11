@@ -3,7 +3,7 @@
 */
 
 use rusqlite::{Connection, Error, Result, Row, Statement};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use crate::{
     error::table::TableError,
@@ -96,14 +96,21 @@ impl Deduplicate for Handle {
     /// Given the initial set of duplicated handles, deduplicate them
     ///
     /// This returns a new hashmap that maps the real handle ID to a new deduplicated unique handle ID
-    /// that represents a single handle for all of the deduplicate handles
+    /// that represents a single handle for all of the deduplicate handles.
+    ///
+    /// Assuming no new handles have been written to the database, deduplicated data is deterministic across runs.
     fn dedupe(duplicated_data: &HashMap<i32, Self::T>) -> HashMap<i32, i32> {
         let mut deduplicated_participants: HashMap<i32, i32> = HashMap::new();
         let mut participant_to_unique_participant_id: HashMap<Self::T, i32> = HashMap::new();
 
         // Build cache of each unique set of participants to a new identifier:
         let mut unique_participant_identifier = 0;
-        for (participant_id, participant) in duplicated_data {
+
+        // Iterate over the values in a deterministic order
+        let mut sorted_dupes: Vec<(&i32, &Self::T)> = duplicated_data.iter().collect();
+        sorted_dupes.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        for (participant_id, participant) in sorted_dupes {
             if let Some(id) = participant_to_unique_participant_id.get(participant) {
                 deduplicated_participants.insert(participant_id.to_owned(), id.to_owned());
             } else {
@@ -175,7 +182,7 @@ impl Handle {
     /// that represents all of the copies, so any handle ID will always map to the same string
     /// for a given chat participant
     fn get_person_id_map(db: &Connection) -> Result<HashMap<i32, String>, TableError> {
-        let mut person_to_id: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut person_to_id: HashMap<String, BTreeSet<String>> = HashMap::new();
         let mut row_to_id: HashMap<i32, String> = HashMap::new();
         let mut row_data: Vec<(String, i32, String)> = vec![];
 
@@ -215,7 +222,7 @@ impl Handle {
                 if let Some(set) = person_to_id.get_mut(person_centric_id) {
                     set.insert(id.to_owned());
                 } else {
-                    let mut set = HashSet::new();
+                    let mut set = BTreeSet::new();
                     set.insert(id.to_owned());
                     person_to_id.insert(person_centric_id.to_owned(), set);
                 }
@@ -234,51 +241,6 @@ impl Handle {
 
         Ok(row_to_id)
     }
-
-    pub fn get_message_counts(
-        db: &Connection,
-    ) -> Result<(HashMap<i32, (i32, i64)>, HashMap<i32, (i32, i64)>), TableError> {
-        // Get individual contact message counts and latest message date
-        let mut stmt = db
-            .prepare(
-                "
-            SELECT handle_id, COUNT(*) as message_count, MAX(date) as latest_date
-            FROM message
-            WHERE handle_id IS NOT NULL
-            GROUP BY handle_id
-            HAVING message_count >= 20
-        ",
-            )
-            .map_err(TableError::Handle)?;
-
-        let contact_message_counts = stmt
-            .query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))
-            .map_err(TableError::Handle)?
-            .collect::<Result<HashMap<_, _>, _>>()
-            .map_err(TableError::Handle)?;
-
-        // Get group chat message counts and latest message date
-        let mut stmt = db
-            .prepare(
-                "
-            SELECT chat_id, COUNT(*) as message_count, MAX(message.date) as latest_date
-            FROM message
-            JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-            WHERE chat_id IS NOT NULL
-            GROUP BY chat_id
-            HAVING message_count >= 20
-        ",
-            )
-            .map_err(TableError::Handle)?;
-
-        let group_message_counts = stmt
-            .query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))
-            .map_err(TableError::Handle)?
-            .collect::<Result<HashMap<_, _>, _>>()
-            .map_err(TableError::Handle)?;
-
-        Ok((contact_message_counts, group_message_counts))
-    }
 }
 
 #[cfg(test)]
@@ -289,15 +251,61 @@ mod tests {
     #[test]
     fn test_can_dedupe() {
         let mut input: HashMap<i32, String> = HashMap::new();
-        input.insert(1, String::from("A"));
-        input.insert(2, String::from("A"));
-        input.insert(3, String::from("A"));
-        input.insert(4, String::from("B"));
-        input.insert(5, String::from("B"));
-        input.insert(6, String::from("C"));
+        input.insert(1, String::from("A")); // 0
+        input.insert(2, String::from("A")); // 0
+        input.insert(3, String::from("A")); // 0
+        input.insert(4, String::from("B")); // 1
+        input.insert(5, String::from("B")); // 1
+        input.insert(6, String::from("C")); // 2
 
         let output = Handle::dedupe(&input);
         let expected_deduped_ids: HashSet<i32> = output.values().copied().collect();
         assert_eq!(expected_deduped_ids.len(), 3);
+    }
+
+    #[test]
+    // Simulate 3 runs of the program and ensure that the order of the deduplicated contacts is stable
+    fn test_same_values() {
+        let mut input_1: HashMap<i32, String> = HashMap::new();
+        input_1.insert(1, String::from("A"));
+        input_1.insert(2, String::from("A"));
+        input_1.insert(3, String::from("A"));
+        input_1.insert(4, String::from("B"));
+        input_1.insert(5, String::from("B"));
+        input_1.insert(6, String::from("C"));
+
+        let mut input_2: HashMap<i32, String> = HashMap::new();
+        input_2.insert(1, String::from("A"));
+        input_2.insert(2, String::from("A"));
+        input_2.insert(3, String::from("A"));
+        input_2.insert(4, String::from("B"));
+        input_2.insert(5, String::from("B"));
+        input_2.insert(6, String::from("C"));
+
+        let mut input_3: HashMap<i32, String> = HashMap::new();
+        input_3.insert(1, String::from("A"));
+        input_3.insert(2, String::from("A"));
+        input_3.insert(3, String::from("A"));
+        input_3.insert(4, String::from("B"));
+        input_3.insert(5, String::from("B"));
+        input_3.insert(6, String::from("C"));
+
+        let mut output_1 = Handle::dedupe(&input_1)
+            .into_iter()
+            .collect::<Vec<(i32, i32)>>();
+        let mut output_2 = Handle::dedupe(&input_2)
+            .into_iter()
+            .collect::<Vec<(i32, i32)>>();
+        let mut output_3 = Handle::dedupe(&input_3)
+            .into_iter()
+            .collect::<Vec<(i32, i32)>>();
+
+        output_1.sort();
+        output_2.sort();
+        output_3.sort();
+
+        assert_eq!(output_1, output_2);
+        assert_eq!(output_1, output_3);
+        assert_eq!(output_2, output_3);
     }
 }

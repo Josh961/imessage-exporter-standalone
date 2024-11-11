@@ -24,7 +24,7 @@ pub fn get_offset() -> i64 {
 /// Create a `DateTime<Local>` from an arbitrary date and offset
 ///
 /// This is used to create date data for anywhere dates are stored in the table, including
-/// `PLIST` payloads or [`streamtyped`](crate::util::streamtyped) data.
+/// `PLIST` payloads or [`typedstream`](crate::util::typedstream) data.
 pub fn get_local_time(date_stamp: &i64, offset: &i64) -> Result<DateTime<Local>, MessageError> {
     let utc_stamp = DateTime::from_timestamp((date_stamp / TIMESTAMP_FACTOR) + offset, 0)
         .ok_or(MessageError::InvalidTimestamp(*date_stamp))?
@@ -58,9 +58,9 @@ pub fn format(date: &Result<DateTime<Local>, MessageError>) -> String {
 /// use chrono::prelude::*;
 /// use imessage_database::util::dates::readable_diff;
 ///
-/// let start = Ok(Local.ymd(2020, 5, 20).and_hms_milli(9, 10, 11, 12));
-/// let end = Ok(Local.ymd(2020, 5, 20).and_hms_milli(9, 15, 11, 12));
-/// println!("{}", readable_diff(start, end).unwrap())
+/// let start = Ok(Local.with_ymd_and_hms(2020, 5, 20, 9, 10, 11).unwrap());
+/// let end = Ok(Local.with_ymd_and_hms(2020, 5, 20, 9, 15, 13).unwrap());
+/// println!("{}", readable_diff(start, end).unwrap()) // "5 minutes, 2 seconds"
 /// ```
 pub fn readable_diff(
     start: Result<DateTime<Local>, MessageError>,

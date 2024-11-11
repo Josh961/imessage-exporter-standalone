@@ -4,16 +4,14 @@
 
 use std::fmt::{Display, Formatter, Result};
 
-use rusqlite::Error;
-
 /// Errors that can happen when extracting data from a `SQLite` table
 #[derive(Debug)]
 pub enum TableError {
-    Attachment(Error),
-    ChatToHandle(Error),
-    Chat(Error),
-    Handle(Error),
-    Messages(Error),
+    Attachment(rusqlite::Error),
+    ChatToHandle(rusqlite::Error),
+    Chat(rusqlite::Error),
+    Handle(rusqlite::Error),
+    Messages(rusqlite::Error),
     CannotConnect(String),
     CannotRead(std::io::Error),
 }

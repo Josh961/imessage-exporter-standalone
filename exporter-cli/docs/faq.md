@@ -6,9 +6,27 @@ Ensure your terminal emulator has [full disk access](https://kb.synology.com/en-
 
 ***
 
+#### Are emojis,tapbacks (reactions), and other special message features preserved in the export?
+
+Yes, all iMessage features are supported. See [here](features.md) for more detail.
+
+***
+
+#### Can it export messages from third-party apps that integrate with iMessage?
+
+Yes. See [here](features.md) for more detail on supported features.
+
+***
+
 #### Does `imessage-exporter` export message conversations that are on a user's iPhone/iPad but not on the user's Mac?
 
-No, `imessage-exporter` only reads data present on the host system.
+`imessage-exporter` only reads data present in the provided source, which can be either macOS's `chat.db` or an unencrypted iOS backup file.
+
+***
+
+#### Can it export group conversations as well as individual chats?
+
+Yes.
 
 ***
 
@@ -38,6 +56,14 @@ I don't pre-build binaries for Windows or Linux, but it should compile to those 
 
 ***
 
+#### Can it export messages between a specific date range?
+
+Yes, the `--start-date` and `--end-date` arguments specify date ranges for exports.
+
+See [here](../imessage-exporter/README.md#how-to-use) for details on `imessage-exporter` arguments.
+
+***
+
 #### Are voice messages be saved?
 
 Expired ones cannot because they are deleted. If you kept them then they are included in the exports.
@@ -52,6 +78,8 @@ Messages removed by deleting an entire conversation or by deleting a single mess
 
 Messages that have expired from this restoration process are permanently deleted and cannot be recovered.
 
+In some instances, deleted messages are removed from the `chat_message_join` table but not from the `messages` table. These messages will populate in `Orphaned.html` or `Orphaned.txt`.
+
 ***
 
 #### How fast is `imessage-exporter`?
@@ -62,9 +90,9 @@ On my M1 Max MacBook Pro, approximate performance is as follows:
 
 | `--copy-method` | Messages exported per second |
 |---|---|
-| `disabled` | 32,845 |
-| `efficient` | 20,876 |
-| `compatible` | < 300 |
+| `disabled` | 42,853 |
+| `efficient` | 30,346 |
+| `compatible` | < 100 |
 
 For more information on `--copy-method`, see [here](../imessage-exporter/README.md#how-to-use) and [here](./features.md#supported-message-features).
 

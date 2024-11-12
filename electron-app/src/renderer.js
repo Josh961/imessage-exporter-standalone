@@ -244,7 +244,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const result = await window.electronAPI.listContacts(elements.inputFolder.value);
     if (result.success) {
-      contacts = result.contacts.filter(x => x.contact);
+      contacts = result.contacts.filter(x => x.contact && x.messageCount >= 20);
       if (contacts.length === 0) {
         alert('No contacts found in the selected folder. Please check that the iMessage backup folder is correct.');
         return;

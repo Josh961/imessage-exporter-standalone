@@ -1625,6 +1625,7 @@ mod tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
+            list_contacts: false,
         }
     }
 

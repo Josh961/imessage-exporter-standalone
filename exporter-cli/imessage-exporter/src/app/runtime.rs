@@ -327,6 +327,8 @@ impl Config {
     pub fn start(&self) -> Result<(), RuntimeError> {
         if self.options.diagnostic {
             self.run_diagnostic().map_err(RuntimeError::DatabaseError)?;
+        } else if self.options.list_contacts {
+            self.list_contacts()?;
         } else if let Some(export_type) = &self.options.export_type {
             // Ensure the path we want to export to exists
             create_dir_all(&self.options.export_path).map_err(RuntimeError::DiskError)?;
@@ -378,6 +380,117 @@ impl Config {
         }
         UNKNOWN
     }
+
+    pub fn list_contacts(&self) -> Result<(), RuntimeError> {
+        println!("Listing all unique contacts and group chats:");
+        let mut unique_contacts: HashMap<i32, (String, i32, i64)> = HashMap::new();
+        let mut group_chats: Vec<(String, Vec<String>, i32, i64)> = Vec::new();
+        // Get all messages for real (deduplicated) participants
+        for (handle_id, real_id) in &self.real_participants {
+            let mut stmt = self
+                .db
+                .prepare(
+                    "SELECT COUNT(*) as count, MAX(date) as latest
+                     FROM message m
+                     LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+                     LEFT JOIN handle h ON m.handle_id = h.ROWID
+                     WHERE (h.ROWID = ? OR h.person_centric_id = (
+                         SELECT person_centric_id FROM handle WHERE ROWID = ?
+                     ))
+                     AND (
+                         cmj.chat_id IS NULL OR
+                         cmj.chat_id NOT IN (
+                             SELECT chat_id
+                             FROM chat_handle_join
+                             GROUP BY chat_id
+                             HAVING COUNT(*) > 1
+                         )
+                     )",
+                )
+                .map_err(|e| RuntimeError::DatabaseError(TableError::Messages(e)))?;
+            if let Ok(row) = stmt.query_row([handle_id, handle_id], |row| {
+                Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?))
+            }) {
+                let (count, latest) = row;
+                if count > 0 {
+                    if let Some(contact) = self.participants.get(handle_id) {
+                        unique_contacts
+                            .entry(*real_id)
+                            .and_modify(|e| {
+                                e.1 += count;
+                                if latest > e.2 {
+                                    e.2 = latest;
+                                }
+                            })
+                            .or_insert((contact.clone(), count, latest));
+                    }
+                }
+            }
+        }
+        // Process group chats using real (deduplicated) chatrooms
+        for (chat_id, _) in &self.real_chatrooms {
+            if let Some(participants) = self.chatroom_participants.get(chat_id) {
+                if participants.len() > 1 {
+                    if let Some(chat) = self.chatrooms.get(chat_id) {
+                        let chat_name = chat.display_name().unwrap_or("Unnamed Group Chat");
+                        let participant_names: Vec<String> = participants
+                            .iter()
+                            .filter_map(|&id| self.participants.get(&id))
+                            .cloned()
+                            .collect();
+                        let mut stmt = self
+                            .db
+                            .prepare(
+                                "SELECT COUNT(*) as count, MAX(date) as latest FROM message
+                                 JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
+                                 WHERE chat_id = ?"
+                            )
+                            .map_err(|e| RuntimeError::DatabaseError(TableError::Messages(e)))?;
+                        if let Ok(row) = stmt.query_row([chat_id], |row| {
+                            Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?))
+                        }) {
+                            let (count, latest) = row;
+                            if count > 0 {
+                                group_chats.push((
+                                    chat_name.to_string(),
+                                    participant_names,
+                                    count,
+                                    latest,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("Total DMs: {}", unique_contacts.len());
+        println!("Total Group Chats: {}", group_chats.len());
+        println!("Total Chats: {}", unique_contacts.len() + group_chats.len());
+
+        // Print results
+        let mut unique_contacts: Vec<_> = unique_contacts.values().collect();
+        unique_contacts.sort_by(|a, b| b.2.cmp(&a.2));
+        for (contact, count, date) in unique_contacts {
+            println!(
+                "CONTACT|{}|{}|{}",
+                contact,
+                count,
+                chrono::NaiveDateTime::from_timestamp(date / 1_000_000_000 + self.offset, 0)
+            );
+        }
+        group_chats.sort_by(|a, b| b.3.cmp(&a.3));
+        for (chat_name, participants, count, date) in group_chats {
+            println!(
+                "GROUP|{}|{}|{}|{}",
+                chat_name,
+                count,
+                chrono::NaiveDateTime::from_timestamp(date / 1_000_000_000 + self.offset, 0),
+                participants.join(",")
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -409,6 +522,7 @@ mod filename_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
+            list_contacts: false,
         }
     }
 
@@ -640,6 +754,7 @@ mod who_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
+            list_contacts: false,
         }
     }
 
@@ -894,6 +1009,7 @@ mod directory_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
+            list_contacts: false,
         }
     }
 

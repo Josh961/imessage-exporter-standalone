@@ -6,7 +6,7 @@ Ensure your terminal emulator has [full disk access](https://kb.synology.com/en-
 
 ***
 
-#### Are emojis,tapbacks (reactions), and other special message features preserved in the export?
+#### Are emojis, reactions, and other special message features preserved in the export?
 
 Yes, all iMessage features are supported. See [here](features.md) for more detail.
 
@@ -77,8 +77,6 @@ This software can recover some, but not all, deleted messages.
 Messages removed by deleting an entire conversation or by deleting a single message from a conversation are moved to a separate collection for up to 30 days. Messages present in this collection are restored to the conversations they belong to. Apple details this process [here](https://support.apple.com/en-us/HT202549#delete).
 
 Messages that have expired from this restoration process are permanently deleted and cannot be recovered.
-
-In some instances, deleted messages are removed from the `chat_message_join` table but not from the `messages` table. These messages will populate in `Orphaned.html` or `Orphaned.txt`.
 
 ***
 

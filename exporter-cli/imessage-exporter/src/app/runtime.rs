@@ -45,8 +45,8 @@ pub struct Config {
     pub participants: HashMap<i32, String>,
     /// Map of participant ID to an internal unique participant ID
     pub real_participants: HashMap<i32, i32>,
-    /// Messages that are tapbacks (reactions) to other messages
-    pub tapbacks: HashMap<String, HashMap<usize, Vec<Message>>>,
+    /// Messages that are reactions to other messages
+    pub reactions: HashMap<String, HashMap<usize, Vec<Message>>>,
     /// App configuration options
     pub options: Options,
     /// Global date offset used by the iMessage database:
@@ -210,8 +210,8 @@ impl Config {
             ChatToHandle::cache(&conn).map_err(RuntimeError::DatabaseError)?;
         eprintln!("[3/4] Caching participants...");
         let participants = Handle::cache(&conn).map_err(RuntimeError::DatabaseError)?;
-        eprintln!("[4/4] Caching tapbacks...");
-        let tapbacks = Message::cache(&conn).map_err(RuntimeError::DatabaseError)?;
+        eprintln!("[4/4] Caching reactions...");
+        let reactions = Message::cache(&conn).map_err(RuntimeError::DatabaseError)?;
         eprintln!("Cache built!");
 
         // Only attempt to create a converter if we need it
@@ -227,7 +227,7 @@ impl Config {
             chatroom_participants,
             real_participants: Handle::dedupe(&participants),
             participants,
-            tapbacks,
+            reactions,
             options,
             offset: get_offset(),
             db: conn,
@@ -327,8 +327,6 @@ impl Config {
     pub fn start(&self) -> Result<(), RuntimeError> {
         if self.options.diagnostic {
             self.run_diagnostic().map_err(RuntimeError::DatabaseError)?;
-        } else if self.options.list_contacts {
-            self.list_contacts()?;
         } else if let Some(export_type) = &self.options.export_type {
             // Ensure the path we want to export to exists
             create_dir_all(&self.options.export_path).map_err(RuntimeError::DiskError)?;
@@ -380,173 +378,6 @@ impl Config {
         }
         UNKNOWN
     }
-
-    pub fn list_contacts(&self) -> Result<(), RuntimeError> {
-        println!("Listing all unique contacts and group chats:");
-
-        let mut unique_contacts: HashMap<i32, (String, i32, i64)> = HashMap::new();
-        let mut group_chats: Vec<(String, Vec<String>, i32, i64)> = Vec::new();
-
-        // Get all messages for real (deduplicated) participants
-        for (handle_id, real_id) in &self.real_participants {
-            let mut stmt = self
-                .db
-                .prepare(
-                    "SELECT COUNT(*) as count, MAX(date) as latest
-                     FROM message m
-                     LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
-                     LEFT JOIN handle h ON m.handle_id = h.ROWID
-                     WHERE (h.ROWID = ? OR h.person_centric_id = (
-                         SELECT person_centric_id FROM handle WHERE ROWID = ?
-                     ))
-                     AND (
-                         cmj.chat_id IS NULL OR
-                         cmj.chat_id NOT IN (
-                             SELECT chat_id
-                             FROM chat_handle_join
-                             GROUP BY chat_id
-                             HAVING COUNT(*) > 1
-                         )
-                     )",
-                )
-                .map_err(|e| RuntimeError::DatabaseError(TableError::Messages(e)))?;
-
-            if let Ok(row) = stmt.query_row([handle_id, handle_id], |row| {
-                Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?))
-            }) {
-                let (count, latest) = row;
-                if count > 0 {
-                    if let Some(contact) = self.participants.get(handle_id) {
-                        unique_contacts
-                            .entry(*real_id)
-                            .and_modify(|e| {
-                                e.1 += count;
-                                if latest > e.2 {
-                                    e.2 = latest;
-                                }
-                            })
-                            .or_insert((contact.clone(), count, latest));
-                    }
-                }
-            }
-        }
-
-        // Process group chats using real (deduplicated) chatrooms
-        for (chat_id, _) in &self.real_chatrooms {
-            if let Some(participants) = self.chatroom_participants.get(chat_id) {
-                if participants.len() > 1 {
-                    if let Some(chat) = self.chatrooms.get(chat_id) {
-                        let chat_name = chat.display_name().unwrap_or("Unnamed Group Chat");
-                        let participant_names: Vec<String> = participants
-                            .iter()
-                            .filter_map(|&id| self.participants.get(&id))
-                            .cloned()
-                            .collect();
-
-                        let mut stmt = self
-                            .db
-                            .prepare(
-                                "SELECT COUNT(*) as count, MAX(date) as latest FROM message
-                                 JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-                                 WHERE chat_id = ?"
-                            )
-                            .map_err(|e| RuntimeError::DatabaseError(TableError::Messages(e)))?;
-
-                        if let Ok(row) = stmt.query_row([chat_id], |row| {
-                            Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?))
-                        }) {
-                            let (count, latest) = row;
-                            if count > 0 {
-                                group_chats.push((
-                                    chat_name.to_string(),
-                                    participant_names,
-                                    count,
-                                    latest,
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Print results
-        let mut unique_contacts: Vec<_> = unique_contacts.values().collect();
-        unique_contacts.sort_by(|a, b| b.2.cmp(&a.2));
-
-        for (contact, count, date) in unique_contacts {
-            println!(
-                "CONTACT|{}|{}|{}",
-                contact,
-                count,
-                chrono::NaiveDateTime::from_timestamp(date / 1_000_000_000 + self.offset, 0)
-            );
-        }
-
-        group_chats.sort_by(|a, b| b.3.cmp(&a.3));
-
-        for (chat_name, participants, count, date) in group_chats {
-            println!(
-                "GROUP|{}|{}|{}|{}",
-                chat_name,
-                count,
-                chrono::NaiveDateTime::from_timestamp(date / 1_000_000_000 + self.offset, 0),
-                participants.join(",")
-            );
-        }
-
-        Ok(())
-    }
-
-    pub fn should_export_message(&self, message: &Message) -> bool {
-        // If no phone numbers specified, export all messages
-        if self.options.individual_numbers.is_none() && self.options.group_numbers.is_none() {
-            return true;
-        }
-
-        if let Some((chatroom, _)) = self.conversation(message) {
-            // For group chats, check if any participant matches the phone numbers
-            if let Some(participants) = self.chatroom_participants.get(&chatroom.rowid) {
-                let participant_identifiers: HashSet<String> = participants
-                    .iter()
-                    .filter_map(|&handle_id| self.participants.get(&handle_id))
-                    .map(|identifier| Config::normalize_identifier(identifier))
-                    .collect();
-
-                // For group chats (more than 1 participant)
-                if participants.len() > 1 {
-                    // Only export if we have group filters and this group exactly matches one of them
-                    if let Some(ref group_numbers) = self.options.group_numbers {
-                        return group_numbers.iter().any(|group| {
-                            // Must have same number of participants
-                            group.len() == participant_identifiers.len() &&
-                            // All numbers in our filter must be present
-                            group.iter().all(|n| participant_identifiers.contains(n)) &&
-                            // All participants must be in our filter
-                            participant_identifiers.iter().all(|n| group.contains(n))
-                        });
-                    }
-                    return false;
-                }
-                // For individual chats (1 participant)
-                else if let Some(ref individual_numbers) = self.options.individual_numbers {
-                    return individual_numbers
-                        .iter()
-                        .any(|identifier| participant_identifiers.contains(identifier));
-                }
-            }
-        }
-
-        false
-    }
-
-    fn normalize_identifier(identifier: &str) -> String {
-        if identifier.contains('@') {
-            identifier.to_lowercase()
-        } else {
-            identifier.chars().filter(|c| c.is_ascii_digit()).collect()
-        }
-    }
 }
 
 #[cfg(test)]
@@ -578,9 +409,6 @@ mod filename_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
         }
     }
 
@@ -601,7 +429,7 @@ mod filename_tests {
             chatroom_participants: HashMap::new(),
             participants: HashMap::new(),
             real_participants: HashMap::new(),
-            tapbacks: HashMap::new(),
+            reactions: HashMap::new(),
             options,
             offset: 0,
             db: connection,
@@ -812,9 +640,6 @@ mod who_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
         }
     }
 
@@ -835,7 +660,7 @@ mod who_tests {
             chatroom_participants: HashMap::new(),
             participants: HashMap::new(),
             real_participants: HashMap::new(),
-            tapbacks: HashMap::new(),
+            reactions: HashMap::new(),
             options,
             offset: 0,
             db: connection,
@@ -870,7 +695,6 @@ mod who_tests {
             thread_originator_guid: None,
             thread_originator_part: None,
             date_edited: 0,
-            associated_message_emoji: None,
             chat_id: None,
             num_attachments: 0,
             deleted_from: None,
@@ -1070,9 +894,6 @@ mod directory_tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
         }
     }
 
@@ -1084,7 +905,7 @@ mod directory_tests {
             chatroom_participants: HashMap::new(),
             participants: HashMap::new(),
             real_participants: HashMap::new(),
-            tapbacks: HashMap::new(),
+            reactions: HashMap::new(),
             options,
             offset: 0,
             db: connection,

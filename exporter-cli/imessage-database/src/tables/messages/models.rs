@@ -16,7 +16,7 @@ pub enum BubbleComponent<'a> {
     /// A text message with associated formatting, generally representing ranges present in a `NSAttributedString`
     Text(Vec<TextAttributes<'a>>),
     /// An attachment
-    Attachment(&'a str),
+    Attachment,
     /// An [app integration](crate::message_types::app)
     App,
     /// A component that was retracted, found by parsing the [`EditedMessage`](crate::message_types::edited::EditedMessage)

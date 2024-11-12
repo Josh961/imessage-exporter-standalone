@@ -113,12 +113,6 @@ impl<'a> Exporter<'a> for HTML<'a> {
             }
             current_message_row = msg.rowid;
 
-            // Check if message should be exported based on phone numbers
-            if !self.config.should_export_message(&msg) {
-                current_message += 1;
-                continue;
-            }
-
             // Generate the text of the message
             let _ = msg.generate_text(&self.config.db);
 
@@ -127,8 +121,8 @@ impl<'a> Exporter<'a> for HTML<'a> {
                 let announcement = self.format_announcement(&msg);
                 HTML::write_to_file(self.get_or_create_file(&msg)?, &announcement)?;
             }
-            // Message replies and tapbacks are rendered in context, so no need to render them separately
-            else if !msg.is_tapback() {
+            // Message replies and reactions are rendered in context, so no need to render them separately
+            else if !msg.is_reaction() {
                 let message = self
                     .format_message(&msg, 0)
                     .map_err(RuntimeError::DatabaseError)?;
@@ -384,7 +378,7 @@ impl<'a> Writer<'a> for HTML<'a> {
                         }
                     }
                 }
-                BubbleComponent::Attachment(_) => {
+                BubbleComponent::Attachment => {
                     match attachments.get_mut(attachment_index) {
                         Some(attachment) => {
                             if attachment.is_sticker {
@@ -467,34 +461,34 @@ impl<'a> Writer<'a> for HTML<'a> {
                 );
             }
 
-            // Handle Tapbacks
-            if let Some(tapbacks_map) = self.config.tapbacks.get(&message.guid) {
-                if let Some(tapbacks) = tapbacks_map.get(&idx) {
-                    let mut formatted_tapbacks = String::new();
+            // Handle Reactions
+            if let Some(reactions_map) = self.config.reactions.get(&message.guid) {
+                if let Some(reactions) = reactions_map.get(&idx) {
+                    let mut formatted_reactions = String::new();
 
-                    tapbacks
+                    reactions
                         .iter()
-                        .try_for_each(|tapback| -> Result<(), TableError> {
-                            let formatted = self.format_tapback(tapback)?;
+                        .try_for_each(|reaction| -> Result<(), TableError> {
+                            let formatted = self.format_reaction(reaction)?;
                             if !formatted.is_empty() {
                                 self.add_line(
-                                    &mut formatted_tapbacks,
-                                    &self.format_tapback(tapback)?,
-                                    "<div class=\"tapback\">",
+                                    &mut formatted_reactions,
+                                    &self.format_reaction(reaction)?,
+                                    "<div class=\"reaction\">",
                                     "</div>",
                                 );
                             }
                             Ok(())
                         })?;
 
-                    if !formatted_tapbacks.is_empty() {
+                    if !formatted_reactions.is_empty() {
                         self.add_line(
                             &mut formatted_message,
-                            "<hr><p>Tapbacks:</p>",
-                            "<div class=\"tapbacks\">",
+                            "<hr><p>Reactions:</p>",
+                            "<div class=\"reactions\">",
                             "",
                         );
-                        self.add_line(&mut formatted_message, &formatted_tapbacks, "", "");
+                        self.add_line(&mut formatted_message, &formatted_reactions, "", "");
                     }
                     self.add_line(&mut formatted_message, "</div>", "", "");
                 }
@@ -507,7 +501,7 @@ impl<'a> Writer<'a> for HTML<'a> {
                     .iter_mut()
                     .try_for_each(|reply| -> Result<(), TableError> {
                         let _ = reply.generate_text(&self.config.db);
-                        if !reply.is_tapback() {
+                        if !reply.is_reaction() {
                             // Set indent to 1 so we know this is a recursive call
                             self.add_line(
                                 &mut formatted_message,
@@ -618,22 +612,12 @@ impl<'a> Writer<'a> for HTML<'a> {
         if let Variant::App(balloon) = message.variant() {
             let mut app_bubble = String::new();
 
-            // Handwritten messages use a different payload type, so check that first
-            if message.is_handwriting() {
-                if let Some(payload) = message.raw_payload_data(&self.config.db) {
-                    return match HandwrittenMessage::from_payload(&payload) {
-                        Ok(bubble) => Ok(self.format_handwriting(message, &bubble, message)),
-                        Err(why) => Err(PlistParseError::HandwritingError(why)),
-                    };
-                }
-            }
-
             if let Some(payload) = message.payload_data(&self.config.db) {
                 let res = if message.is_url() {
                     let parsed = parse_plist(&payload)?;
                     let bubble = URLMessage::get_url_message_override(&parsed)?;
                     match bubble {
-                        URLOverride::Normal(balloon) => self.format_url(message, &balloon, message),
+                        URLOverride::Normal(balloon) => self.format_url(&balloon, message),
                         URLOverride::AppleMusic(balloon) => self.format_music(&balloon, message),
                         URLOverride::Collaboration(balloon) => {
                             self.format_collaboration(&balloon, message)
@@ -681,6 +665,14 @@ impl<'a> Writer<'a> for HTML<'a> {
 
                         return Ok(out_s);
                     }
+                } else if message.is_handwriting() {
+                    // Handwritten messages use a different payload type
+                    if let Some(payload) = message.raw_payload_data(&self.config.db) {
+                        return match HandwrittenMessage::from_payload(&payload) {
+                            Ok(bubble) => Ok(self.format_handwriting(&bubble, message)),
+                            Err(why) => Err(PlistParseError::HandwritingError(why)),
+                        };
+                    }
                 }
                 return Err(PlistParseError::NoPayload);
             }
@@ -690,15 +682,15 @@ impl<'a> Writer<'a> for HTML<'a> {
         }
     }
 
-    fn format_tapback(&self, msg: &Message) -> Result<String, TableError> {
+    fn format_reaction(&self, msg: &Message) -> Result<String, TableError> {
         match msg.variant() {
-            Variant::Tapback(_, added, tapback) => {
+            Variant::Reaction(_, added, reaction) => {
                 if !added {
                     return Ok(String::new());
                 }
                 Ok(format!(
-                    "<span class=\"tapback\"><b>{}</b> by {}</span>",
-                    tapback,
+                    "<span class=\"reaction\"><b>{:?}</b> by {}</span>",
+                    reaction,
                     self.config
                         .who(msg.handle_id, msg.is_from_me(), &msg.destination_caller_id),
                 ))
@@ -710,12 +702,9 @@ impl<'a> Writer<'a> for HTML<'a> {
                         .who(msg.handle_id, msg.is_from_me(), &msg.destination_caller_id);
                 // Sticker messages have only one attachment, the sticker image
                 Ok(match paths.get_mut(0) {
-                    Some(sticker) => format!(
-                        "{} <div class=\"sticker_tapback\">&nbsp;by {who}</div>",
-                        self.format_sticker(sticker, msg)
-                    ),
+                    Some(sticker) => self.format_sticker(sticker, msg),
                     None => {
-                        format!("<span class=\"tapback\">Sticker from {who} not found!</span>")
+                        format!("<span class=\"reaction\">Sticker from {who} not found!</span>")
                     }
                 })
             }
@@ -892,7 +881,7 @@ impl<'a> Writer<'a> for HTML<'a> {
 }
 
 impl<'a> BalloonFormatter<&'a Message> for HTML<'a> {
-    fn format_url(&self, msg: &Message, balloon: &URLMessage, _: &Message) -> String {
+    fn format_url(&self, balloon: &URLMessage, message: &Message) -> String {
         let mut out_s = String::new();
 
         // Make the whole bubble clickable
@@ -902,7 +891,7 @@ impl<'a> BalloonFormatter<&'a Message> for HTML<'a> {
             out_s.push_str(url);
             out_s.push_str("\">");
             close_url = true;
-        } else if let Some(text) = &msg.text {
+        } else if let Some(text) = &message.text {
             // Fallback if the balloon data does not contain the URL
             out_s.push_str("<a href=\"");
             out_s.push_str(text);
@@ -932,7 +921,7 @@ impl<'a> BalloonFormatter<&'a Message> for HTML<'a> {
             out_s.push_str("<div class=\"name\">");
             out_s.push_str(url);
             out_s.push_str("</div>");
-        } else if let Some(text) = &msg.text {
+        } else if let Some(text) = &message.text {
             // Fallback if the balloon data does not contain the URL
             out_s.push_str("<div class=\"name\">");
             out_s.push_str(text);
@@ -1219,7 +1208,7 @@ impl<'a> BalloonFormatter<&'a Message> for HTML<'a> {
         out_s
     }
 
-    fn format_handwriting(&self, _: &Message, balloon: &HandwrittenMessage, _: &Message) -> String {
+    fn format_handwriting(&self, balloon: &HandwrittenMessage, _: &Message) -> String {
         // svg can be embedded directly into the html
         balloon.render_svg()
     }
@@ -1386,27 +1375,34 @@ impl<'a> TextEffectFormatter for HTML<'a> {
         format!("<u>{text}</u>")
     }
 
+    // TODO: For iOS 18
     fn format_styles(&self, text: &str, styles: &[Style]) -> String {
-        let (prefix, suffix): (String, String) = styles.iter().rev().fold(
-            (String::new(), String::new()),
-            |(mut prefix, mut suffix), style| {
-                let (open, close) = match style {
-                    Style::Bold => ("<b>", "</b>"),
-                    Style::Italic => ("<i>", "</i>"),
-                    Style::Strikethrough => ("<s>", "</s>"),
-                    Style::Underline => ("<u>", "</u>"),
-                };
-                prefix.push_str(open);
-                suffix.insert_str(0, close);
-                (prefix, suffix)
-            },
-        );
-
+        let mut prefix = String::new();
+        let mut suffix = String::new();
+        styles.iter().for_each(|style| match style {
+            Style::Bold => {
+                prefix.insert_str(0, "<b>");
+                suffix.push_str("</b>");
+            }
+            Style::Italic => {
+                prefix.insert_str(0, "<i>");
+                suffix.push_str("</i>");
+            }
+            Style::Strikethrough => {
+                prefix.insert_str(0, "<s>");
+                suffix.push_str("</s>");
+            }
+            Style::Underline => {
+                prefix.insert_str(0, "<u>");
+                suffix.push_str("</u>");
+            }
+        });
         format!("{prefix}{text}{suffix}")
     }
 
-    fn format_animated(&self, text: &str, animation: &Animation) -> String {
-        format!("<span class=\"animation{animation:?}\">{text}</span>")
+    // TODO: For iOS 18
+    fn format_animated(&self, _: &str, _: &Animation) -> String {
+        unreachable!()
     }
 }
 
@@ -1607,7 +1603,6 @@ mod tests {
             thread_originator_part: None,
             date_edited: 0,
             chat_id: None,
-            associated_message_emoji: None,
             num_attachments: 0,
             deleted_from: None,
             num_replies: 0,
@@ -1630,9 +1625,6 @@ mod tests {
             use_caller_id: false,
             platform: Platform::macOS,
             ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
         }
     }
 
@@ -1644,7 +1636,7 @@ mod tests {
             chatroom_participants: HashMap::new(),
             participants: HashMap::new(),
             real_participants: HashMap::new(),
-            tapbacks: HashMap::new(),
+            reactions: HashMap::new(),
             options,
             offset: get_offset(),
             db,
@@ -2015,7 +2007,7 @@ mod tests {
     }
 
     #[test]
-    fn can_format_html_tapback_me() {
+    fn can_format_html_reaction_me() {
         // Set timezone to PST for consistent Local time
         set_var("TZ", "PST");
 
@@ -2032,14 +2024,14 @@ mod tests {
         message.associated_message_type = Some(2000);
         message.associated_message_guid = Some("fake_guid".to_string());
 
-        let actual = exporter.format_tapback(&message).unwrap();
-        let expected = "<span class=\"tapback\"><b>Loved</b> by Me</span>";
+        let actual = exporter.format_reaction(&message).unwrap();
+        let expected = "<span class=\"reaction\"><b>Loved</b> by Me</span>";
 
         assert_eq!(actual, expected);
     }
 
     #[test]
-    fn can_format_html_tapback_them() {
+    fn can_format_html_reaction_them() {
         // Set timezone to PST for consistent Local time
         set_var("TZ", "PST");
 
@@ -2058,63 +2050,8 @@ mod tests {
         message.associated_message_guid = Some("fake_guid".to_string());
         message.handle_id = Some(999999);
 
-        let actual = exporter.format_tapback(&message).unwrap();
-        let expected = "<span class=\"tapback\"><b>Loved</b> by Sample Contact</span>";
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn can_format_html_tapback_custom_emoji() {
-        // Set timezone to PST for consistent Local time
-        set_var("TZ", "PST");
-
-        // Create exporter
-        let options = fake_options();
-        let mut config = fake_config(options);
-        config
-            .participants
-            .insert(999999, "Sample Contact".to_string());
-        let exporter = HTML::new(&config).unwrap();
-
-        let mut message = blank();
-        // May 17, 2022  8:29:42 PM
-        message.date = 674526582885055488;
-        message.associated_message_type = Some(2006);
-        message.associated_message_guid = Some("fake_guid".to_string());
-        message.handle_id = Some(999999);
-        message.associated_message_emoji = Some("☕️".to_string());
-
-        let actual = exporter.format_tapback(&message).unwrap();
-        // The result contains `&nbsp;`
-        let expected = "<span class=\"tapback\"><b>☕\u{fe0f}</b> by Sample Contact</span>";
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn can_format_html_tapback_custom_sticker() {
-        // Set timezone to PST for consistent Local time
-        set_var("TZ", "PST");
-
-        // Create exporter
-        let options = fake_options();
-        let mut config = fake_config(options);
-        config
-            .participants
-            .insert(999999, "Sample Contact".to_string());
-        let exporter = HTML::new(&config).unwrap();
-
-        let mut message = blank();
-        // May 17, 2022  8:29:42 PM
-        message.date = 674526582885055488;
-        message.associated_message_type = Some(2007);
-        message.associated_message_guid = Some("fake_guid".to_string());
-        message.handle_id = Some(999999);
-        message.associated_message_emoji = Some("☕️".to_string());
-
-        let actual = exporter.format_tapback(&message).unwrap();
-        let expected = "<span class=\"tapback\">Sticker from Sample Contact not found!</span>";
+        let actual = exporter.format_reaction(&message).unwrap();
+        let expected = "<span class=\"reaction\"><b>Loved</b> by Sample Contact</span>";
 
         assert_eq!(actual, expected);
     }
@@ -2355,7 +2292,7 @@ mod balloon_format_tests {
             placeholder: false,
         };
 
-        let expected = exporter.format_url(&blank(), &balloon, &blank());
+        let expected = exporter.format_url(&balloon, &blank());
         let actual = "<a href=\"url\"><div class=\"app_header\"><img src=\"images\" loading=\"lazy\", onerror=\"this.style.display='none'\"><div class=\"name\">site_name</div></div><div class=\"app_footer\"><div class=\"caption\">title</div><div class=\"subcaption\">summary</div></div></a>";
 
         assert_eq!(expected, actual);
@@ -2381,7 +2318,7 @@ mod balloon_format_tests {
             placeholder: false,
         };
 
-        let expected = exporter.format_url(&blank(), &balloon, &blank());
+        let expected = exporter.format_url(&balloon, &blank());
         let actual = "<a href=\"url\"><div class=\"app_header\"><img src=\"images\" onerror=\"this.style.display='none'\"><div class=\"name\">site_name</div></div><div class=\"app_footer\"><div class=\"caption\">title</div><div class=\"subcaption\">summary</div></div></a>";
 
         assert_eq!(expected, actual);
@@ -2966,146 +2903,6 @@ mod text_effect_tests {
 
         let actual = exporter.format_message(&message, 0).unwrap();
         let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\">Hi. Right now or <u>tomorrow</u>?</span>\n</div>\n</div>\n</div>\n";
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn can_format_html_text_effect_end_to_end() {
-        // Set timezone to PST for consistent Local time
-        set_var("TZ", "PST");
-
-        // Create exporter
-        let options = fake_options();
-        let config = fake_config(options);
-        let exporter = HTML::new(&config).unwrap();
-
-        let mut message = blank();
-        // May 17, 2022  8:29:42 PM
-        message.date = 674526582885055488;
-        message.text = Some("Big small shake nod explode ripple bloom jitter".to_string());
-        message.is_from_me = true;
-        message.chat_id = Some(0);
-
-        let typedstream_path = current_dir()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("imessage-database/test_data/typedstream/TextEffects");
-        let mut file = File::open(typedstream_path).unwrap();
-        let mut bytes = vec![];
-        file.read_to_end(&mut bytes).unwrap();
-
-        let mut parser = TypedStreamReader::from(&bytes);
-        message.components = parser.parse().ok();
-
-        let actual = exporter.format_message(&message, 0).unwrap();
-        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\"><span class=\"animationBig\">Big</span> <span class=\"animationSmall\">small </span><span class=\"animationShake\">shake</span> <span class=\"animationNod\">nod</span> <span class=\"animationExplode\">explode </span><span class=\"animationRipple\">ripple</span> <span class=\"animationBloom\">bloom</span> <span class=\"animationJitter\">jitter</span></span>\n</div>\n</div>\n</div>\n";
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn can_format_html_text_styles_end_to_end() {
-        // Set timezone to PST for consistent Local time
-        set_var("TZ", "PST");
-
-        // Create exporter
-        let options = fake_options();
-        let config = fake_config(options);
-        let exporter = HTML::new(&config).unwrap();
-
-        let mut message = blank();
-        // May 17, 2022  8:29:42 PM
-        message.date = 674526582885055488;
-        message.text = Some("Bold underline italic strikethrough all four".to_string());
-        message.is_from_me = true;
-        message.chat_id = Some(0);
-
-        let typedstream_path = current_dir()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("imessage-database/test_data/typedstream/TextStyles");
-        let mut file = File::open(typedstream_path).unwrap();
-        let mut bytes = vec![];
-        file.read_to_end(&mut bytes).unwrap();
-
-        let mut parser = TypedStreamReader::from(&bytes);
-        message.components = parser.parse().ok();
-
-        let actual = exporter.format_message(&message, 0).unwrap();
-        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\"><b>Bold</b> <u>underline</u> <i>italic</i> <s>strikethrough</s> all <i><u><s><b>four</b></s></u></i></span>\n</div>\n</div>\n</div>\n";
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn can_format_html_text_styles_single_end_to_end() {
-        // Set timezone to PST for consistent Local time
-        set_var("TZ", "PST");
-
-        // Create exporter
-        let options = fake_options();
-        let config = fake_config(options);
-        let exporter = HTML::new(&config).unwrap();
-
-        let mut message = blank();
-        // May 17, 2022  8:29:42 PM
-        message.date = 674526582885055488;
-        message.text = Some("Everything".to_string());
-        message.is_from_me = true;
-        message.chat_id = Some(0);
-
-        let typedstream_path = current_dir()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("imessage-database/test_data/typedstream/TextStylesSingleRange");
-        let mut file = File::open(typedstream_path).unwrap();
-        let mut bytes = vec![];
-        file.read_to_end(&mut bytes).unwrap();
-
-        let mut parser = TypedStreamReader::from(&bytes);
-        message.components = parser.parse().ok();
-
-        let actual = exporter.format_message(&message, 0).unwrap();
-        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\"><i><u><s><b>Everything</b></s></u></i></span>\n</div>\n</div>\n</div>\n";
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn can_format_html_text_styles_mixed_end_to_end() {
-        // Set timezone to PST for consistent Local time
-        set_var("TZ", "PST");
-
-        // Create exporter
-        let options = fake_options();
-        let config = fake_config(options);
-        let exporter = HTML::new(&config).unwrap();
-
-        let mut message = blank();
-        // May 17, 2022  8:29:42 PM
-        message.date = 674526582885055488;
-        message.text = Some("Underline normal jitter normal".to_string());
-        message.is_from_me = true;
-        message.chat_id = Some(0);
-
-        let typedstream_path = current_dir()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("imessage-database/test_data/typedstream/TextStylesMixed");
-        let mut file = File::open(typedstream_path).unwrap();
-        let mut bytes = vec![];
-        file.read_to_end(&mut bytes).unwrap();
-
-        let mut parser = TypedStreamReader::from(&bytes);
-        message.components = parser.parse().ok();
-
-        let actual = exporter.format_message(&message, 0).unwrap();
-        let expected = "<div class=\"message\">\n<div class=\"sent iMessage\">\n<p><span class=\"timestamp\">May 17, 2022  5:29:42 PM</span>\n<span class=\"sender\">Me</span></p>\n<hr><div class=\"message_part\">\n<span class=\"bubble\"><u>Underline</u> normal <span class=\"animationJitter\">jitter</span> normal</span>\n</div>\n</div>\n</div>\n";
 
         assert_eq!(actual, expected);
     }

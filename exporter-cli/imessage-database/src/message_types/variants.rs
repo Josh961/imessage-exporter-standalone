@@ -2,8 +2,6 @@
  Variants represent the different types of iMessages that exist in the `messages` table.
 */
 
-use std::fmt::Display;
-
 use plist::Value;
 
 use crate::{
@@ -14,36 +12,32 @@ use crate::{
     },
 };
 
-/// # Tapbacks
+/// Reactions to iMessages
 ///
-/// [Tapbacks](https://support.apple.com/guide/messages/react-with-tapbacks-icht504f698a/mac) look like normal messages in the database. Only the latest tapback
+/// `bp:` GUID prefix for bubble message reactions (links, apps, etc).
+///
+/// `p:0/` GUID prefix for normal messages (body text, attachments).
+///
+/// In `p:#/`, the # represents the message index. If a message has 3 attachments:
+/// - 0 is the first image
+/// - 1 is the second image
+/// - 2 is the third image
+/// - 3 is the text of the message
+///
+/// In this example, a Like on `p:2/` is a like on the third image
+///
+/// Reactions are normal messages in the database, but only the latest reaction
 /// is stored. For example:
-///
 /// - user receives message -> user likes message
 ///   - This will create a message and a like message
 /// - user receives message -> user likes message -> user unlikes message
 ///   - This will create a message and a like message
 ///   - but that like message will get dropped when the unlike message arrives
 ///   - When messages drop the ROWIDs become non-sequential: the ID of the dropped message row is not reused
-///   - This means unliking an old message will make it look like the tapback was applied/removed at the
-///     time of latest change; the history of tapback statuses is not kept
-///
-/// ## Technical detail
-///
-/// The index specified by the prefix maps to the index of the body part given by [`Message::body()`](crate::tables::messages::Message::body).
-///
-/// - `bp:` GUID prefix for bubble message tapbacks (url previews, apps, etc).
-/// - `p:0/` GUID prefix for normal messages (body text, attachments).
-///
-/// If a message has 3 attachments followed by some text:
-/// - 0 is the first image
-/// - 1 is the second image
-/// - 2 is the third image
-/// - 3 is the text of the message
-///
-/// In this example, a Like on `p:2/` is a like on the third image.
+///   - This means unliking an old message will make it look like the reaction was applied/removed at the
+///     time of latest change; the history of reaction statuses is not kept
 #[derive(Debug)]
-pub enum Tapback<'a> {
+pub enum Reaction {
     /// Heart
     Loved,
     /// Thumbs up
@@ -56,20 +50,6 @@ pub enum Tapback<'a> {
     Emphasized,
     /// Question marks
     Questioned,
-    /// Custom emoji tapbacks
-    Emoji(Option<&'a str>),
-}
-
-impl<'a> Display for Tapback<'a> {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Tapback::Emoji(emoji) => match emoji {
-                Some(e) => write!(fmt, "{e}"),
-                None => write!(fmt, "Unknown emoji!"),
-            },
-            _ => write!(fmt, "{self:?}"),
-        }
-    }
 }
 
 /// Application Messages
@@ -93,7 +73,7 @@ pub enum CustomBalloon<'a> {
     /// [Check In](https://support.apple.com/guide/iphone/use-check-in-iphc143bb7e9/ios) messages
     CheckIn,
     /// Find My messages
-    FindMy,
+    FindMy
 }
 
 /// URL Message Types
@@ -136,17 +116,9 @@ pub enum Announcement<'a> {
 /// all of the possibilities.
 #[derive(Debug)]
 pub enum Variant<'a> {
-    /// A [tapback](https://support.apple.com/guide/messages/react-with-tapbacks-icht504f698a/mac)
-    ///
-    /// The `usize` indicates the index of the message's [`body()`](crate::tables::messages::Message::body) the tapback is applied to.
-    ///
-    /// The boolean indicates whether the tapback was applied (`true`) or removed (`false`).
-    Tapback(usize, bool, Tapback<'a>),
+    /// A reaction to another message
+    Reaction(usize, bool, Reaction),
     /// A sticker message, either placed on another message or by itself
-    ///
-    /// If the sticker is a tapback, the `usize` indicates the index of the message's [`body()`](crate::tables::messages::Message::body) the tapback is applied to.
-    ///
-    /// If the sticker is a normal message, it is treated like an attachment, and the message's [`body()`](crate::tables::messages::Message::body) indicates the location.
     Sticker(usize),
     /// Container for new or unknown messages
     Unknown(i32),

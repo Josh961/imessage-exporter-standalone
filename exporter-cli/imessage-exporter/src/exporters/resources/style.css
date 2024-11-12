@@ -261,22 +261,17 @@ span.expressive {
 	opacity: 60%;
 }
 
-span.tapbacks {
+span.reactions {
 	opacity: 60%;
 }
 
-div.tapbacks img {
+div.reactions img {
 	max-width: 5em;
-	padding-right: 1em;
 }
 
-div.tapback {
+div.reaction {
 	display: flex;
 	align-items: center;
-}
-
-span[class^="animation"] {
-	text-shadow: #000 0 0 10px;
 }
 
 div.sticker_effect {

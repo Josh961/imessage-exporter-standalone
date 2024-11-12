@@ -18,14 +18,13 @@ This tool targets the current latest public release for macOS and iMessage. It m
 - Formatted Text
   - Parses formatted text ranges from `typedstream` message body data
   - Supports all iMessage text format ranges:
-    - [Mentions](https://support.apple.com/guide/messages/mention-a-person-icht306ee34b/mac)
+    - Mentions
     - Hyperlinks
     - OTP/2FA
     - Unit Conversions
-    - [Animations and Styles](https://support.apple.com/guide/iphone/style-and-animate-messages-iphe5c5af4d4/ios)
 - Edited and Unsent messages
   - Detects if messages components were edited or unsent
-    - [Edited messages](https://support.apple.com/guide/iphone/unsend-and-edit-messages-iphe67195653/ios)
+    - Edited messages
       - Parses `typedstream` edited body data
       - Displays content and timestamps for each edit
       - Humanizes display of edit timestamp gaps
@@ -39,7 +38,7 @@ This tool targets the current latest public release for macOS and iMessage. It m
     - Separate balloons in HTML exports
   - Handles Edited and Unsent parts
 - Threads and Message Replies
-  - [Threads](https://support.apple.com/en-us/104974) are displayed both threaded under the parent as well as in-place
+  - Threads are displayed both threaded under the parent as well as in-place
     - This is to preserve context, which can be lost if replying to older messages
     - Messages from a thread and were rendered in-place are annotated as such
     - In HTML exports, threaded messages are hyperlinked to allow for easy reading in context
@@ -56,20 +55,19 @@ This tool targets the current latest public release for macOS and iMessage. It m
     - Embeds in HTML exports (including `<img>`, `<video>`, and `<audio>`)
   - Attachment date metadata is set to the date and time of message receipt
 - Expressives
-  - Detects both bubble and screen [effects](https://support.apple.com/en-us/104970)
+  - Detects both bubble and screen effects
   - Messages sent with expressives are annotated
-- Tapbacks
-  - Detects [tapbacks](https://support.apple.com/guide/iphone/react-with-tapbacks-iph018d3c336/ios) to messages
-  - Messages sent or received with tapbacks are annotated
-  - For multi-part messages, tapbacks are placed under the correct message part
+- Reactions
+  - Detects reactions to messages
+  - Messages sent with reactions are annotated
+  - For multi-part messages, reactions are placed under the correct message part
 - Stickers
-  - Detects [stickers](https://support.apple.com/guide/iphone/send-stickers-iph37b0bfe7b/ios) sent or placed on messages
+  - Detects stickers sent or placed on messages
   - Messages sent with stickers are
     - Displayed in HTML exports
     - Annotated in TXT exports
   - For multi-part messages, stickers are placed under the correct message part
   - Sticker effects are annotated in all exports
-  - Sticker tapbacks are also supported
 - Apple Pay
   - Detects the transaction source, amount, and type
 - URL previews
@@ -79,23 +77,23 @@ This tool targets the current latest public release for macOS and iMessage. It m
     - URLs that have rotten may still retain some context if they have cached data
   - Handles cases where URL messages are overloaded with other message types
     - Apple Music (including preview streams)
-    - Apple Maps (including `Placemark` data)
+    - Apple Maps (including Placemark data)
     - App Store (including app metadata)
     - Rich Collaboration
 - App Integrations
   - Parses the `NSKeyedArchiver` payload to extract balloon data
-  - Supports system message types as well as third party [applications](https://support.apple.com/en-us/104969)
+  - Supports system message types as well as third party applications
     - Apple Fitness messages
     - Photo Slideshow messages
     - SharePlay/Facetime messages
     - Check In messages
     - Find My messages
 - Handwritten Messages
-  - Parses the protobuf payload to extract [handwritten](https://support.apple.com/en-my/guide/iphone/iph3d4cb79c9/ios) message data
-    - Displayed as embedded `svg` in HTML exports
+  - Parses the protobuf payload to extract handwritten messages
+    - Preview images display in HTML exports
     - TXT export behavior depends on attachment settings:
-      - `disabled`: embedded inline as an `ascii` graphic
-      - `compatible, efficient`: saved as an `svg` file
+      - `disabled`: embed in text file as `ascii` graphic
+      - `compatible, efficient`: save as `svg`
 - Duplicated group chats
   - Handles (participants) and chats (threads) can become duplicated
   - On startup:

@@ -1,6 +1,7 @@
 use std::{
     fmt::Display,
-    fs::{copy, create_dir_all, metadata, write},
+    fs,
+    fs::{copy, create_dir_all, metadata},
     path::{Path, PathBuf},
 };
 
@@ -14,8 +15,10 @@ use imessage_database::tables::{
     attachment::{Attachment, MediaType},
     messages::Message,
 };
+use imessage_database::util::dates::get_local_time;
 
 use filetime::{set_file_times, FileTime};
+use uuid::Uuid;
 
 /// Represents different ways the app can interact with attachment data
 #[derive(Debug, PartialEq, Eq)]
@@ -42,17 +45,15 @@ impl AttachmentManager {
     /// Handle a handwriting message, optionally writing it to an SVG file
     pub fn handle_handwriting(
         &self,
-        message: &Message,
         handwriting: &HandwrittenMessage,
         config: &Config,
-    ) -> Option<PathBuf> {
+    ) -> Option<String> {
         if !matches!(self, AttachmentManager::Disabled) {
             // Create a path to copy the file to
             let mut to = config.attachment_path();
 
             // Add the subdirectory
-            let sub_dir = config.conversation_attachment_path(message.chat_id);
-            to.push(sub_dir);
+            to.push("handwriting");
 
             // Add the filename
             // Each handwriting has a unique id, so cache then all in the same place
@@ -61,7 +62,7 @@ impl AttachmentManager {
             // Set the new file's extension to svg
             to.set_extension("svg");
             if to.exists() {
-                return Some(to);
+                return Some(to.display().to_string());
             }
 
             // Ensure the directory tree exists
@@ -74,14 +75,24 @@ impl AttachmentManager {
             }
 
             // Attempt the svg render
-            if let Err(why) = write(to.to_str()?, handwriting.render_svg()) {
+            if let Err(why) = fs::write(to.to_str()?, handwriting.render_svg()) {
                 eprintln!("Unable to write to {to:?}: {why}");
             };
 
-            // Update file metadata
-            update_file_metadata(&to, &to, message, config);
-
-            return Some(to);
+            return match get_local_time(&handwriting.created_at, &config.offset) {
+                Ok(date) => {
+                    let created_at =
+                        FileTime::from_unix_time(date.timestamp(), date.timestamp_subsec_nanos());
+                    if let Err(why) = set_file_times(&to, created_at, created_at) {
+                        eprintln!("Unable to update {to:?} metadata: {why}");
+                    }
+                    return Some(to.display().to_string());
+                }
+                Err(why) => {
+                    eprintln!("Unable to parse date: {why}");
+                    None
+                }
+            };
         }
         None
     }
@@ -118,15 +129,11 @@ impl AttachmentManager {
             let sub_dir = config.conversation_attachment_path(message.chat_id);
             to.push(sub_dir);
 
-            // Add a stable filename
-            to.push(attachment.rowid.to_string());
+            // Add a random filename
+            to.push(Uuid::new_v4().to_string());
 
             // Set the new file's extension to the original one
             to.set_extension(attachment.extension()?);
-            if to.exists() {
-                attachment.copied_path = Some(to);
-                return Some(());
-            }
 
             match self {
                 AttachmentManager::Compatible => match &config.converter {
@@ -146,7 +153,20 @@ impl AttachmentManager {
             };
 
             // Update file metadata
-            update_file_metadata(from, &to, message, config);
+            if let Ok(metadata) = metadata(from) {
+                let mtime = match &message.date(&config.offset) {
+                    Ok(date) => {
+                        FileTime::from_unix_time(date.timestamp(), date.timestamp_subsec_nanos())
+                    }
+                    Err(_) => FileTime::from_last_modification_time(&metadata),
+                };
+
+                let atime = FileTime::from_last_access_time(&metadata);
+
+                if let Err(why) = set_file_times(&to, atime, mtime) {
+                    eprintln!("Unable to update {to:?} metadata: {why}");
+                }
+            }
             attachment.copied_path = Some(to);
         }
         Some(())
@@ -229,25 +249,6 @@ impl Display for AttachmentManager {
             AttachmentManager::Disabled => write!(fmt, "disabled"),
             AttachmentManager::Compatible => write!(fmt, "compatible"),
             AttachmentManager::Efficient => write!(fmt, "efficient"),
-        }
-    }
-}
-
-/// Update the metadata of a copied file, falling back to the original file's metadata if necessary
-fn update_file_metadata(from: &Path, to: &Path, message: &Message, config: &Config) {
-    // Update file metadata
-    if let Ok(metadata) = metadata(from) {
-        // The modification time is the message's date, otherwise the the original file's creation time
-        let mtime = match message.date(&config.offset) {
-            Ok(date) => FileTime::from_unix_time(date.timestamp(), date.timestamp_subsec_nanos()),
-            Err(_) => FileTime::from_last_modification_time(&metadata),
-        };
-
-        // The new last access time comes from the metadata of the original file
-        let atime = FileTime::from_last_access_time(&metadata);
-
-        if let Err(why) = set_file_times(to, atime, mtime) {
-            eprintln!("Unable to update {to:?} metadata: {why}");
         }
     }
 }

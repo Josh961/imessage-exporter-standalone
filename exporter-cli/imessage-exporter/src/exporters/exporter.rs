@@ -35,7 +35,7 @@ pub trait Exporter<'a> {
 
 /// Defines behavior for formatting message instances to the desired output format
 pub(super) trait Writer<'a> {
-    /// Format a message, including its tapbacks and replies
+    /// Format a message, including its reactions and replies
     fn format_message(&self, msg: &Message, indent: usize) -> Result<String, TableError>;
     /// Format an attachment, possibly by reading the disk
     fn format_attachment(
@@ -52,8 +52,8 @@ pub(super) trait Writer<'a> {
         attachments: &mut Vec<Attachment>,
         indent: &str,
     ) -> Result<String, PlistParseError>;
-    /// Format a tapback (displayed under a message)
-    fn format_tapback(&self, msg: &Message) -> Result<String, TableError>;
+    /// Format a reaction (displayed under a message)
+    fn format_reaction(&self, msg: &Message) -> Result<String, TableError>;
     /// Format an expressive message
     fn format_expressive(&self, msg: &'a Message) -> &'a str;
     /// Format an announcement message
@@ -78,7 +78,7 @@ pub(super) trait Writer<'a> {
 /// Defines behavior for formatting custom balloons to the desired output format
 pub(super) trait BalloonFormatter<T> {
     /// Format a URL message
-    fn format_url(&self, msg: &Message, balloon: &URLMessage, indent: T) -> String;
+    fn format_url(&self, balloon: &URLMessage, indent: T) -> String;
     /// Format an Apple Music message
     fn format_music(&self, balloon: &MusicMessage, indent: T) -> String;
     /// Format a Rich Collaboration message
@@ -88,7 +88,7 @@ pub(super) trait BalloonFormatter<T> {
     /// Format a shared location message
     fn format_placemark(&self, balloon: &PlacemarkMessage, indent: T) -> String;
     /// Format a handwritten note message
-    fn format_handwriting(&self, msg: &Message, balloon: &HandwrittenMessage, indent: T) -> String;
+    fn format_handwriting(&self, balloon: &HandwrittenMessage, indent: T) -> String;
     /// Format an Apple Pay message
     fn format_apple_pay(&self, balloon: &AppMessage, indent: T) -> String;
     /// Format a Fitness message

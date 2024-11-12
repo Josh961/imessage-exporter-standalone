@@ -73,8 +73,8 @@ impl Archivable {
     ///     },
     ///     vec![OutputData::String("Hello world".to_string())]
     /// );
-    /// println!("{:?}", nsstring.as_nsstring()); // Some("Hello world")
-    ///
+    /// println!("{:?}", nsstring.deserialize_as_nsstring()); // Some("Hello world")
+    /// 
     /// let not_nsstring = Archivable::Object(
     ///     Class {
     ///         name: "NSNumber".to_string(),
@@ -82,50 +82,13 @@ impl Archivable {
     ///     },
     ///     vec![OutputData::SignedInteger(100)]
     /// );
-    /// println!("{:?}", not_nsstring.as_nsstring()); // None
+    /// println!("{:?}", not_nsstring.deserialize_as_nsstring()); // None
     /// ```
-    pub fn as_nsstring(&self) -> Option<&str> {
+    pub fn deserialize_as_nsstring(&self) -> Option<&str> {
         if let Archivable::Object(Class { name, .. }, value) = self {
             if name == "NSString" || name == "NSMutableString" {
                 if let Some(OutputData::String(text)) = value.first() {
                     return Some(text);
-                }
-            }
-        }
-        None
-    }
-
-    /// If `self` is an [`Object`](Archivable::Object) that contains a [`Class`] named `NSNumber`,
-    /// extract an [`i64`] from the [`Data`](Archivable::Data).
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use imessage_database::util::typedstream::models::{Archivable, Class, OutputData};
-    ///
-    /// let nsnumber = Archivable::Object(
-    ///     Class {
-    ///         name: "NSNumber".to_string(),
-    ///         version: 1
-    ///     },
-    ///     vec![OutputData::SignedInteger(100)]
-    /// );
-    /// println!("{:?}", nsnumber.as_nsnumber()); // Some(100)
-    ///
-    /// let not_nsnumber = Archivable::Object(
-    ///     Class {
-    ///         name: "NSString".to_string(),
-    ///         version: 1
-    ///     },
-    ///     vec![OutputData::String("Hello world".to_string())]
-    /// );
-    /// println!("{:?}", not_nsnumber.as_nsnumber()); // None
-    /// ```
-    pub fn as_nsnumber(&self) -> Option<&i64> {
-        if let Archivable::Object(Class { name, .. }, value) = self {
-            if name == "NSNumber" {
-                if let Some(OutputData::SignedInteger(num)) = value.first() {
-                    return Some(num);
                 }
             }
         }

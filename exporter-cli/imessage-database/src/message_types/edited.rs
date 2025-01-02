@@ -138,7 +138,7 @@ impl<'a> BalloonProvider<'a> for EditedMessage {
                         .ok()
                         .as_ref()
                         .and_then(|items| items.first())
-                        .and_then(|item| item.deserialize_as_nsstring())
+                        .and_then(|item| item.as_nsstring())
                         .map(String::from)
                     {
                         Some(text) => text,

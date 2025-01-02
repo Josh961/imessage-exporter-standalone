@@ -2,8 +2,10 @@
  This module represents common (but not all) columns in the `attachment` table.
 */
 
-use rusqlite::{Connection, Error, Result, Row, Statement};
+use plist::Value;
+use rusqlite::{blob::Blob, Connection, Error, Result, Row, Statement};
 use sha1::{Digest, Sha1};
+
 use std::{
     fs::File,
     io::Read,
@@ -12,16 +14,17 @@ use std::{
 
 use crate::{
     error::{attachment::AttachmentError, table::TableError},
-    message_types::sticker::{get_sticker_effect, StickerEffect},
+    message_types::sticker::{get_sticker_effect, StickerEffect, StickerSource},
     tables::{
         messages::Message,
-        table::{Table, ATTACHMENT},
+        table::{GetBlob, Table, ATTACHMENT, ATTRIBUTION_INFO, STICKER_USER_INFO},
     },
     util::{
         dates::TIMESTAMP_FACTOR,
         dirs::home,
         output::{done_processing, processing},
         platform::Platform,
+        plist::plist_as_dictionary,
         query_context::QueryContext,
         size::format_file_size,
     },
@@ -44,6 +47,29 @@ pub enum MediaType<'a> {
     Unknown,
 }
 
+impl MediaType<'_> {
+    /// Given a [`MediaType`], generate the corresponding MIME type string
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use imessage_database::tables::attachment::MediaType;
+    ///
+    /// println!("{:?}", MediaType::Image("png").as_mime_type()); // "image/png"
+    /// ```
+    pub fn as_mime_type(&self) -> String {
+        match self {
+            MediaType::Image(subtype) => format!("image/{subtype}"),
+            MediaType::Video(subtype) => format!("video/{subtype}"),
+            MediaType::Audio(subtype) => format!("audio/{subtype}"),
+            MediaType::Text(subtype) => format!("text/{subtype}"),
+            MediaType::Application(subtype) => format!("application/{subtype}"),
+            MediaType::Other(mime) => mime.to_string(),
+            MediaType::Unknown => String::new(),
+        }
+    }
+}
+
 /// Represents a single row in the `attachment` table.
 #[derive(Debug)]
 pub struct Attachment {
@@ -57,10 +83,12 @@ pub struct Attachment {
     /// The name of the file when sent or received
     pub transfer_name: Option<String>,
     /// The total amount of data transferred over the network (not necessarily the size of the file)
-    pub total_bytes: u64,
+    pub total_bytes: i64,
     /// `true` if the attachment was a sticker, else `false`
     pub is_sticker: bool,
     pub hide_attachment: i32,
+    /// The prompt used to generate a Genmoji
+    pub emoji_description: Option<String>,
     /// Auxiliary data to denote that an attachment has been copied
     pub copied_path: Option<PathBuf>,
 }
@@ -76,6 +104,7 @@ impl Table for Attachment {
             total_bytes: row.get("total_bytes").unwrap_or_default(),
             is_sticker: row.get("is_sticker").unwrap_or(false),
             hide_attachment: row.get("hide_attachment").unwrap_or(0),
+            emoji_description: row.get("emoji_image_short_description").unwrap_or(None),
             copied_path: None,
         })
     }
@@ -89,6 +118,22 @@ impl Table for Attachment {
         match attachment {
             Ok(Ok(attachment)) => Ok(attachment),
             Err(why) | Ok(Err(why)) => Err(TableError::Attachment(why)),
+        }
+    }
+}
+
+impl GetBlob for Attachment {
+    /// Extract a blob of data that belongs to a single attachment from a given column
+    fn get_blob<'a>(&self, db: &'a Connection, column: &str) -> Option<Blob<'a>> {
+        match db.blob_open(
+            rusqlite::DatabaseName::Main,
+            ATTACHMENT,
+            column,
+            self.rowid as i64,
+            true,
+        ) {
+            Ok(blob) => Some(blob),
+            Err(_) => None,
         }
     }
 }
@@ -237,7 +282,7 @@ impl Attachment {
 
     /// Get a human readable file size for an attachment
     pub fn file_size(&self) -> String {
-        format_file_size(self.total_bytes)
+        format_file_size(self.total_bytes.try_into().unwrap_or(0))
     }
 
     /// Get the total attachment bytes referenced in the table
@@ -245,34 +290,33 @@ impl Attachment {
         db: &Connection,
         context: &QueryContext,
     ) -> Result<u64, TableError> {
-        let mut bytes_query = if context.has_filters() {
-            let mut statement = format!("SELECT SUM(total_bytes) FROM {ATTACHMENT} a");
+        let mut bytes_query = if context.start.is_some() || context.end.is_some() {
+            let mut statement = format!("SELECT IFNULL(SUM(total_bytes), 0) FROM {ATTACHMENT} a");
 
-            if context.has_filters() {
-                statement.push_str(" WHERE ");
-                if let Some(start) = context.start {
-                    statement.push_str(&format!(
-                        "    a.created_date >= {}",
-                        start / TIMESTAMP_FACTOR
-                    ));
+            statement.push_str(" WHERE ");
+            if let Some(start) = context.start {
+                statement.push_str(&format!(
+                    "    a.created_date >= {}",
+                    start / TIMESTAMP_FACTOR
+                ));
+            }
+            if let Some(end) = context.end {
+                if context.start.is_some() {
+                    statement.push_str(" AND ");
                 }
-                if let Some(end) = context.end {
-                    if context.start.is_some() {
-                        statement.push_str(" AND ");
-                    }
-                    statement
-                        .push_str(&format!("    a.created_date <= {}", end / TIMESTAMP_FACTOR));
-                }
+                statement.push_str(&format!("    a.created_date <= {}", end / TIMESTAMP_FACTOR));
             }
 
             db.prepare(&statement).map_err(TableError::Attachment)?
         } else {
-            db.prepare(&format!("SELECT SUM(total_bytes) FROM {ATTACHMENT}"))
-                .map_err(TableError::Attachment)?
+            db.prepare(&format!(
+                "SELECT IFNULL(SUM(total_bytes), 0) FROM {ATTACHMENT}"
+            ))
+            .map_err(TableError::Attachment)?
         };
-
         bytes_query
-            .query_row([], |r| r.get(0))
+            .query_row([], |r| -> Result<i64> { r.get(0) })
+            .map(|res: i64| res.try_into().unwrap_or(0))
             .map_err(TableError::Attachment)
     }
 
@@ -433,16 +477,68 @@ impl Attachment {
 
         Some(format!("{}/{directory}/{filename}", db_path.display()))
     }
+
+    /// Get an attachment's plist from the [STICKER_USER_INFO] BLOB column
+    ///
+    /// Calling this hits the database, so it is expensive and should
+    /// only get invoked when needed.
+    ///
+    /// This column contains data used for sticker attachments.
+    fn sticker_info(&self, db: &Connection) -> Option<Value> {
+        Value::from_reader(self.get_blob(db, STICKER_USER_INFO)?).ok()
+    }
+
+    /// Get an attachment's plist from the [ATTRIBUTION_INFO] BLOB column
+    ///
+    /// Calling this hits the database, so it is expensive and should
+    /// only get invoked when needed.
+    ///
+    /// This column contains metadata used by image attachments.
+    fn attribution_info(&self, db: &Connection) -> Option<Value> {
+        Value::from_reader(self.get_blob(db, ATTRIBUTION_INFO)?).ok()
+    }
+
+    /// Parse a sticker's source from the Bundle ID stored in [STICKER_USER_INFO] `plist` data
+    ///
+    /// Calling this hits the database, so it is expensive and should
+    /// only get invoked when needed.
+    pub fn get_sticker_source(&self, db: &Connection) -> Option<StickerSource> {
+        if let Some(sticker_info) = self.sticker_info(db) {
+            let plist = plist_as_dictionary(&sticker_info).ok()?;
+            let bundle_id = plist.get("pid")?.as_string()?;
+            return StickerSource::from_bundle_id(bundle_id);
+        }
+        None
+    }
+
+    /// Parse a sticker's application name stored in [ATTRIBUTION_INFO] `plist` data
+    ///
+    /// Calling this hits the database, so it is expensive and should
+    /// only get invoked when needed.
+    pub fn get_sticker_source_application_name(&self, db: &Connection) -> Option<String> {
+        if let Some(attribution_info) = self.attribution_info(db) {
+            let plist = plist_as_dictionary(&attribution_info).ok()?;
+            return Some(plist.get("name")?.as_string()?.to_owned());
+        }
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        tables::attachment::{Attachment, MediaType, DEFAULT_ATTACHMENT_ROOT},
-        util::platform::Platform,
+        tables::{
+            attachment::{Attachment, MediaType, DEFAULT_ATTACHMENT_ROOT},
+            table::get_connection,
+        },
+        util::{platform::Platform, query_context::QueryContext},
     };
 
-    use std::path::{Path, PathBuf};
+    use std::{
+        collections::BTreeSet,
+        env::current_dir,
+        path::{Path, PathBuf},
+    };
 
     fn sample_attachment() -> Attachment {
         Attachment {
@@ -454,6 +550,7 @@ mod tests {
             total_bytes: 100,
             is_sticker: false,
             hide_attachment: 0,
+            emoji_description: None,
             copied_path: None,
         }
     }
@@ -639,6 +736,100 @@ mod tests {
     }
 
     #[test]
+    fn can_get_attachment_bytes_no_filter() {
+        let db_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/db/test.db");
+        let connection = get_connection(&db_path).unwrap();
+
+        let context = QueryContext::default();
+
+        assert!(Attachment::get_total_attachment_bytes(&connection, &context).is_ok());
+    }
+
+    #[test]
+    fn can_get_attachment_bytes_start_filter() {
+        let db_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/db/test.db");
+        let connection = get_connection(&db_path).unwrap();
+
+        let mut context = QueryContext::default();
+        context.set_start("2020-01-01").unwrap();
+
+        assert!(Attachment::get_total_attachment_bytes(&connection, &context).is_ok());
+    }
+
+    #[test]
+    fn can_get_attachment_bytes_end_filter() {
+        let db_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/db/test.db");
+        let connection = get_connection(&db_path).unwrap();
+
+        let mut context = QueryContext::default();
+        context.set_end("2020-01-01").unwrap();
+
+        assert!(Attachment::get_total_attachment_bytes(&connection, &context).is_ok());
+    }
+
+    #[test]
+    fn can_get_attachment_bytes_start_end_filter() {
+        let db_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/db/test.db");
+        let connection = get_connection(&db_path).unwrap();
+
+        let mut context = QueryContext::default();
+        context.set_start("2020-01-01").unwrap();
+        context.set_end("2021-01-01").unwrap();
+
+        assert!(Attachment::get_total_attachment_bytes(&connection, &context).is_ok());
+    }
+
+    #[test]
+    fn can_get_attachment_bytes_contact_filter() {
+        let db_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/db/test.db");
+        let connection = get_connection(&db_path).unwrap();
+
+        let mut context = QueryContext::default();
+        context.set_selected_chat_ids(BTreeSet::from([1, 2, 3]));
+        context.set_selected_handle_ids(BTreeSet::from([1, 2, 3]));
+
+        assert!(Attachment::get_total_attachment_bytes(&connection, &context).is_ok());
+    }
+
+    #[test]
+    fn can_get_attachment_bytes_contact_date_filter() {
+        let db_path = current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("imessage-database/test_data/db/test.db");
+        let connection = get_connection(&db_path).unwrap();
+
+        let mut context = QueryContext::default();
+        context.set_start("2020-01-01").unwrap();
+        context.set_end("2021-01-01").unwrap();
+        context.set_selected_chat_ids(BTreeSet::from([1, 2, 3]));
+        context.set_selected_handle_ids(BTreeSet::from([1, 2, 3]));
+
+        assert!(Attachment::get_total_attachment_bytes(&connection, &context).is_ok());
+    }
+
+    #[test]
     fn can_get_file_size_bytes() {
         let attachment = sample_attachment();
 
@@ -672,8 +863,8 @@ mod tests {
     #[test]
     fn can_get_file_size_cap() {
         let mut attachment: Attachment = sample_attachment();
-        attachment.total_bytes = u64::MAX;
+        attachment.total_bytes = i64::MAX;
 
-        assert_eq!(attachment.file_size(), String::from("16777216.00 TB"));
+        assert_eq!(attachment.file_size(), String::from("8388608.00 TB"));
     }
 }

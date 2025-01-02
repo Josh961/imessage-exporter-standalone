@@ -10,12 +10,10 @@ repository = "https://github.com/ReagentX/imessage-exporter"
 version = "0.0.0"
 
 [dependencies]
-clap = { version = "4.5.11", features = ["cargo"] }
-filetime = "0.2.23"
-fdlimit = "0.3.0"
-fs2 = "0.4.3"
+clap = { version = "=4.5.23", features = ["cargo"] }
+filetime = "=0.2.25"
+fdlimit = "=0.3.0"
+fs2 = "=0.4.3"
 imessage-database = { path = "../imessage-database" }
-indicatif = "0.17.8"
+indicatif = "=0.17.9"
 rusqlite = { version = "0.32.1", features = ["blob", "bundled"] }
-uuid = { version = "1.10.0", features = ["v4", "fast-rng"] }
-chrono = "0.4"

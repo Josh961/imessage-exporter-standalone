@@ -6,6 +6,7 @@ use imessage_database::{
         app::AppMessage,
         app_store::AppStoreMessage,
         collaboration::CollaborationMessage,
+        digital_touch::DigitalTouch,
         edited::EditedMessage,
         handwriting::HandwrittenMessage,
         music::MusicMessage,
@@ -13,7 +14,10 @@ use imessage_database::{
         text_effects::{Animation, Style, TextEffect, Unit},
         url::URLMessage,
     },
-    tables::{attachment::Attachment, messages::Message},
+    tables::{
+        attachment::Attachment,
+        messages::{models::AttachmentMeta, Message},
+    },
 };
 
 use crate::app::{error::RuntimeError, runtime::Config};
@@ -35,13 +39,14 @@ pub trait Exporter<'a> {
 
 /// Defines behavior for formatting message instances to the desired output format
 pub(super) trait Writer<'a> {
-    /// Format a message, including its reactions and replies
+    /// Format a message, including its tapbacks and replies
     fn format_message(&self, msg: &Message, indent: usize) -> Result<String, TableError>;
     /// Format an attachment, possibly by reading the disk
     fn format_attachment(
         &self,
         attachment: &'a mut Attachment,
         msg: &'a Message,
+        metadata: &AttachmentMeta,
     ) -> Result<String, &'a str>;
     /// Format a sticker, possibly by reading the disk
     fn format_sticker(&self, attachment: &'a mut Attachment, msg: &'a Message) -> String;
@@ -52,8 +57,8 @@ pub(super) trait Writer<'a> {
         attachments: &mut Vec<Attachment>,
         indent: &str,
     ) -> Result<String, PlistParseError>;
-    /// Format a reaction (displayed under a message)
-    fn format_reaction(&self, msg: &Message) -> Result<String, TableError>;
+    /// Format a tapback (displayed under a message)
+    fn format_tapback(&self, msg: &Message) -> Result<String, TableError>;
     /// Format an expressive message
     fn format_expressive(&self, msg: &'a Message) -> &'a str;
     /// Format an announcement message
@@ -71,14 +76,14 @@ pub(super) trait Writer<'a> {
         indent: &str,
     ) -> Option<String>;
     /// Format some attributed text
-    fn format_attributed(&'a self, text: &'a str, attribute: &'a TextEffect) -> Cow<str>;
+    fn format_attributed(&'a self, text: &'a str, attribute: &'a TextEffect) -> Cow<'a, str>;
     fn write_to_file(file: &mut BufWriter<File>, text: &str) -> Result<(), RuntimeError>;
 }
 
 /// Defines behavior for formatting custom balloons to the desired output format
 pub(super) trait BalloonFormatter<T> {
     /// Format a URL message
-    fn format_url(&self, balloon: &URLMessage, indent: T) -> String;
+    fn format_url(&self, msg: &Message, balloon: &URLMessage, indent: T) -> String;
     /// Format an Apple Music message
     fn format_music(&self, balloon: &MusicMessage, indent: T) -> String;
     /// Format a Rich Collaboration message
@@ -88,7 +93,9 @@ pub(super) trait BalloonFormatter<T> {
     /// Format a shared location message
     fn format_placemark(&self, balloon: &PlacemarkMessage, indent: T) -> String;
     /// Format a handwritten note message
-    fn format_handwriting(&self, balloon: &HandwrittenMessage, indent: T) -> String;
+    fn format_handwriting(&self, msg: &Message, balloon: &HandwrittenMessage, indent: T) -> String;
+    /// Format a digital touch message
+    fn format_digital_touch(&self, msg: &Message, balloon: &DigitalTouch, indent: T) -> String;
     /// Format an Apple Pay message
     fn format_apple_pay(&self, balloon: &AppMessage, indent: T) -> String;
     /// Format a Fitness message

@@ -5,6 +5,7 @@
 pub mod app;
 pub mod app_store;
 pub mod collaboration;
+pub mod digital_touch;
 pub mod edited;
 pub mod expressives;
 pub mod handwriting;

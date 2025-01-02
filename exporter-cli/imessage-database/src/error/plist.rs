@@ -19,6 +19,7 @@ pub enum PlistParseError {
     InvalidEditedMessage(String),
     StreamTypedError(StreamTypedError),
     HandwritingError(HandwritingError),
+    DigitalTouchError,
 }
 
 impl Display for PlistParseError {
@@ -48,6 +49,9 @@ impl Display for PlistParseError {
             }
             PlistParseError::StreamTypedError(why) => write!(fmt, "{why}"),
             PlistParseError::HandwritingError(why) => write!(fmt, "{why}"),
+            PlistParseError::DigitalTouchError => {
+                write!(fmt, "Unable to parse Digital Touch Message!")
+            }
         }
     }
 }

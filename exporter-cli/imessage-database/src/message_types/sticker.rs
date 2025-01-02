@@ -4,12 +4,51 @@ These are [sticker messages](https://support.apple.com/guide/iphone/send-sticker
 
 use std::fmt::Display;
 
+use crate::util::bundle_id::parse_balloon_bundle_id;
+
 /// Bytes for `stickerEffect:type="`
 const STICKER_EFFECT_PREFIX: [u8; 20] = [
     115, 116, 105, 99, 107, 101, 114, 69, 102, 102, 101, 99, 116, 58, 116, 121, 112, 101, 61, 34,
 ];
 /// Bytes for `"/>`
 const STICKER_EFFECT_SUFFIX: [u8; 3] = [34, 47, 62];
+
+/// Represents the source that created a sticker attachment
+#[derive(Debug, PartialEq, Eq)]
+pub enum StickerSource {
+    /// A [Genmoji](https://support.apple.com/guide/iphone/create-genmoji-with-apple-intelligence-iph4e76f5667/ios)
+    Genmoji,
+    /// A [Memoji](https://support.apple.com/en-us/111115)
+    Memoji,
+    /// User-created stickers
+    UserGenerated,
+    /// Application provided stickers
+    App(String),
+}
+
+impl StickerSource {
+    /// Given an application's bundle ID, determine the source
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use imessage_database::message_types::sticker::StickerSource;;
+    ///
+    /// println!("{:?}", StickerSource::from_bundle_id("com.apple.messages.genmoji")); // StickerSource::Genmoji
+    /// ```
+    pub fn from_bundle_id(bundle_id: &str) -> Option<Self> {
+        match parse_balloon_bundle_id(Some(bundle_id)) {
+            Some("com.apple.messages.genmoji") => Some(StickerSource::Genmoji),
+            Some("com.apple.Animoji.StickersApp.MessagesExtension")
+            | Some("com.apple.Jellyfish.Animoji") => Some(StickerSource::Memoji),
+            Some("com.apple.Stickers.UserGenerated.MessagesExtension") => {
+                Some(StickerSource::UserGenerated)
+            }
+            Some(other) => Some(StickerSource::App(other.to_string())),
+            None => None,
+        }
+    }
+}
 
 /// Represents different types of [sticker effects](https://www.macrumors.com/how-to/add-effects-to-stickers-in-messages/) that can be applied to sticker iMessage balloons.
 #[derive(Debug, PartialEq, Eq)]

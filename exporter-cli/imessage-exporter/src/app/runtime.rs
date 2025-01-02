@@ -1,3 +1,7 @@
+/*!
+ The main app runtime.
+*/
+
 use std::{
     cmp::min,
     collections::{BTreeSet, HashMap, HashSet},
@@ -11,7 +15,7 @@ use rusqlite::Connection;
 
 use crate::{
     app::{
-        attachment_manager::AttachmentManager, converter::Converter, error::RuntimeError,
+        compatibility::attachment_manager::AttachmentManagerMode, error::RuntimeError,
         export_type::ExportType, options::Options, sanitizers::sanitize_filename,
     },
     Exporter, HTML, TXT,
@@ -26,12 +30,14 @@ use imessage_database::{
         handle::Handle,
         messages::Message,
         table::{
-            get_connection, get_db_size, Cacheable, Deduplicate, Diagnostic, ATTACHMENTS_DIR,
-            MAX_LENGTH, ME, ORPHANED, UNKNOWN,
+            get_connection, get_db_size, Cacheable, Deduplicate, Diagnostic, ATTACHMENTS_DIR, ME,
+            ORPHANED, UNKNOWN,
         },
     },
     util::{dates::get_offset, size::format_file_size},
 };
+
+const MAX_LENGTH: usize = 235;
 
 /// Stores the application state and handles application lifecycle
 pub struct Config {
@@ -45,16 +51,14 @@ pub struct Config {
     pub participants: HashMap<i32, String>,
     /// Map of participant ID to an internal unique participant ID
     pub real_participants: HashMap<i32, i32>,
-    /// Messages that are reactions to other messages
-    pub reactions: HashMap<String, HashMap<usize, Vec<Message>>>,
+    /// Messages that are tapbacks (reactions) to other messages
+    pub tapbacks: HashMap<String, HashMap<usize, Vec<Message>>>,
     /// App configuration options
     pub options: Options,
     /// Global date offset used by the iMessage database:
     pub offset: i64,
     /// The connection we use to query the database
     pub db: Connection,
-    /// Converter type used when converting image files
-    pub converter: Option<Converter>,
 }
 
 impl Config {
@@ -128,7 +132,7 @@ impl Config {
     ///
     /// If it does not, first try and make a flat list of its members. Failing that, use the unique `chat_identifier` field.
     pub fn filename(&self, chatroom: &Chat) -> String {
-        let filename = match &chatroom.display_name() {
+        let mut filename = match &chatroom.display_name() {
             // If there is a display name, use that
             Some(name) => {
                 format!(
@@ -150,6 +154,12 @@ impl Config {
                 }
             }
         };
+
+        // Add the extension to the filename
+        if let Some(export_type) = &self.options.export_type {
+            filename.push_str(export_type.extension());
+        }
+
         sanitize_filename(&filename)
     }
 
@@ -203,23 +213,16 @@ impl Config {
     pub fn new(options: Options) -> Result<Config, RuntimeError> {
         let conn = get_connection(&options.get_db_path()).map_err(RuntimeError::DatabaseError)?;
         eprintln!("Building cache...");
-        eprintln!("[1/4] Caching chats...");
+        eprintln!("  [1/4] Caching chats...");
         let chatrooms = Chat::cache(&conn).map_err(RuntimeError::DatabaseError)?;
-        eprintln!("[2/4] Caching chatrooms...");
+        eprintln!("  [2/4] Caching chatrooms...");
         let chatroom_participants =
             ChatToHandle::cache(&conn).map_err(RuntimeError::DatabaseError)?;
-        eprintln!("[3/4] Caching participants...");
+        eprintln!("  [3/4] Caching participants...");
         let participants = Handle::cache(&conn).map_err(RuntimeError::DatabaseError)?;
-        eprintln!("[4/4] Caching reactions...");
-        let reactions = Message::cache(&conn).map_err(RuntimeError::DatabaseError)?;
+        eprintln!("  [4/4] Caching tapbacks...");
+        let tapbacks = Message::cache(&conn).map_err(RuntimeError::DatabaseError)?;
         eprintln!("Cache built!");
-
-        // Only attempt to create a converter if we need it
-        let converter = match options.attachment_manager {
-            AttachmentManager::Disabled => None,
-            AttachmentManager::Compatible => Converter::determine(),
-            AttachmentManager::Efficient => None,
-        };
 
         Ok(Config {
             chatrooms,
@@ -227,12 +230,85 @@ impl Config {
             chatroom_participants,
             real_participants: Handle::dedupe(&participants),
             participants,
-            reactions,
+            tapbacks,
             options,
             offset: get_offset(),
             db: conn,
-            converter,
         })
+    }
+
+    /// Convert comma separated list of participant strings into table chat IDs using
+    ///   1) filter `self.participant` keys based on the values (by comparing to user values)
+    ///   2) get the chat IDs keys from `self.chatroom_participants` for values that contain the selected handle_ids
+    ///   3) send those chat and handle IDs to the query context so they are included in the message table filters
+    pub(crate) fn resolve_filtered_handles(&mut self) {
+        if let Some(conversation_filter) = &self.options.conversation_filter {
+            let parsed_handle_filter = conversation_filter.split(',').collect::<Vec<&str>>();
+
+            let mut included_chatrooms: BTreeSet<i32> = BTreeSet::new();
+            let mut included_handles: BTreeSet<i32> = BTreeSet::new();
+
+            // First: Scan the list of participants for included handle IDs
+            self.participants
+                .iter()
+                .for_each(|(handle_id, handle_name)| {
+                    parsed_handle_filter.iter().for_each(|included_name| {
+                        if handle_name.contains(included_name) {
+                            included_handles.insert(*handle_id);
+                        }
+                    });
+                });
+
+            // Second, scan the list of chatrooms for IDs that contain the selected participants
+            self.chatroom_participants
+                .iter()
+                .for_each(|(chat_id, participants)| {
+                    if !participants.is_disjoint(&included_handles) {
+                        included_chatrooms.insert(*chat_id);
+                    }
+                });
+
+            self.options
+                .query_context
+                .set_selected_handle_ids(included_handles);
+
+            self.options
+                .query_context
+                .set_selected_chat_ids(included_chatrooms);
+
+            self.log_filtered_handles_and_chats()
+        }
+    }
+
+    /// If we set some filtered chatrooms, emit how many will be included in the export
+    fn log_filtered_handles_and_chats(&self) {
+        if let (Some(selected_handle_ids), Some(selected_chat_ids)) = (
+            &self.options.query_context.selected_handle_ids,
+            &self.options.query_context.selected_chat_ids,
+        ) {
+            let unique_handle_ids: HashSet<Option<&i32>> = selected_handle_ids
+                .iter()
+                .map(|handle_id| self.real_participants.get(handle_id))
+                .collect();
+
+            let mut unique_chat_ids: HashSet<String> = HashSet::new();
+            for selected_chat_id in selected_chat_ids {
+                if let Some(participants) = self.chatroom_participants.get(selected_chat_id) {
+                    unique_chat_ids.insert(self.filename_from_participants(participants));
+                }
+            }
+
+            eprintln!(
+                "Filtering for {} handle{} across {} chatrooms...",
+                unique_handle_ids.len(),
+                if unique_handle_ids.len() != 1 {
+                    "s"
+                } else {
+                    ""
+                },
+                unique_chat_ids.len()
+            );
+        }
     }
 
     /// Ensure there is available disk space for the requested export
@@ -247,7 +323,7 @@ impl Config {
             available_space(&self.options.export_path).map_err(RuntimeError::DiskError)?;
 
         // Validate that there is enough disk space free to write the export
-        if let AttachmentManager::Disabled = self.options.attachment_manager {
+        if let AttachmentManagerMode::Disabled = self.options.attachment_manager.mode {
             if estimated_export_size >= free_space_at_location {
                 return Err(RuntimeError::NotEnoughAvailableSpace(
                     estimated_export_size,
@@ -305,6 +381,9 @@ impl Config {
             println!("    Duplicated chats: {duplicated_chats}");
         }
 
+        println!("\nEnvironment Diagnostics\n");
+        self.options.attachment_manager.diagnostic();
+
         Ok(())
     }
 
@@ -327,14 +406,25 @@ impl Config {
     pub fn start(&self) -> Result<(), RuntimeError> {
         if self.options.diagnostic {
             self.run_diagnostic().map_err(RuntimeError::DatabaseError)?;
-        } else if self.options.list_contacts {
-            self.list_contacts()?;
         } else if let Some(export_type) = &self.options.export_type {
+            // Ensure that if we want to filter on things, we have stuff to filter for
+            if let Some(filters) = &self.options.conversation_filter {
+                if !self.options.query_context.has_filters() {
+                    return Err(RuntimeError::InvalidOptions(format!(
+                        "Selected filter `{}` does not match any participants!",
+                        filters
+                    )));
+                }
+            }
+
             // Ensure the path we want to export to exists
             create_dir_all(&self.options.export_path).map_err(RuntimeError::DiskError)?;
 
             // Ensure the path we want to copy attachments to exists, if requested
-            if !matches!(self.options.attachment_manager, AttachmentManager::Disabled) {
+            if !matches!(
+                self.options.attachment_manager.mode,
+                AttachmentManagerMode::Disabled
+            ) {
                 create_dir_all(self.attachment_path()).map_err(RuntimeError::DiskError)?;
             }
 
@@ -380,203 +470,85 @@ impl Config {
         }
         UNKNOWN
     }
+}
 
-    pub fn list_contacts(&self) -> Result<(), RuntimeError> {
-        println!("Listing all unique contacts and group chats:");
-        let mut unique_contacts: HashMap<i32, (String, i32, i64)> = HashMap::new();
-        let mut group_chats: Vec<(String, Vec<String>, i32, i64)> = Vec::new();
-        // Get all messages for real (deduplicated) participants
-        for (handle_id, real_id) in &self.real_participants {
-            let mut stmt = self
-                .db
-                .prepare(
-                    "SELECT COUNT(*) as count, MAX(date) as latest
-                     FROM message m
-                     LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
-                     LEFT JOIN handle h ON m.handle_id = h.ROWID
-                     WHERE (h.ROWID = ? OR h.person_centric_id = (
-                         SELECT person_centric_id FROM handle WHERE ROWID = ?
-                     ))
-                     AND (
-                         cmj.chat_id IS NULL OR
-                         cmj.chat_id NOT IN (
-                             SELECT chat_id
-                             FROM chat_handle_join
-                             GROUP BY chat_id
-                             HAVING COUNT(*) > 1
-                         )
-                     )",
-                )
-                .map_err(|e| RuntimeError::DatabaseError(TableError::Messages(e)))?;
-            if let Ok(row) = stmt.query_row([handle_id, handle_id], |row| {
-                Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?))
-            }) {
-                let (count, latest) = row;
-                if count > 0 {
-                    if let Some(contact) = self.participants.get(handle_id) {
-                        unique_contacts
-                            .entry(*real_id)
-                            .and_modify(|e| {
-                                e.1 += count;
-                                if latest > e.2 {
-                                    e.2 = latest;
-                                }
-                            })
-                            .or_insert((contact.clone(), count, latest));
-                    }
-                }
-            }
+#[cfg(test)]
+impl Config {
+    pub fn fake_app(options: Options) -> Config {
+        let connection = get_connection(&options.db_path).unwrap();
+        Config {
+            chatrooms: HashMap::new(),
+            real_chatrooms: HashMap::new(),
+            chatroom_participants: HashMap::new(),
+            participants: HashMap::new(),
+            real_participants: HashMap::new(),
+            tapbacks: HashMap::new(),
+            options,
+            offset: get_offset(),
+            db: connection,
         }
-        // Process group chats using real (deduplicated) chatrooms
-        for (chat_id, _) in &self.real_chatrooms {
-            if let Some(participants) = self.chatroom_participants.get(chat_id) {
-                if participants.len() > 1 {
-                    if let Some(chat) = self.chatrooms.get(chat_id) {
-                        let chat_name = chat.display_name().unwrap_or("Unnamed Group Chat");
-                        let participant_names: Vec<String> = participants
-                            .iter()
-                            .filter_map(|&id| self.participants.get(&id))
-                            .cloned()
-                            .collect();
-                        let mut stmt = self
-                            .db
-                            .prepare(
-                                "SELECT COUNT(*) as count, MAX(date) as latest FROM message
-                                 JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-                                 WHERE chat_id = ?"
-                            )
-                            .map_err(|e| RuntimeError::DatabaseError(TableError::Messages(e)))?;
-                        if let Ok(row) = stmt.query_row([chat_id], |row| {
-                            Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?))
-                        }) {
-                            let (count, latest) = row;
-                            if count > 0 {
-                                group_chats.push((
-                                    chat_name.to_string(),
-                                    participant_names,
-                                    count,
-                                    latest,
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        println!("Total DMs: {}", unique_contacts.len());
-        println!("Total Group Chats: {}", group_chats.len());
-        println!("Total Chats: {}", unique_contacts.len() + group_chats.len());
-
-        // Print results
-        let mut unique_contacts: Vec<_> = unique_contacts.values().collect();
-        unique_contacts.sort_by(|a, b| b.2.cmp(&a.2));
-        for (contact, count, date) in unique_contacts {
-            println!(
-                "CONTACT|{}|{}|{}",
-                contact,
-                count,
-                chrono::NaiveDateTime::from_timestamp(date / 1_000_000_000 + self.offset, 0)
-            );
-        }
-        group_chats.sort_by(|a, b| b.3.cmp(&a.3));
-        for (chat_name, participants, count, date) in group_chats {
-            println!(
-                "GROUP|{}|{}|{}|{}",
-                chat_name,
-                count,
-                chrono::NaiveDateTime::from_timestamp(date / 1_000_000_000 + self.offset, 0),
-                participants.join(",")
-            );
-        }
-        Ok(())
     }
 
-    pub fn should_export_message(&self, message: &Message) -> bool {
-        // If no phone numbers specified, export all messages
-        if self.options.individual_numbers.is_none() && self.options.group_numbers.is_none() {
-            return true;
+    pub fn fake_message() -> Message {
+        Message {
+            rowid: i32::default(),
+            guid: String::default(),
+            text: None,
+            service: Some("iMessage".to_string()),
+            handle_id: Some(i32::default()),
+            destination_caller_id: None,
+            subject: None,
+            date: i64::default(),
+            date_read: i64::default(),
+            date_delivered: i64::default(),
+            is_from_me: false,
+            is_read: false,
+            item_type: 0,
+            other_handle: 0,
+            share_status: false,
+            share_direction: false,
+            group_title: None,
+            group_action_type: 0,
+            associated_message_guid: None,
+            associated_message_type: Some(i32::default()),
+            balloon_bundle_id: None,
+            expressive_send_style_id: None,
+            thread_originator_guid: None,
+            thread_originator_part: None,
+            date_edited: 0,
+            associated_message_emoji: None,
+            chat_id: None,
+            num_attachments: 0,
+            deleted_from: None,
+            num_replies: 0,
+            components: None,
+            edited_parts: None,
         }
-
-        if let Some((chatroom, _)) = self.conversation(message) {
-            // For group chats, check if any participant matches the phone numbers
-            if let Some(participants) = self.chatroom_participants.get(&chatroom.rowid) {
-                let participant_identifiers: HashSet<String> = participants
-                    .iter()
-                    .filter_map(|&handle_id| self.participants.get(&handle_id))
-                    .map(|identifier| Config::normalize_identifier(identifier))
-                    .collect();
-
-                // For group chats (more than 1 participant)
-                if participants.len() > 1 {
-                    // Only export if we have group filters and this group exactly matches one of them
-                    if let Some(ref group_numbers) = self.options.group_numbers {
-                        return group_numbers.iter().any(|group| {
-                            // Must have same number of participants
-                            group.len() == participant_identifiers.len() &&
-                            // All numbers in our filter must be present
-                            group.iter().all(|n| participant_identifiers.contains(n)) &&
-                            // All participants must be in our filter
-                            participant_identifiers.iter().all(|n| group.contains(n))
-                        });
-                    }
-                    return false;
-                }
-                // For individual chats (1 participant)
-                else if let Some(ref individual_numbers) = self.options.individual_numbers {
-                    return individual_numbers
-                        .iter()
-                        .any(|identifier| participant_identifiers.contains(identifier));
-                }
-            }
-        }
-
-        false
     }
 
-    fn normalize_identifier(identifier: &str) -> String {
-        if identifier.contains('@') {
-            identifier.to_lowercase()
-        } else {
-            identifier.chars().filter(|c| c.is_ascii_digit()).collect()
+    pub(crate) fn fake_attachment() -> Attachment {
+        Attachment {
+            rowid: 0,
+            filename: Some("a/b/c/d.jpg".to_string()),
+            uti: Some("public.png".to_string()),
+            mime_type: Some("image/png".to_string()),
+            transfer_name: Some("d.jpg".to_string()),
+            total_bytes: 100,
+            is_sticker: false,
+            hide_attachment: 0,
+            emoji_description: None,
+            copied_path: None,
         }
     }
 }
 
 #[cfg(test)]
 mod filename_tests {
-    use crate::{app::attachment_manager::AttachmentManager, Config, Options};
-    use imessage_database::{
-        tables::{
-            chat::Chat,
-            table::{get_connection, MAX_LENGTH},
-        },
-        util::{dirs::default_db_path, platform::Platform, query_context::QueryContext},
-    };
-    use std::{
-        collections::{BTreeSet, HashMap},
-        path::PathBuf,
-    };
+    use crate::{app::runtime::MAX_LENGTH, Config, Options};
 
-    fn fake_options() -> Options {
-        Options {
-            db_path: default_db_path(),
-            attachment_root: None,
-            attachment_manager: AttachmentManager::Disabled,
-            diagnostic: false,
-            export_type: None,
-            export_path: PathBuf::new(),
-            query_context: QueryContext::default(),
-            no_lazy: false,
-            custom_name: None,
-            use_caller_id: false,
-            platform: Platform::macOS,
-            ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
-        }
-    }
+    use imessage_database::tables::chat::Chat;
+
+    use std::collections::BTreeSet;
 
     fn fake_chat() -> Chat {
         Chat {
@@ -587,33 +559,19 @@ mod filename_tests {
         }
     }
 
-    fn fake_app(options: Options) -> Config {
-        let connection = get_connection(&options.db_path).unwrap();
-        Config {
-            chatrooms: HashMap::new(),
-            real_chatrooms: HashMap::new(),
-            chatroom_participants: HashMap::new(),
-            participants: HashMap::new(),
-            real_participants: HashMap::new(),
-            reactions: HashMap::new(),
-            options,
-            offset: 0,
-            db: connection,
-            converter: Some(crate::app::converter::Converter::Sips),
-        }
-    }
-
     #[test]
     fn can_create() {
-        let options = fake_options();
-        let app = fake_app(options);
+        let mut options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        // Disable the export
+        options.export_type = None;
+        let app = Config::fake_app(options);
         app.start().unwrap();
     }
 
     #[test]
     fn can_get_filename_good() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create participant data
         app.participants.insert(10, "Person 10".to_string());
@@ -632,8 +590,8 @@ mod filename_tests {
 
     #[test]
     fn can_get_filename_long_multiple() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create participant data
         app.participants.insert(
@@ -688,8 +646,8 @@ mod filename_tests {
 
     #[test]
     fn can_get_filename_single_long() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create participant data
         app.participants.insert(10, "He slipped his key into the lock, and we all very quietly entered the cell. The sleeper half turned, and then settled down once more into a deep slumber. Holmes stooped to the water-jug, moistened his sponge, and then rubbed it twice vigorously across and down the prisoner's face.".to_string());
@@ -700,14 +658,14 @@ mod filename_tests {
 
         // Get filename
         let filename = app.filename_from_participants(&people);
-        assert_eq!(filename, "He slipped his key into the lock, and we all very quietly entered the cell. The sleeper half turned, and then settled down once more into a deep slumber. Holmes stooped to the water-jug, moistened his sponge, and then rubbed it twice vigoro".to_string());
+        assert_eq!(filename, "He slipped his key into the lock, and we all very quietly entered the cell. The sleeper half turned, and then settled down once more into a deep slumber. Holmes stooped to the water-jug, moistened his sponge, and then rubbed it twice v".to_string());
         assert!(filename.len() <= MAX_LENGTH);
     }
 
     #[test]
     fn can_get_filename_chat_display_name_long() {
-        let options = fake_options();
-        let app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let app = Config::fake_app(options);
 
         // Create chat
         let mut chat = fake_chat();
@@ -715,13 +673,13 @@ mod filename_tests {
 
         // Get filename
         let filename = app.filename(&chat);
-        assert_eq!(filename, "Life is infinitely stranger than anything which the mind of man could invent. We would not dare to conceive the things which are really mere commonplaces of existence. If we could fly out of that window hand in hand, hover over this great c - 0");
+        assert_eq!(filename, "Life is infinitely stranger than anything which the mind of man could invent. We would not dare to conceive the things which are really mere commonplaces of existence. If we could fly out of that window hand in hand, hover over this gr - 0.html");
     }
 
     #[test]
     fn can_get_filename_chat_display_name_normal() {
-        let options = fake_options();
-        let app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let app = Config::fake_app(options);
 
         // Create chat
         let mut chat = fake_chat();
@@ -729,13 +687,13 @@ mod filename_tests {
 
         // Get filename
         let filename = app.filename(&chat);
-        assert_eq!(filename, "Test Chat Name - 0");
+        assert_eq!(filename, "Test Chat Name - 0.html");
     }
 
     #[test]
     fn can_get_filename_chat_display_name_short() {
-        let options = fake_options();
-        let app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let app = Config::fake_app(options);
 
         // Create chat
         let mut chat = fake_chat();
@@ -743,13 +701,13 @@ mod filename_tests {
 
         // Get filename
         let filename = app.filename(&chat);
-        assert_eq!(filename, "🤠 - 0");
+        assert_eq!(filename, "🤠 - 0.html");
     }
 
     #[test]
     fn can_get_filename_chat_participants() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create chat
         let chat = fake_chat();
@@ -766,51 +724,27 @@ mod filename_tests {
 
         // Get filename
         let filename = app.filename(&chat);
-        assert_eq!(filename, "Person 10, Person 11");
+        assert_eq!(filename, "Person 10, Person 11.html");
     }
 
     #[test]
     fn can_get_filename_chat_no_participants() {
-        let options = fake_options();
-        let app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let app = Config::fake_app(options);
 
         // Create chat
         let chat = fake_chat();
 
         // Get filename
         let filename = app.filename(&chat);
-        assert_eq!(filename, "Default");
+        assert_eq!(filename, "Default.html");
     }
 }
 
 #[cfg(test)]
 mod who_tests {
-    use crate::{app::attachment_manager::AttachmentManager, Config, Options};
-    use imessage_database::{
-        tables::{chat::Chat, messages::Message, table::get_connection},
-        util::{dirs::default_db_path, platform::Platform, query_context::QueryContext},
-    };
-    use std::{collections::HashMap, path::PathBuf};
-
-    fn fake_options() -> Options {
-        Options {
-            db_path: default_db_path(),
-            attachment_root: None,
-            attachment_manager: AttachmentManager::Disabled,
-            diagnostic: false,
-            export_type: None,
-            export_path: PathBuf::new(),
-            query_context: QueryContext::default(),
-            no_lazy: false,
-            custom_name: None,
-            use_caller_id: false,
-            platform: Platform::macOS,
-            ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
-        }
-    }
+    use crate::{Config, Options};
+    use imessage_database::tables::chat::Chat;
 
     fn fake_chat() -> Chat {
         Chat {
@@ -821,62 +755,10 @@ mod who_tests {
         }
     }
 
-    fn fake_app(options: Options) -> Config {
-        let connection = get_connection(&options.db_path).unwrap();
-        Config {
-            chatrooms: HashMap::new(),
-            real_chatrooms: HashMap::new(),
-            chatroom_participants: HashMap::new(),
-            participants: HashMap::new(),
-            real_participants: HashMap::new(),
-            reactions: HashMap::new(),
-            options,
-            offset: 0,
-            db: connection,
-            converter: Some(crate::app::converter::Converter::Sips),
-        }
-    }
-
-    fn blank() -> Message {
-        Message {
-            rowid: i32::default(),
-            guid: String::default(),
-            text: None,
-            service: Some("iMessage".to_string()),
-            handle_id: Some(i32::default()),
-            destination_caller_id: None,
-            subject: None,
-            date: i64::default(),
-            date_read: i64::default(),
-            date_delivered: i64::default(),
-            is_from_me: false,
-            is_read: false,
-            item_type: 0,
-            other_handle: 0,
-            share_status: false,
-            share_direction: false,
-            group_title: None,
-            group_action_type: 0,
-            associated_message_guid: None,
-            associated_message_type: Some(i32::default()),
-            balloon_bundle_id: None,
-            expressive_send_style_id: None,
-            thread_originator_guid: None,
-            thread_originator_part: None,
-            date_edited: 0,
-            chat_id: None,
-            num_attachments: 0,
-            deleted_from: None,
-            num_replies: 0,
-            components: None,
-            edited_parts: None,
-        }
-    }
-
     #[test]
     fn can_get_who_them() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create participant data
         app.participants.insert(10, "Person 10".to_string());
@@ -888,8 +770,8 @@ mod who_tests {
 
     #[test]
     fn can_get_who_them_missing() {
-        let options = fake_options();
-        let app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let app = Config::fake_app(options);
 
         // Get participant name
         let who = app.who(Some(10), false, &None);
@@ -898,8 +780,8 @@ mod who_tests {
 
     #[test]
     fn can_get_who_me() {
-        let options = fake_options();
-        let app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let app = Config::fake_app(options);
 
         // Get participant name
         let who = app.who(Some(0), true, &None);
@@ -908,9 +790,9 @@ mod who_tests {
 
     #[test]
     fn can_get_who_me_caller_id() {
-        let mut options = fake_options();
+        let mut options = Options::fake_options(crate::app::export_type::ExportType::Html);
         options.use_caller_id = true;
-        let app = fake_app(options);
+        let app = Config::fake_app(options);
 
         // Get participant name
         let caller_id = Some("test".to_string());
@@ -920,9 +802,9 @@ mod who_tests {
 
     #[test]
     fn can_get_who_me_custom() {
-        let mut options = fake_options();
+        let mut options = Options::fake_options(crate::app::export_type::ExportType::Html);
         options.custom_name = Some("Name".to_string());
-        let app = fake_app(options);
+        let app = Config::fake_app(options);
 
         // Get participant name
         let who = app.who(Some(0), true, &None);
@@ -931,8 +813,8 @@ mod who_tests {
 
     #[test]
     fn can_get_who_none_me() {
-        let options = fake_options();
-        let app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let app = Config::fake_app(options);
 
         // Get participant name
         let who = app.who(None, true, &None);
@@ -941,9 +823,9 @@ mod who_tests {
 
     #[test]
     fn can_get_who_me_none_caller_id() {
-        let mut options = fake_options();
+        let mut options = Options::fake_options(crate::app::export_type::ExportType::Html);
         options.use_caller_id = true;
-        let app = fake_app(options);
+        let app = Config::fake_app(options);
 
         // Get participant name
         let caller_id = Some("test".to_string());
@@ -953,8 +835,8 @@ mod who_tests {
 
     #[test]
     fn can_get_who_none_them() {
-        let options = fake_options();
-        let app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let app = Config::fake_app(options);
 
         // Get participant name
         let who = app.who(None, false, &None);
@@ -963,8 +845,8 @@ mod who_tests {
 
     #[test]
     fn can_get_chat_valid() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create chat
         let chat = fake_chat();
@@ -972,7 +854,7 @@ mod who_tests {
         app.real_chatrooms.insert(0, 0);
 
         // Create message
-        let mut message = blank();
+        let mut message = Config::fake_message();
         message.chat_id = Some(0);
 
         // Get filename
@@ -982,8 +864,8 @@ mod who_tests {
 
     #[test]
     fn can_get_chat_valid_deleted() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create chat
         let chat = fake_chat();
@@ -991,7 +873,7 @@ mod who_tests {
         app.real_chatrooms.insert(0, 0);
 
         // Create message
-        let mut message = blank();
+        let mut message = Config::fake_message();
         message.chat_id = None;
         message.deleted_from = Some(0);
 
@@ -1002,8 +884,8 @@ mod who_tests {
 
     #[test]
     fn can_get_chat_invalid() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create chat
         let chat = fake_chat();
@@ -1011,7 +893,7 @@ mod who_tests {
         app.real_chatrooms.insert(0, 0);
 
         // Create message
-        let mut message = blank();
+        let mut message = Config::fake_message();
         message.chat_id = Some(1);
 
         // Get filename
@@ -1021,8 +903,8 @@ mod who_tests {
 
     #[test]
     fn can_get_chat_none() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create chat
         let chat = fake_chat();
@@ -1030,7 +912,7 @@ mod who_tests {
         app.real_chatrooms.insert(0, 0);
 
         // Create message
-        let mut message = blank();
+        let mut message = Config::fake_message();
         message.chat_id = None;
         message.deleted_from = None;
 
@@ -1042,67 +924,13 @@ mod who_tests {
 
 #[cfg(test)]
 mod directory_tests {
-    use crate::{app::attachment_manager::AttachmentManager, Config, Options};
-    use imessage_database::{
-        tables::{attachment::Attachment, table::get_connection},
-        util::{dirs::default_db_path, platform::Platform, query_context::QueryContext},
-    };
-    use std::{collections::HashMap, path::PathBuf};
-
-    fn fake_options() -> Options {
-        Options {
-            db_path: default_db_path(),
-            attachment_root: None,
-            attachment_manager: AttachmentManager::Disabled,
-            diagnostic: false,
-            export_type: None,
-            export_path: PathBuf::new(),
-            query_context: QueryContext::default(),
-            no_lazy: false,
-            custom_name: None,
-            use_caller_id: false,
-            platform: Platform::macOS,
-            ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
-        }
-    }
-
-    fn fake_app(options: Options) -> Config {
-        let connection = get_connection(&options.db_path).unwrap();
-        Config {
-            chatrooms: HashMap::new(),
-            real_chatrooms: HashMap::new(),
-            chatroom_participants: HashMap::new(),
-            participants: HashMap::new(),
-            real_participants: HashMap::new(),
-            reactions: HashMap::new(),
-            options,
-            offset: 0,
-            db: connection,
-            converter: Some(crate::app::converter::Converter::Sips),
-        }
-    }
-
-    pub fn fake_attachment() -> Attachment {
-        Attachment {
-            rowid: 0,
-            filename: Some("a/b/c/d.jpg".to_string()),
-            uti: Some("public.png".to_string()),
-            mime_type: Some("image/png".to_string()),
-            transfer_name: Some("d.jpg".to_string()),
-            total_bytes: 100,
-            is_sticker: false,
-            hide_attachment: 0,
-            copied_path: None,
-        }
-    }
+    use crate::{Config, Options};
+    use std::path::PathBuf;
 
     #[test]
     fn can_get_valid_attachment_sub_dir() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create chatroom ID
         app.real_chatrooms.insert(0, 0);
@@ -1114,8 +942,8 @@ mod directory_tests {
 
     #[test]
     fn can_get_invalid_attachment_sub_dir() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create chatroom ID
         app.real_chatrooms.insert(0, 0);
@@ -1127,8 +955,8 @@ mod directory_tests {
 
     #[test]
     fn can_get_missing_attachment_sub_dir() {
-        let options = fake_options();
-        let mut app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
 
         // Create chatroom ID
         app.real_chatrooms.insert(0, 0);
@@ -1140,11 +968,11 @@ mod directory_tests {
 
     #[test]
     fn can_get_path_not_copied() {
-        let options = fake_options();
-        let app = fake_app(options);
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let app = Config::fake_app(options);
 
         // Create attachment
-        let attachment = fake_attachment();
+        let attachment = Config::fake_attachment();
 
         let result = app.message_attachment_path(&attachment);
         let expected = String::from("a/b/c/d.jpg");
@@ -1153,14 +981,14 @@ mod directory_tests {
 
     #[test]
     fn can_get_path_copied() {
-        let mut options = fake_options();
+        let mut options = Options::fake_options(crate::app::export_type::ExportType::Html);
         // Set an export path
         options.export_path = PathBuf::from("/Users/ReagentX/exports");
 
-        let app = fake_app(options);
+        let app = Config::fake_app(options);
 
         // Create attachment
-        let mut attachment = fake_attachment();
+        let mut attachment = Config::fake_attachment();
         let mut full_path = PathBuf::from("/Users/ReagentX/exports/attachments");
         full_path.push(attachment.filename());
         attachment.copied_path = Some(full_path);
@@ -1172,18 +1000,141 @@ mod directory_tests {
 
     #[test]
     fn can_get_path_copied_bad() {
-        let mut options = fake_options();
+        let mut options = Options::fake_options(crate::app::export_type::ExportType::Html);
         // Set an export path
         options.export_path = PathBuf::from("/Users/ReagentX/exports");
 
-        let app = fake_app(options);
+        let app = Config::fake_app(options);
 
         // Create attachment
-        let mut attachment = fake_attachment();
+        let mut attachment = Config::fake_attachment();
         attachment.copied_path = Some(PathBuf::from(attachment.filename.as_ref().unwrap()));
 
         let result = app.message_attachment_path(&attachment);
         let expected = String::from("a/b/c/d.jpg");
         assert_eq!(result, expected);
+    }
+}
+
+#[cfg(test)]
+mod chat_filter_tests {
+    use std::collections::BTreeSet;
+
+    use crate::{app::export_type::ExportType, Config, Options};
+
+    #[test]
+    fn can_generate_filter_string_multiple() {
+        let mut options = Options::fake_options(ExportType::Html);
+        options.conversation_filter = Some(String::from("Person 10,Person 11,Person 12"));
+
+        let mut app = Config::fake_app(options);
+
+        // Add some test data
+        app.participants.insert(10, "Person 10".to_string()); // Included
+        app.participants.insert(11, "Person 11".to_string()); // Included
+        app.participants.insert(12, "Person 12".to_string()); // Included
+        app.participants.insert(13, "Person 13".to_string()); // Excluded
+
+        // Chatroom 1: Included
+        let mut chatroom_1 = BTreeSet::new();
+        chatroom_1.insert(10);
+        app.chatroom_participants.insert(1, chatroom_1);
+
+        // Chatroom 2: Included
+        let mut chatroom_2 = BTreeSet::new();
+        chatroom_2.insert(11);
+        app.chatroom_participants.insert(2, chatroom_2);
+
+        // Chatroom 3: Included
+        let mut chatroom_3 = BTreeSet::new();
+        chatroom_3.insert(12);
+        app.chatroom_participants.insert(3, chatroom_3);
+
+        // Chatroom 4: Excluded
+        let mut chatroom_4 = BTreeSet::new();
+        chatroom_4.insert(13);
+        app.chatroom_participants.insert(4, chatroom_4);
+
+        // Chatroom 5: Included
+        let mut chatroom_5 = BTreeSet::new();
+        chatroom_5.insert(10);
+        chatroom_5.insert(11);
+        app.chatroom_participants.insert(5, chatroom_5);
+
+        // Chatroom 6: Included
+        let mut chatroom_6 = BTreeSet::new();
+        chatroom_6.insert(12);
+        chatroom_6.insert(13); // Even though this person is excluded, the above person is
+        app.chatroom_participants.insert(6, chatroom_6);
+
+        app.resolve_filtered_handles();
+        // For the test, sort the output so it is always the same
+
+        assert_eq!(
+            app.options.query_context.selected_handle_ids,
+            Some(BTreeSet::from([10, 11, 12]))
+        );
+        assert_eq!(
+            app.options.query_context.selected_chat_ids,
+            Some(BTreeSet::from([1, 2, 3, 5, 6]))
+        );
+    }
+
+    #[test]
+    fn can_generate_filter_string_single() {
+        let mut options = Options::fake_options(ExportType::Html);
+        options.conversation_filter = Some(String::from("Person 13"));
+
+        let mut app = Config::fake_app(options);
+
+        // Add some test data
+        app.participants.insert(10, "Person 10".to_string()); // Excluded
+        app.participants.insert(11, "Person 11".to_string()); // Excluded
+        app.participants.insert(12, "Person 12".to_string()); // Excluded
+        app.participants.insert(13, "Person 13".to_string()); // Included
+
+        // Chatroom 1: Excluded
+        let mut chatroom_1 = BTreeSet::new();
+        chatroom_1.insert(10);
+        app.chatroom_participants.insert(1, chatroom_1);
+
+        // Chatroom 2: Excluded
+        let mut chatroom_2 = BTreeSet::new();
+        chatroom_2.insert(11);
+        app.chatroom_participants.insert(2, chatroom_2);
+
+        // Chatroom 3: Excluded
+        let mut chatroom_3 = BTreeSet::new();
+        chatroom_3.insert(12);
+        app.chatroom_participants.insert(3, chatroom_3);
+
+        // Chatroom 4: Included
+        let mut chatroom_4 = BTreeSet::new();
+        chatroom_4.insert(13);
+        app.chatroom_participants.insert(4, chatroom_4);
+
+        // Chatroom 5: Excluded
+        let mut chatroom_5 = BTreeSet::new();
+        chatroom_5.insert(10);
+        chatroom_5.insert(11);
+        app.chatroom_participants.insert(5, chatroom_5);
+
+        // Chatroom 6: Included
+        let mut chatroom_6 = BTreeSet::new();
+        chatroom_6.insert(12);
+        chatroom_6.insert(13); // Even though this person is excluded, the above person is
+        app.chatroom_participants.insert(6, chatroom_6);
+
+        app.resolve_filtered_handles();
+        // For the test, sort the output so it is always the same
+
+        assert_eq!(
+            app.options.query_context.selected_handle_ids,
+            Some(BTreeSet::from([13]))
+        );
+        assert_eq!(
+            app.options.query_context.selected_chat_ids,
+            Some(BTreeSet::from([4, 6]))
+        );
     }
 }

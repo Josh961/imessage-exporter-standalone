@@ -42,7 +42,7 @@ message Handwriting {
   //    Elems [Count]struct{
   //      X        int16
   //      Y        int16
-  //      ??       int16
+  //      Width    int16
   //      ??       int16
   //    }
   // }

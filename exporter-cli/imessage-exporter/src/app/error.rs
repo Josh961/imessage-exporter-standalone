@@ -1,5 +1,5 @@
 /*!
-Errors that can happen during the application's runtime
+ Errors that can happen during the application's runtime.
 */
 
 use std::{

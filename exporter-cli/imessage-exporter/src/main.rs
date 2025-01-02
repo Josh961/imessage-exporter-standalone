@@ -22,7 +22,10 @@ fn main() {
     } else {
         match options {
             Ok(options) => match Config::new(options) {
-                Ok(app) => {
+                Ok(mut app) => {
+                    // Resolve the filtered contacts, if provided
+                    app.resolve_filtered_handles();
+
                     if let Err(why) = app.start() {
                         eprintln!("Unable to export: {why}");
                     }

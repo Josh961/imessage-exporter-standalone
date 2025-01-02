@@ -1,5 +1,5 @@
 /*!
-  App messages are a specific type of message that developers can generate with their apps.
+  App messages are messages that developers can generate with their apps.
   Some built-in functionality also uses App Messages, like Apple Pay or Handwriting.
 */
 
@@ -63,7 +63,7 @@ impl<'a> BalloonProvider<'a> for AppMessage<'a> {
     }
 }
 
-impl<'a> AppMessage<'a> {
+impl AppMessage<'_> {
     /// Parse key/value pairs from the query string in the balloon's a URL
     pub fn parse_query_string(&self) -> HashMap<&str, &str> {
         let mut map = HashMap::new();
@@ -88,7 +88,7 @@ impl<'a> AppMessage<'a> {
 mod tests {
     use crate::{
         message_types::{app::AppMessage, variants::BalloonProvider},
-        util::plist::parse_plist,
+        util::plist::parse_ns_keyed_archiver,
     };
     use plist::Value;
     use std::fs::File;
@@ -102,7 +102,7 @@ mod tests {
             .join("test_data/app_message/Sent265.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
         let expected = AppMessage {
@@ -129,7 +129,7 @@ mod tests {
             .join("test_data/app_message/ApplePayRecurring.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
         let expected = AppMessage {
@@ -156,7 +156,7 @@ mod tests {
             .join("test_data/app_message/OpenTableInvited.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
         let expected = AppMessage {
@@ -183,7 +183,7 @@ mod tests {
             .join("test_data/app_message/Slideshow.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
         let expected = AppMessage {
@@ -210,7 +210,7 @@ mod tests {
             .join("test_data/app_message/Game.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
         let expected = AppMessage {
@@ -237,7 +237,7 @@ mod tests {
             .join("test_data/app_message/Business.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
         let expected = AppMessage {
@@ -264,7 +264,7 @@ mod tests {
             .join("test_data/app_message/Business.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
         let mut expected = HashMap::new();
@@ -282,7 +282,7 @@ mod tests {
             .join("test_data/app_message/CheckinTimer.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
 
@@ -310,7 +310,7 @@ mod tests {
             .join("test_data/app_message/CheckinLate.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
 
@@ -338,7 +338,7 @@ mod tests {
             .join("test_data/app_message/CheckinLocation.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
 
@@ -366,7 +366,7 @@ mod tests {
             .join("test_data/app_message/CheckinTimer.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
         let mut expected = HashMap::new();
@@ -385,7 +385,7 @@ mod tests {
             .join("test_data/app_message/FindMy.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = AppMessage::from_map(&parsed).unwrap();
         let expected = AppMessage {

@@ -22,6 +22,14 @@ impl ExportType {
             _ => None,
         }
     }
+
+    /// Get the file name extension for the given export type
+    pub fn extension(&self) -> &str {
+        match self {
+            ExportType::Html => ".html",
+            ExportType::Txt => ".txt",
+        }
+    }
 }
 
 impl Display for ExportType {

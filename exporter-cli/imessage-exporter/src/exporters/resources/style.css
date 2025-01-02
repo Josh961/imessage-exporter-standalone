@@ -28,33 +28,35 @@ a[href^="#"] {
 	overflow-wrap: break-word;
 }
 
-.message .sent.iMessage {
-	background-color: #1982FC;
+.message .sent,
+.message .received {
+	border-radius: 25px;
+	padding: 15px;
+	max-width: 60%;
+	width: fit-content;
 }
 
-.message .sent.sms {
+.message .sent {
 	background-color: #65c466
+}
+
+
+.message .sent.iMessage,
+.message .sent.Satellite {
+	background-color: #1982FC;
 }
 
 .message .sent {
 	color: white;
-	border-radius: 25px;
-	padding: 15px;
 	margin-left: auto;
 	margin-right: 0;
-	max-width: 60%;
-	width: fit-content;
 }
 
 .message .received {
 	background-color: #d8d8d8;
 	color: black;
-	border-radius: 25px;
-	padding: 15px;
 	margin-right: auto;
 	margin-left: 0;
-	max-width: 60%;
-	width: fit-content;
 }
 
 .message .sent .replies .reply .message .sent {
@@ -244,6 +246,10 @@ span.deleted {
 	opacity: 60%;
 }
 
+span.transcription {
+	opacity: 75%;
+}
+
 span.subject {
 	font-weight: 600;
 }
@@ -261,20 +267,27 @@ span.expressive {
 	opacity: 60%;
 }
 
-span.reactions {
+span.tapbacks {
 	opacity: 60%;
 }
 
-div.reactions img {
+div.tapbacks img {
 	max-width: 5em;
+	padding-right: 1em;
 }
 
-div.reaction {
+div.tapback {
 	display: flex;
 	align-items: center;
 }
 
-div.sticker_effect {
+span[class^="animation"] {
+	text-shadow: #000 0 0 10px;
+}
+
+div.sticker_effect,
+div.sticker_name,
+div.genmoji_prompt {
 	opacity: 60%;
 }
 

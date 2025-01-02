@@ -6,7 +6,7 @@ Ensure your terminal emulator has [full disk access](https://kb.synology.com/en-
 
 ***
 
-#### Are emojis, reactions, and other special message features preserved in the export?
+#### Are emojis,tapbacks (reactions), and other special message features preserved in the export?
 
 Yes, all iMessage features are supported. See [here](features.md) for more detail.
 
@@ -78,6 +78,8 @@ Messages removed by deleting an entire conversation or by deleting a single mess
 
 Messages that have expired from this restoration process are permanently deleted and cannot be recovered.
 
+In some instances, deleted messages are removed from the `chat_message_join` table but not from the `messages` table. These messages will populate in `Orphaned.html` or `Orphaned.txt`.
+
 ***
 
 #### How fast is `imessage-exporter`?
@@ -88,9 +90,10 @@ On my M1 Max MacBook Pro, approximate performance is as follows:
 
 | `--copy-method` | Messages exported per second |
 |---|---|
-| `disabled` | 42,853 |
-| `efficient` | 30,346 |
-| `compatible` | < 100 |
+| `disabled` | 36,000 |
+| `clone` | 23,000 |
+| `basic` | < 350 |
+| `full` | < 20 |
 
 For more information on `--copy-method`, see [here](../imessage-exporter/README.md#how-to-use) and [here](./features.md#supported-message-features).
 

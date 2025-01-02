@@ -39,7 +39,7 @@ use crate::error::plist::PlistParseError;
 /// > storing an object table array called `$objects` in the dictionary. Everything else,
 /// > including class information, is referenced by a UID pointer. A `$top` entry under
 /// > the dict points to the top-level object the programmer was meaning to encode.
-pub fn parse_plist(plist: &Value) -> Result<Value, PlistParseError> {
+pub fn parse_ns_keyed_archiver(plist: &Value) -> Result<Value, PlistParseError> {
     let body = plist.as_dictionary().ok_or_else(|| {
         PlistParseError::InvalidType("body".to_string(), "dictionary".to_string())
     })?;
@@ -146,6 +146,13 @@ fn follow_uid<'a>(
         Value::Uid(uid) => follow_uid(objects, uid.get() as usize, &None, None),
         _ => Ok(item.to_owned()),
     }
+}
+
+/// Extract a dictionary from table `plist` data.
+pub fn plist_as_dictionary(plist: &Value) -> Result<&Dictionary, PlistParseError> {
+    plist
+        .as_dictionary()
+        .ok_or_else(|| PlistParseError::InvalidType("body".to_string(), "dictionary".to_string()))
 }
 
 /// Extract a dictionary from a specific key in a collection

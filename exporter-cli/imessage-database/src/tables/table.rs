@@ -4,7 +4,7 @@
 
 use std::{collections::HashMap, fs::metadata, path::Path};
 
-use rusqlite::{Connection, Error, OpenFlags, Result, Row, Statement};
+use rusqlite::{blob::Blob, Connection, Error, OpenFlags, Result, Row, Statement};
 
 use crate::error::table::TableError;
 
@@ -40,6 +40,12 @@ pub trait Deduplicate {
 pub trait Diagnostic {
     /// Emit diagnostic data about the table to `stdout`
     fn run_diagnostic(db: &Connection) -> Result<(), TableError>;
+}
+
+/// Defines behavior for getting BLOB data from from a table
+pub trait GetBlob {
+    /// Retreive `BLOB` data from a table
+    fn get_blob<'a>(&self, db: &'a Connection, column: &str) -> Option<Blob<'a>>;
 }
 
 /// Get a connection to the iMessage `SQLite` database
@@ -115,12 +121,16 @@ pub const CHAT_HANDLE_JOIN: &str = "chat_handle_join";
 pub const RECENTLY_DELETED: &str = "chat_recoverable_message_join";
 
 // Column names
-/// The payload data column contains app message data
+/// The payload data column contains `plist`-encoded app message data
 pub const MESSAGE_PAYLOAD: &str = "payload_data";
-/// The message summary info column contains edited message information
+/// The message summary info column contains `plist`-encoded edited message information
 pub const MESSAGE_SUMMARY_INFO: &str = "message_summary_info";
-/// The attributedBody column contains a message's body text with any other attributes
+/// The `attributedBody` column contains [`typedstream`](crate::util::typedstream)-encoded a message's body text with many other attributes
 pub const ATTRIBUTED_BODY: &str = "attributedBody";
+/// The sticker user info column contains `plist`-encoded metadata for sticker attachments
+pub const STICKER_USER_INFO: &str = "sticker_user_info";
+/// The attribution info contains `plist`-encoded metadata for sticker attachments
+pub const ATTRIBUTION_INFO: &str = "attribution_info";
 
 // Default information
 /// Name used for messages sent by the database owner in a first-person context
@@ -135,8 +145,6 @@ pub const DEFAULT_PATH_MACOS: &str = "Library/Messages/chat.db";
 pub const DEFAULT_PATH_IOS: &str = "3d/3d0d7e5fb2ce288813306e4d4636395e047a3d28";
 /// Chat name reserved for messages that do not belong to a chat in the table
 pub const ORPHANED: &str = "orphaned";
-/// Maximum length a filename can be
-pub const MAX_LENGTH: usize = 240;
 /// Replacement text sent in Fitness.app messages
 pub const FITNESS_RECEIVER: &str = "$(kIMTranscriptPluginBreadcrumbTextReceiverIdentifier)";
 /// Name for attachments directory in exports

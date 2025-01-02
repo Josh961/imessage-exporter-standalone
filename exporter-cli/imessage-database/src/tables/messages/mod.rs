@@ -7,3 +7,4 @@ pub use message::Message;
 pub(crate) mod body;
 pub mod message;
 pub mod models;
+mod tests;

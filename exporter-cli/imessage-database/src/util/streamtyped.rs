@@ -59,7 +59,6 @@ pub fn parse(mut stream: Vec<u8>) -> Result<String, StreamTypedError> {
     match String::from_utf8(stream)
         .map_err(|non_utf8| String::from_utf8_lossy(non_utf8.as_bytes()).into_owned())
     {
-        // TODO: Why does this logic work? Maybe the offset can be derived from the bytes
         // If the bytes are valid unicode, only one char prefixes the actual message
         // ['\u{6}', 'T', ...] where `T` is the first real char
         // The prefix char is not always the same

@@ -1,6 +1,8 @@
 /*!
  Contains logic for handling query filter configurations.
 */
+use std::collections::BTreeSet;
+
 use chrono::prelude::*;
 
 use crate::{
@@ -15,10 +17,14 @@ pub struct QueryContext {
     pub start: Option<i64>,
     /// The end date filter. Only messages sent before this date will be included.
     pub end: Option<i64>,
+    /// Selected handle IDs
+    pub selected_handle_ids: Option<BTreeSet<i32>>,
+    /// Selected chat IDs
+    pub selected_chat_ids: Option<BTreeSet<i32>>,
 }
 
 impl QueryContext {
-    /// Generate a `QueryContext` with a start date
+    /// Populate a [`QueryContext`] with a start date
     /// # Example:
     ///
     /// ```
@@ -34,7 +40,7 @@ impl QueryContext {
         Ok(())
     }
 
-    /// Generate a `QueryContext` with an end date
+    /// Populate a [`QueryContext`] with an end date
     /// # Example:
     ///
     /// ```
@@ -48,6 +54,36 @@ impl QueryContext {
             .ok_or(QueryContextError::InvalidDate(end.to_string()))?;
         self.end = Some(timestamp);
         Ok(())
+    }
+
+    /// Populate a [`QueryContext`] with a list of handle IDs to select
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use imessage_database::util::query_context::QueryContext;
+    ///
+    /// let mut context = QueryContext::default();
+    /// context.set_selected_handle_ids(BTreeSet::from([1, 2, 3]));
+    /// ```
+    pub fn set_selected_handle_ids(&mut self, selected_handle_ids: BTreeSet<i32>) {
+        self.selected_handle_ids = (!selected_handle_ids.is_empty()).then_some(selected_handle_ids);
+    }
+
+    /// Populate a [`QueryContext`] with a list of chat IDs to select
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use imessage_database::util::query_context::QueryContext;
+    ///
+    /// let mut context = QueryContext::default();
+    /// context.set_selected_chat_ids(BTreeSet::from([1, 2, 3]));
+    /// ```
+    pub fn set_selected_chat_ids(&mut self, selected_chat_ids: BTreeSet<i32>) {
+        self.selected_chat_ids = (!selected_chat_ids.is_empty()).then_some(selected_chat_ids);
     }
 
     /// Ensure a date string is valid
@@ -95,38 +131,10 @@ impl QueryContext {
     /// assert!(context.has_filters());
     /// ```
     pub fn has_filters(&self) -> bool {
-        [self.start, self.end].iter().any(Option::is_some)
-    }
-
-    /// Generate the SQL `WHERE` clause described by this `QueryContext`
-    /// # Example:
-    ///
-    /// ```
-    /// use imessage_database::util::query_context::QueryContext;
-    ///
-    /// let mut context = QueryContext::default();
-    /// context.set_start("2023-01-01");
-    /// let filters = context.generate_filter_statement("field_name");
-    /// ```
-    pub fn generate_filter_statement(&self, field: &str) -> String {
-        let mut filters = String::new();
-        if let Some(start) = self.start {
-            filters.push_str(&format!("    {field} >= {start}"));
-        }
-        if let Some(end) = self.end {
-            if !filters.is_empty() {
-                filters.push_str(" AND ");
-            }
-            filters.push_str(&format!("    {field} <= {end}"));
-        }
-
-        if !filters.is_empty() {
-            return format!(
-                " WHERE
-                 {filters}"
-            );
-        }
-        filters
+        self.start.is_some()
+            || self.end.is_some()
+            || self.selected_chat_ids.is_some()
+            || self.selected_handle_ids.is_some()
     }
 }
 
@@ -166,10 +174,6 @@ mod use_tests {
         let local = Local.from_utc_datetime(&from_timestamp);
 
         assert_eq!(format(&Ok(local)), "Jan 01, 2020 12:00:00 AM");
-        assert_eq!(
-            context.generate_filter_statement("m.date"),
-            " WHERE\n                     m.date >= 599558400000000000"
-        );
         assert!(context.start.is_some());
         assert!(context.end.is_none());
         assert!(context.has_filters());
@@ -190,10 +194,6 @@ mod use_tests {
         let local = Local.from_utc_datetime(&from_timestamp);
 
         assert_eq!(format(&Ok(local)), "Jan 01, 2020 12:00:00 AM");
-        assert_eq!(
-            context.generate_filter_statement("m.date"),
-            " WHERE\n                     m.date <= 599558400000000000"
-        );
         assert!(context.start.is_none());
         assert!(context.end.is_some());
         assert!(context.has_filters());
@@ -224,29 +224,72 @@ mod use_tests {
 
         assert_eq!(format(&Ok(local_start)), "Jan 01, 2020 12:00:00 AM");
         assert_eq!(format(&Ok(local_end)), "Feb 02, 2020 12:00:00 AM");
-        assert_eq!(
-            context.generate_filter_statement("m.date"),
-            " WHERE\n                     m.date >= 599558400000000000 AND     m.date <= 602323200000000000"
-        );
         assert!(context.start.is_some());
         assert!(context.end.is_some());
         assert!(context.has_filters());
     }
+}
+
+#[cfg(test)]
+mod id_tests {
+    use std::collections::BTreeSet;
+
+    use crate::util::query_context::QueryContext;
 
     #[test]
-    fn can_create_invalid_start() {
-        let mut context = QueryContext::default();
-        assert!(context.set_start("2020-13-32").is_err());
-        assert!(!context.has_filters());
-        assert_eq!(context.generate_filter_statement("m.date"), "");
+    fn test_can_set_selected_chat_ids() {
+        let mut qc = QueryContext::default();
+        qc.set_selected_chat_ids(BTreeSet::from([1, 2, 3]));
+
+        assert_eq!(qc.selected_chat_ids, Some(BTreeSet::from([1, 2, 3])));
+        assert!(qc.has_filters());
     }
 
     #[test]
-    fn can_create_invalid_end() {
-        let mut context = QueryContext::default();
-        assert!(context.set_end("fake").is_err());
-        assert!(!context.has_filters());
-        assert_eq!(context.generate_filter_statement("m.date"), "");
+    fn test_can_set_selected_chat_ids_empty() {
+        let mut qc = QueryContext::default();
+        qc.set_selected_chat_ids(BTreeSet::new());
+
+        assert_eq!(qc.selected_chat_ids, None);
+        assert!(!qc.has_filters());
+    }
+
+    #[test]
+    fn test_can_overwrite_selected_chat_ids_empty() {
+        let mut qc = QueryContext::default();
+        qc.set_selected_chat_ids(BTreeSet::from([1, 2, 3]));
+        qc.set_selected_chat_ids(BTreeSet::new());
+
+        assert_eq!(qc.selected_chat_ids, None);
+        assert!(!qc.has_filters());
+    }
+
+    #[test]
+    fn test_can_set_selected_handle_ids() {
+        let mut qc = QueryContext::default();
+        qc.set_selected_handle_ids(BTreeSet::from([1, 2, 3]));
+
+        assert_eq!(qc.selected_handle_ids, Some(BTreeSet::from([1, 2, 3])));
+        assert!(qc.has_filters());
+    }
+
+    #[test]
+    fn test_can_set_selected_handle_ids_empty() {
+        let mut qc = QueryContext::default();
+        qc.set_selected_handle_ids(BTreeSet::new());
+
+        assert_eq!(qc.selected_handle_ids, None);
+        assert!(!qc.has_filters());
+    }
+
+    #[test]
+    fn test_can_overwrite_selected_handle_ids_empty() {
+        let mut qc = QueryContext::default();
+        qc.set_selected_handle_ids(BTreeSet::from([1, 2, 3]));
+        qc.set_selected_handle_ids(BTreeSet::new());
+
+        assert_eq!(qc.selected_handle_ids, None);
+        assert!(!qc.has_filters());
     }
 }
 

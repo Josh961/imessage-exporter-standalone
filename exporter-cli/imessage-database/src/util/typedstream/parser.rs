@@ -6,6 +6,8 @@
    - [`archive.c`](https://opensource.apple.com/source/gcc/gcc-5484/libobjc/archive.c.auto.html)
    - [`objc/typedstream.m`](https://archive.org/details/darwin_0.1)
 */
+use std::collections::HashSet;
+
 use crate::{
     error::typedstream::TypedStreamError,
     util::typedstream::models::{Archivable, Class, ClassResult, OutputData, Type},
@@ -47,6 +49,8 @@ pub struct TypedStreamReader<'a> {
     types_table: Vec<Vec<Type>>,
     /// As we parse the `typedstream`, build a table of seen archivable data to reference in the future
     object_table: Vec<Archivable>,
+    /// We want to copy embedded types the first time they are seen, even if the types were resolved through references
+    seen_embedded_types: HashSet<u32>,
     /// Stores the position of the current [`Archivable::Placeholder`]
     placeholder: Option<usize>,
 }
@@ -68,6 +72,7 @@ impl<'a> TypedStreamReader<'a> {
             idx: 0,
             types_table: vec![],
             object_table: vec![],
+            seen_embedded_types: HashSet::new(),
             placeholder: None,
         }
     }
@@ -304,8 +309,8 @@ impl<'a> TypedStreamReader<'a> {
                         return Ok(self.object_table.get(idx));
                     }
                     ClassResult::ClassHierarchy(classes) => {
-                        for class in classes.iter() {
-                            self.object_table.push(class.clone())
+                        for class in classes.into_iter() {
+                            self.object_table.push(class)
                         }
                     }
                 }
@@ -372,7 +377,19 @@ impl<'a> TypedStreamReader<'a> {
                 }
 
                 let ref_tag = self.read_pointer()?;
-                Ok(self.types_table.get(ref_tag as usize).cloned())
+                let result = self.types_table.get(ref_tag as usize);
+
+                if embedded {
+                    if let Some(res) = result {
+                        // We only want to include the first embedded reference tag, not subsequent references to the same embed
+                        if !self.seen_embedded_types.contains(&ref_tag) {
+                            self.object_table.push(Archivable::Type(res.clone()));
+                            self.seen_embedded_types.insert(ref_tag);
+                        }
+                    }
+                }
+
+                Ok(result.cloned())
             }
         }
     }
@@ -398,13 +415,14 @@ impl<'a> TypedStreamReader<'a> {
                     self.object_table.push(Archivable::Placeholder);
                     if let Some(object) = self.read_object()? {
                         match object.clone() {
-                            Archivable::Object(cls, data) => {
-                                // If this is a new class, i.e. one without any data, we handle it later
-                                // If the class already has data in it, we just want to use that class
-                                // And put the data we found inside of it
+                            Archivable::Object(_, data) => {
+                                // If this is a new object, i.e. one without any data, we add the data into it later
+                                // If the object already has data in it, we just want to return that object
                                 if !data.is_empty() {
-                                    self.object_table[length] =
-                                        Archivable::Object(cls.clone(), vec![]);
+                                    let result = Ok(Some(object.clone()));
+                                    self.placeholder = None;
+                                    self.object_table.pop();
+                                    return result;
                                 }
                                 out_v.extend(data)
                             }
@@ -454,7 +472,6 @@ impl<'a> TypedStreamReader<'a> {
             }
         }
 
-        // TODO: This, but only for non-objects? Clean this logic up
         if !out_v.is_empty() && !is_obj {
             return Ok(Some(Archivable::Data(out_v.clone())));
         }
@@ -513,10 +530,8 @@ impl<'a> TypedStreamReader<'a> {
                 continue;
             }
 
-
             // First, get the current type
             if let Some(found_types) = self.get_type(false)? {
-
                 let result = self.read_types(found_types);
                 if let Ok(Some(res)) = result {
                     out_v.push(res);

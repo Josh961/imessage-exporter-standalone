@@ -137,7 +137,7 @@ mod tests {
             placemark::{Placemark, PlacemarkMessage},
             variants::BalloonProvider,
         },
-        util::plist::parse_plist,
+        util::plist::parse_ns_keyed_archiver,
     };
     use plist::Value;
     use std::env::current_dir;
@@ -151,7 +151,7 @@ mod tests {
             .join("test_data/shared_placemark/SharedPlacemark.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let balloon = PlacemarkMessage::from_map(&parsed).unwrap();
         let expected = PlacemarkMessage {
@@ -183,7 +183,7 @@ mod tests {
             .join("test_data/shared_placemark/SharedPlacemark.plist");
         let plist_data = File::open(plist_path).unwrap();
         let plist = Value::from_reader(plist_data).unwrap();
-        let parsed = parse_plist(&plist).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
 
         let (placemark_data, _) = PlacemarkMessage::get_body_and_url(&parsed).unwrap();
 

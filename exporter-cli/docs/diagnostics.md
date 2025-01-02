@@ -24,6 +24,13 @@ Global diagnostic data:
     Total database size: 339.88 MB
     Duplicated contacts: 78
     Duplicated chats: 16
+
+Environment Diagnostics
+
+Detected converters:
+    Image converter: sips
+    Audio converter: afconvert
+    Video converter: ffmpeg
 ```
 
 ## Handle diagnostic data
@@ -91,3 +98,36 @@ Duplicated contacts occur when a single contact has multiple valid phone numbers
 ### Duplicated chats
 
 The number of separate chats that contain the same participants. See the [duplicates](/docs/tables/duplicates.md) for a detailed explanation of the logic used to determine this number.
+
+## Detected converters
+
+`imessage-exporter` uses third-party tools to convert images when using `--copy-method basic` or `--copy-method full`. This section shows what programs are detected on the current system.
+
+### Image converter
+
+The currently detected image converter, if present.
+
+One of:
+
+- `sips` (macOS Builtin)
+- `magick` (`imagemagick`)
+- None
+
+### Audio converter
+
+The currently detected audio converter, if present.
+
+One of:
+
+- `afconvert` (macOS Builtin)
+- `ffmpeg`
+- None
+
+### Video converter
+
+The currently detected video converter, if present.
+
+One of:
+
+- `ffmpeg`
+- None

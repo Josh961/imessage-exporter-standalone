@@ -1,4 +1,7 @@
-use std::collections::HashSet;
+/*!
+ Represents CLI options and validation logic.
+*/
+
 use std::path::PathBuf;
 
 use clap::{crate_version, Arg, ArgAction, ArgMatches, Command};
@@ -13,7 +16,9 @@ use imessage_database::{
 };
 
 use crate::app::{
-    attachment_manager::AttachmentManager, error::RuntimeError, export_type::ExportType,
+    compatibility::attachment_manager::{AttachmentManager, AttachmentManagerMode},
+    error::RuntimeError,
+    export_type::ExportType,
 };
 
 /// Default export directory name
@@ -33,13 +38,12 @@ pub const OPTION_CUSTOM_NAME: &str = "custom-name";
 pub const OPTION_PLATFORM: &str = "platform";
 pub const OPTION_BYPASS_FREE_SPACE_CHECK: &str = "ignore-disk-warning";
 pub const OPTION_USE_CALLER_ID: &str = "use-caller-id";
-pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
-pub const OPTION_PHONE_NUMBERS: &str = "phone-numbers";
+pub const OPTION_CONVERSATION_FILTER: &str = "conversation-filter";
 
 // Other CLI Text
 pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
 pub const SUPPORTED_PLATFORMS: &str = "macOS, iOS";
-pub const SUPPORTED_ATTACHMENT_MANAGER_MODES: &str = "compatible, efficient, disabled";
+pub const SUPPORTED_ATTACHMENT_MANAGER_MODES: &str = "clone, basic, full, disabled";
 pub const ABOUT: &str = concat!(
     "The `imessage-exporter` binary exports iMessage data to\n",
     "`txt` or `html` formats. It can also run diagnostics\n",
@@ -72,12 +76,8 @@ pub struct Options {
     pub platform: Platform,
     /// If true, disable the free disk space check
     pub ignore_disk_space: bool,
-    /// If true, list the contacts in the database
-    pub list_contacts: bool,
-    /// Individual numbers to filter messages
-    pub individual_numbers: Option<Vec<String>>,
-    /// Group numbers to filter messages
-    pub group_numbers: Option<Vec<HashSet<String>>>,
+    /// An optional filter for conversation participants
+    pub conversation_filter: Option<String>,
 }
 
 impl Options {
@@ -95,7 +95,7 @@ impl Options {
         let use_caller_id = args.get_flag(OPTION_USE_CALLER_ID);
         let platform_type: Option<&String> = args.get_one(OPTION_PLATFORM);
         let ignore_disk_space = args.get_flag(OPTION_BYPASS_FREE_SPACE_CHECK);
-        let list_contacts = args.get_flag(OPTION_LIST_CONTACTS);
+        let conversation_filter: Option<&String> = args.get_one(OPTION_CONVERSATION_FILTER);
 
         // Build the export type
         let export_type: Option<ExportType> = match export_file_type {
@@ -128,9 +128,19 @@ impl Options {
                 "Option {OPTION_END_DATE} is enabled, which requires `--{OPTION_EXPORT_TYPE}`"
             )));
         }
+        if custom_name.is_some() && export_file_type.is_none() {
+            return Err(RuntimeError::InvalidOptions(format!(
+                "Option {OPTION_CUSTOM_NAME} is enabled, which requires `--{OPTION_EXPORT_TYPE}`"
+            )));
+        }
         if use_caller_id && export_file_type.is_none() {
             return Err(RuntimeError::InvalidOptions(format!(
                 "Option {OPTION_USE_CALLER_ID} is enabled, which requires `--{OPTION_EXPORT_TYPE}`"
+            )));
+        }
+        if conversation_filter.is_some() && export_file_type.is_none() {
+            return Err(RuntimeError::InvalidOptions(format!(
+                "Option {OPTION_CONVERSATION_FILTER} is enabled, which requires `--{OPTION_EXPORT_TYPE}`"
             )));
         }
 
@@ -170,6 +180,16 @@ impl Options {
         if diagnostic && use_caller_id {
             return Err(RuntimeError::InvalidOptions(format!(
                 "Diagnostics are enabled; {OPTION_USE_CALLER_ID} is disallowed"
+            )));
+        }
+        if diagnostic && custom_name.is_some() {
+            return Err(RuntimeError::InvalidOptions(format!(
+                "Diagnostics are enabled; {OPTION_CUSTOM_NAME} is disallowed"
+            )));
+        }
+        if diagnostic && conversation_filter.is_some() {
+            return Err(RuntimeError::InvalidOptions(format!(
+                "Diagnostics are enabled; {OPTION_CONVERSATION_FILTER} is disallowed"
             )));
         }
 
@@ -228,81 +248,20 @@ impl Options {
         // Determine the attachment manager mode
         let attachment_manager_mode = match attachment_manager_type {
             Some(manager) => {
-                AttachmentManager::from_cli(manager).ok_or(RuntimeError::InvalidOptions(format!(
+                AttachmentManagerMode::from_cli(manager).ok_or(RuntimeError::InvalidOptions(format!(
                     "{manager} is not a valid attachment manager mode! Must be one of <{SUPPORTED_ATTACHMENT_MANAGER_MODES}>"
                 )))?
             }
-            None => AttachmentManager::default(),
+            None => AttachmentManagerMode::default(),
         };
 
         // Validate the provided export path
         let export_path = validate_path(user_export_path, &export_type.as_ref())?;
 
-        // Parse phone numbers directly into individual and group numbers
-        let raw_numbers: Vec<String> = args
-            .get_many::<String>(OPTION_PHONE_NUMBERS)
-            .map(|values| values.cloned().collect())
-            .unwrap_or_default();
-
-        // Print the raw numbers for debugging
-        println!("Raw phone numbers: {:?}", raw_numbers);
-
-        let (individual_numbers, group_numbers) = parse_phone_numbers(raw_numbers)?;
-
-        // Print the parsed phone numbers
-        println!("Individual numbers: {:?}", individual_numbers);
-        println!("Group numbers: {:?}", group_numbers);
-
-        // Validate phone number filters if provided
-        if let Some(ref numbers) = individual_numbers {
-            if numbers.is_empty() {
-                return Err(RuntimeError::InvalidOptions(
-                    "Individual phone numbers filter cannot be empty".to_string(),
-                ));
-            }
-            // Check each number is valid
-            for number in numbers {
-                if number.is_empty() {
-                    return Err(RuntimeError::InvalidOptions(
-                        "Phone numbers cannot be empty".to_string(),
-                    ));
-                }
-            }
-        }
-
-        if let Some(ref groups) = group_numbers {
-            if groups.is_empty() {
-                return Err(RuntimeError::InvalidOptions(
-                    "Group phone numbers filter cannot be empty".to_string(),
-                ));
-            }
-            // Check each group is valid
-            for group in groups {
-                if group.is_empty() {
-                    return Err(RuntimeError::InvalidOptions(
-                        "Group phone numbers cannot be empty".to_string(),
-                    ));
-                }
-                if group.len() < 2 {
-                    return Err(RuntimeError::InvalidOptions(
-                        "Groups must contain at least 2 phone numbers".to_string(),
-                    ));
-                }
-                // Check each number in group is valid
-                for number in group {
-                    if number.is_empty() {
-                        return Err(RuntimeError::InvalidOptions(
-                            "Phone numbers cannot be empty".to_string(),
-                        ));
-                    }
-                }
-            }
-        }
-
         Ok(Options {
             db_path,
             attachment_root: attachment_root.cloned(),
-            attachment_manager: attachment_manager_mode,
+            attachment_manager: AttachmentManager::from(attachment_manager_mode),
             diagnostic,
             export_type,
             export_path,
@@ -312,9 +271,7 @@ impl Options {
             use_caller_id,
             platform,
             ignore_disk_space,
-            list_contacts,
-            individual_numbers,
-            group_numbers,
+            conversation_filter: conversation_filter.cloned(),
         })
     }
 
@@ -375,81 +332,6 @@ fn validate_path(
     Ok(resolved_path)
 }
 
-/// Parse phone numbers into individual and group sets
-///
-/// Individual numbers are single phone numbers that will match 1-on-1 chats
-/// Group numbers are sets of phone numbers that will match group chats with exactly those participants
-///
-/// # Examples
-///
-/// ```
-/// // Individual number
-/// -n 1234567890
-///
-/// // Group chat with exactly these 3 participants
-/// -n "1234567890,9876543210,5555555555"
-///
-/// // Multiple filters
-/// -n 1234567890 -n "9876543210,5555555555"
-/// ```
-fn parse_phone_numbers(
-    phone_numbers: Vec<String>,
-) -> Result<(Option<Vec<String>>, Option<Vec<HashSet<String>>>), RuntimeError> {
-    if phone_numbers.is_empty() {
-        return Ok((None, None));
-    }
-
-    let mut individual = Vec::new();
-    let mut groups = Vec::new();
-
-    for number_set in phone_numbers {
-        // If the number contains a comma, treat it as a group
-        if number_set.contains(',') {
-            let numbers: Vec<&str> = number_set.split(',').map(|s| s.trim()).collect();
-            let group: HashSet<String> = numbers
-                .into_iter()
-                .map(|n| normalize_phone_number(n))
-                .collect();
-            groups.push(group);
-        } else {
-            // This is an individual number
-            individual.push(normalize_phone_number(&number_set));
-        }
-    }
-
-    let individual_option = if !individual.is_empty() {
-        Some(individual)
-    } else {
-        None
-    };
-
-    let groups_option = if !groups.is_empty() {
-        Some(groups)
-    } else {
-        None
-    };
-
-    Ok((individual_option, groups_option))
-}
-
-/// Normalize a phone number or email by removing non-digit characters from phone numbers
-/// and leaving emails unchanged
-///
-/// # Examples
-///
-/// ```
-/// assert_eq!(normalize_phone_number("+1 (555) 867-5309"), "15558675309");
-/// assert_eq!(normalize_phone_number("555.867.5309"), "5558675309");
-/// assert_eq!(normalize_phone_number("user@example.com"), "user@example.com");
-/// ```
-fn normalize_phone_number(number: &str) -> String {
-    if number.contains('@') {
-        number.to_string()
-    } else {
-        number.chars().filter(|c| c.is_ascii_digit()).collect()
-    }
-}
-
 /// Build the command line argument parser
 fn get_command() -> Command {
     Command::new("iMessage Exporter")
@@ -476,7 +358,7 @@ fn get_command() -> Command {
             Arg::new(OPTION_ATTACHMENT_MANAGER)
             .short('c')
             .long(OPTION_ATTACHMENT_MANAGER)
-            .help(format!("Specify an optional method to use when copying message attachments\nCompatible will convert HEIC files to JPEG\nEfficient will copy files without converting anything\nIf omitted, the default is `{}`\nImageMagick is required to convert images on non-macOS platforms.\n", AttachmentManager::default()))
+            .help(format!("Specify an optional method to use when copying message attachments\n`clone` will copy all files without converting anything\n`basic` will copy all files and convert HEIC images to JPEG\n`full` will copy all files and convert HEIC files to JPEG, CAF to MP4, and MOV to MP4\nIf omitted, the default is `{}`\nImageMagick is required to convert images on non-macOS platforms\nffmpeg is required to convert audio on non-macOS platforms and video on all platforms\n", AttachmentManagerMode::default()))
             .display_order(2)
             .value_name(SUPPORTED_ATTACHMENT_MANAGER_MODES),
         )
@@ -560,24 +442,38 @@ fn get_command() -> Command {
                 .display_order(12)
         )
         .arg(
-            Arg::new(OPTION_LIST_CONTACTS)
+            Arg::new(OPTION_CONVERSATION_FILTER)
                 .short('t')
-                .long(OPTION_LIST_CONTACTS)
-                .help("List all contacts and group chats in the database\n")
-                .action(ArgAction::SetTrue)
-                .conflicts_with_all(&[OPTION_EXPORT_TYPE])
+                .long(OPTION_CONVERSATION_FILTER)
+                .help("Filter exported conversations by contact numbers or emails\nTo provide multiple filter criteria, use a comma-separated string\nAll conversations with the specified participants are exported, including group conversations\nExample: `-t steve@apple.com,5558675309`\n")
+                .value_name("filter")
                 .display_order(13)
         )
-        .arg(
-            Arg::new(OPTION_PHONE_NUMBERS)
-            .short('n')
-            .long(OPTION_PHONE_NUMBERS)
-            .help("Export messages for these phone numbers only. For group chats, provide all numbers separated by commas.")
-            .value_name("phone_numbers")
-            .num_args(1..)
-            .action(ArgAction::Append)
-            .display_order(14)
-        )
+}
+
+#[cfg(test)]
+impl Options {
+    pub fn fake_options(export_type: ExportType) -> Options {
+        Options {
+            db_path: std::env::current_dir()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("imessage-database/test_data/db/test.db"),
+            attachment_root: None,
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+            diagnostic: false,
+            export_type: Some(export_type),
+            export_path: PathBuf::from("/tmp"),
+            query_context: QueryContext::default(),
+            no_lazy: false,
+            custom_name: None,
+            use_caller_id: false,
+            platform: Platform::macOS,
+            ignore_disk_space: false,
+            conversation_filter: None,
+        }
+    }
 }
 
 /// Parse arguments from the command line
@@ -594,7 +490,7 @@ mod arg_tests {
     };
 
     use crate::app::{
-        attachment_manager::AttachmentManager,
+        compatibility::attachment_manager::{AttachmentManager, AttachmentManagerMode},
         export_type::ExportType,
         options::{get_command, validate_path, Options},
     };
@@ -613,7 +509,7 @@ mod arg_tests {
         let expected = Options {
             db_path: default_db_path(),
             attachment_root: None,
-            attachment_manager: AttachmentManager::default(),
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: true,
             export_type: None,
             export_path: validate_path(None, &None).unwrap(),
@@ -623,9 +519,7 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
+            conversation_filter: None,
         };
 
         assert_eq!(actual, expected);
@@ -660,7 +554,7 @@ mod arg_tests {
     #[test]
     fn cant_build_option_diagnostic_flag_with_attachment_manager() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-d", "-c", "compatible"];
+        let cli_args: Vec<&str> = vec!["imessage-exporter", "-d", "-c", "basic"];
         let command = get_command();
         let args = command.get_matches_from(cli_args);
 
@@ -727,7 +621,7 @@ mod arg_tests {
         let expected = Options {
             db_path: default_db_path(),
             attachment_root: None,
-            attachment_manager: AttachmentManager::default(),
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
             export_type: Some(ExportType::Html),
             export_path: validate_path(Some(&tmp_dir), &None).unwrap(),
@@ -737,9 +631,7 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
+            conversation_filter: None,
         };
 
         assert_eq!(actual, expected);
@@ -762,7 +654,7 @@ mod arg_tests {
         let expected = Options {
             db_path: default_db_path(),
             attachment_root: None,
-            attachment_manager: AttachmentManager::default(),
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
@@ -772,9 +664,7 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
+            conversation_filter: None,
         };
 
         assert_eq!(actual, expected);
@@ -783,7 +673,7 @@ mod arg_tests {
     #[test]
     fn cant_build_option_attachment_manager_no_export_type() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-c", "compatible"];
+        let cli_args: Vec<&str> = vec!["imessage-exporter", "-c", "clone"];
         let command = get_command();
         let args = command.get_matches_from(cli_args);
 
@@ -885,7 +775,7 @@ mod arg_tests {
         let expected = Options {
             db_path: default_db_path(),
             attachment_root: None,
-            attachment_manager: AttachmentManager::default(),
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
@@ -895,9 +785,7 @@ mod arg_tests {
             use_caller_id: false,
             platform: Platform::default(),
             ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
+            conversation_filter: None,
         };
 
         assert_eq!(actual, expected);
@@ -917,7 +805,7 @@ mod arg_tests {
         let expected = Options {
             db_path: default_db_path(),
             attachment_root: None,
-            attachment_manager: AttachmentManager::default(),
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
@@ -927,9 +815,97 @@ mod arg_tests {
             use_caller_id: true,
             platform: Platform::default(),
             ignore_disk_space: false,
-            list_contacts: false,
-            individual_numbers: None,
-            group_numbers: None,
+            conversation_filter: None,
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_build_option_contact_filter() {
+        // Get matches from sample args
+        let cli_args: Vec<&str> = vec!["imessage-exporter", "-t", "steve@apple.com", "-f", "txt"];
+        let command = get_command();
+        let args = command.get_matches_from(cli_args);
+
+        // Build the Options
+        let actual = Options::from_args(&args).unwrap();
+
+        // Expected data
+        let expected = Options {
+            db_path: default_db_path(),
+            attachment_root: None,
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+            diagnostic: false,
+            export_type: Some(ExportType::Txt),
+            export_path: validate_path(None, &None).unwrap(),
+            query_context: QueryContext::default(),
+            no_lazy: false,
+            custom_name: None,
+            use_caller_id: false,
+            platform: Platform::default(),
+            ignore_disk_space: false,
+            conversation_filter: Some(String::from("steve@apple.com")),
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_build_option_full() {
+        // Get matches from sample args
+        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "txt", "-c", "full"];
+        let command = get_command();
+        let args = command.get_matches_from(cli_args);
+
+        // Build the Options
+        let actual = Options::from_args(&args).unwrap();
+
+        // Expected data
+        let expected = Options {
+            db_path: default_db_path(),
+            attachment_root: None,
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Full),
+            diagnostic: false,
+            export_type: Some(ExportType::Txt),
+            export_path: validate_path(None, &None).unwrap(),
+            query_context: QueryContext::default(),
+            no_lazy: false,
+            custom_name: None,
+            use_caller_id: false,
+            platform: Platform::default(),
+            ignore_disk_space: false,
+            conversation_filter: None,
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_build_option_clone() {
+        // Get matches from sample args
+        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "txt", "-c", "clone"];
+        let command = get_command();
+        let args = command.get_matches_from(cli_args);
+
+        // Build the Options
+        let actual = Options::from_args(&args).unwrap();
+
+        // Expected data
+        let expected = Options {
+            db_path: default_db_path(),
+            attachment_root: None,
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Clone),
+            diagnostic: false,
+            export_type: Some(ExportType::Txt),
+            export_path: validate_path(None, &None).unwrap(),
+            query_context: QueryContext::default(),
+            no_lazy: false,
+            custom_name: None,
+            use_caller_id: false,
+            platform: Platform::default(),
+            ignore_disk_space: false,
+            conversation_filter: None,
         };
 
         assert_eq!(actual, expected);
@@ -951,7 +927,33 @@ mod arg_tests {
     #[test]
     fn cant_build_option_caller_id_no_export() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "txt", "-m", "Name", "-i"];
+        let cli_args: Vec<&str> = vec!["imessage-exporter", "-i"];
+        let command = get_command();
+        let args = command.get_matches_from(cli_args);
+
+        // Build the Options
+        let actual = Options::from_args(&args);
+
+        assert!(actual.is_err());
+    }
+
+    #[test]
+    fn cant_build_option_custom_name_no_export() {
+        // Get matches from sample args
+        let cli_args: Vec<&str> = vec!["imessage-exporter", "-m", "Name"];
+        let command = get_command();
+        let args = command.get_matches_from(cli_args);
+
+        // Build the Options
+        let actual = Options::from_args(&args);
+
+        assert!(actual.is_err());
+    }
+
+    #[test]
+    fn cant_build_option_contact_filter_no_export() {
+        // Get matches from sample args
+        let cli_args: Vec<&str> = vec!["imessage-exporter", "-t", "steve@apple.com"];
         let command = get_command();
         let args = command.get_matches_from(cli_args);
 

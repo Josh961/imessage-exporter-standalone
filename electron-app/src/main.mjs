@@ -184,7 +184,7 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
   const chatDbPath = getChatDbPath(inputFolder);
 
   return new Promise((resolve) => {
-    exec(`"${executablePath}" -p "${chatDbPath}" -t`, (error, stdout, stderr) => {
+    exec(`"${executablePath}" -b -p "${chatDbPath}" -n`, (error, stdout, stderr) => {
       if (error) {
         resolve({ success: false, error: error.message });
       } else {
@@ -209,14 +209,15 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
     const executablePath = getResourcePath();
     const chatDbPath = getChatDbPath(inputFolder);
 
-    let params = `-f txt -c compatible -p "${chatDbPath}" -o "${uniqueTempFolder}"`;
+    let params = `-f txt -c basic -b -v -p "${chatDbPath}" -o "${uniqueTempFolder}"`;
     if (startDate) params += ` -s ${startDate}`;
     if (endDate) params += ` -e ${endDate}`;
 
     if (selectedContacts && selectedContacts.length > 0) {
-      selectedContacts.forEach(contact => {
-        params += contact.includes(',') ? ` -n "${contact}"` : ` -n ${contact}`;
-      });
+      const contactsString = selectedContacts.map(contact =>
+        contact.includes(',') ? `"${contact}"` : contact
+      ).join(';');
+      params += ` -t "${contactsString}"`;
     }
 
     return new Promise((resolve) => {

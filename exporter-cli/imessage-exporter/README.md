@@ -104,6 +104,11 @@ The [releases page](https://github.com/ReagentX/imessage-exporter/releases) prov
         Example for one group: `-t 5558675309,5551234567,5559876543`
         Example for multiple groups: `-t 5558675309,5551234567;5559876543,5552345678`
         
+-v, --images-only
+        Only include image attachments in the export
+        Includes images, GIFs, and HEIC sequences
+        Skips videos, audio, and other file types
+        
 -h, --help
         Print help
 -V, --version

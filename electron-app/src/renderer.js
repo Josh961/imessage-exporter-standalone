@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     clearAllGroup: document.querySelector('.clear-all-group'),
     selectedContactsCount: document.getElementById('selected-contacts-count'),
     selectedContactsCountTwo: document.getElementById('selected-contacts-count-two'),
+    contactSearch: document.getElementById('contact-search'),
     permissionsModal: document.getElementById('permissions-modal'),
     openSystemPreferencesButton: document.getElementById('open-system-preferences'),
     checkPermissionsButton: document.getElementById('check-permissions'),
@@ -234,6 +235,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.selectAllGroup.addEventListener('click', () => selectAll('GROUP'));
     elements.clearAllGroup.addEventListener('click', () => clearAll('GROUP'));
 
+    elements.contactSearch.addEventListener('input', (e) => {
+      const searchTerm = e.target.value.toLowerCase().replace(/[()-\s]/g, '');
+      const rows = [...elements.individualChatsBody.querySelectorAll('tr'), ...elements.groupChatsBody.querySelectorAll('tr')];
+      
+      rows.forEach(row => {
+        const label = row.querySelector('label');
+        if (label) {
+          const text = label.textContent.toLowerCase().replace(/[()-\s]/g, '');
+          const participants = label.dataset.participants ? label.dataset.participants.toLowerCase().replace(/[()-\s]/g, '') : '';
+          row.style.display = text.includes(searchTerm) || participants.includes(searchTerm) ? '' : 'none';
+        }
+      });
+    });
+
     elements.contactsModal.addEventListener('click', (e) => {
       if (!elements.contactsModalContent.contains(e.target)) {
         closeContactsModal();
@@ -261,6 +276,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderContacts();
       updateSelectedContactsCount();
       elements.contactsModal.classList.remove('hidden');
+      
+      // Reapply search filter if there's a search term
+      const searchTerm = elements.contactSearch.value;
+      if (searchTerm) {
+        const event = new Event('input');
+        elements.contactSearch.dispatchEvent(event);
+      }
     } else {
       alert(`Failed to list contacts: ${result.error}`);
     }

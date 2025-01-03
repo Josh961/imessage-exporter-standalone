@@ -607,7 +607,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.includeVideos.checked = localStorage.getItem('includeVideos') === 'true';
     includeVideos = elements.includeVideos.checked;
 
-    elements.debugMode.checked = localStorage.getItem('debugMode') === 'true';
+    elements.debugMode.checked = localStorage.getItem('debugMode') === 'true' || false;
     debugMode = elements.debugMode.checked;
 
     elements.includeVideos.addEventListener('change', (e) => {

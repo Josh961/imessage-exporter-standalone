@@ -18,6 +18,16 @@
           </svg>
         </button>
       </div>
+      <button id="settings-button" class="absolute right-3 top-3 text-slate-700 hover:text-slate-800 focus:outline-none">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+      </button>
       <span class="mt-2 block text-center text-2xl text-slate-800">
         A free tool from <a href="#" id="website-link" class="font-bold text-sky-500 hover:text-sky-400">My Forever Books</a>
       </span>
@@ -256,6 +266,39 @@
               id="restart-app"
               class="hidden w-full rounded border border-green-500 bg-white px-4 py-2 font-semibold text-green-600 hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
               Restart app
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="settings-modal" class="fixed inset-0 z-10 hidden overflow-y-auto">
+      <div class="flex min-h-screen items-end justify-center px-4 pb-20 pt-4 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+          <div class="absolute inset-0 bg-slate-500 opacity-75"></div>
+        </div>
+        <span class="hidden sm:inline-block sm:h-screen sm:align-middle" aria-hidden="true">&#8203;</span>
+        <div
+          id="settings-modal-content"
+          class="inline-block transform overflow-hidden rounded-lg bg-white text-left align-bottom shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:align-middle">
+          <div class="bg-white px-4 pb-4 pt-5 sm:p-6 sm:pb-4">
+            <div class="sm:flex sm:items-start">
+              <div class="mt-3 text-left sm:ml-4 sm:mt-0">
+                <span class="text-lg font-medium leading-6 text-slate-900" id="modal-title">Export Settings</span>
+                <div class="mt-4 flex flex-col gap-3">
+                  <label class="inline-flex items-center">
+                    <input type="checkbox" id="include-videos" class="form-checkbox h-5 w-5 text-sky-500" />
+                    <span class="ml-2 text-sm text-slate-500">Include videos in export (may increase file size significantly)</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="bg-white px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
+            <button
+              id="close-settings"
+              type="button"
+              class="mt-3 inline-flex w-full justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-base font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none sm:ml-3 sm:mt-0 sm:w-auto sm:text-sm">
+              Close
             </button>
           </div>
         </div>

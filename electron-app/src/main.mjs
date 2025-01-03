@@ -201,7 +201,7 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
 });
 
 ipcMain.handle('run-exporter', async (event, exportParams) => {
-  const { inputFolder, outputFolder, startDate, endDate, selectedContacts } = exportParams;
+  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, includeVideos } = exportParams;
 
   try {
     const uniqueTempFolder = await createUniqueFolder(outputFolder);
@@ -209,7 +209,7 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
     const executablePath = getResourcePath();
     const chatDbPath = getChatDbPath(inputFolder);
 
-    let params = `-f txt -c basic -b -v -p "${chatDbPath}" -o "${uniqueTempFolder}"`;
+    let params = `-f txt -c basic -b${!includeVideos ? ' -v' : ''} -p "${chatDbPath}" -o "${uniqueTempFolder}"`;
     if (startDate) params += ` -s ${startDate}`;
     if (endDate) params += ` -e ${endDate}`;
 

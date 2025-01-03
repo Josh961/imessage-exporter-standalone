@@ -38,13 +38,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     checkPermissionsButton: document.getElementById('check-permissions'),
     restartAppButton: document.getElementById('restart-app'),
     permissionsInstructions: document.getElementById('permissions-instructions'),
-    permissionsGranted: document.getElementById('permissions-granted')
+    permissionsGranted: document.getElementById('permissions-granted'),
+    settingsButton: document.getElementById('settings-button'),
+    settingsModal: document.getElementById('settings-modal'),
+    settingsModalContent: document.getElementById('settings-modal-content'),
+    closeSettings: document.getElementById('close-settings'),
+    includeVideos: document.getElementById('include-videos'),
   };
 
   // State
   let contacts = [];
   let selectedContacts = new Set();
   let expandedSections = { individual: true, group: true };
+  let includeVideos = false;
 
   // Initialization
   initializeDateInputs();
@@ -153,6 +159,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupContactSelectionListeners();
     setupExportButtonListener();
     setupPermissionsModalListeners();
+    setupSettingsListeners();
   }
 
   function setupPermissionsModalListeners() {
@@ -406,12 +413,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         selectedContacts: Array.from(selectedContacts).map(contact => {
           const contactData = contacts.find(c => (c.displayName || c.contact) === contact);
           if (contactData && contactData.type === 'GROUP') {
-            // For group chats, return an array of participants
             return contactData.participants.split(',').map(p => p.trim());
           }
-          // For individual contacts, return the contact as is
           return contact;
-        })
+        }),
+        includeVideos: includeVideos
       };
 
       const result = await window.electronAPI.runExporter(exportParams);
@@ -501,4 +507,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     e.preventDefault();
     window.electronAPI.openExternalLink('https://myforeverbooks.com');
   });
+
+  function setupSettingsListeners() {
+    elements.settingsButton.addEventListener('click', openSettingsModal);
+    elements.closeSettings.addEventListener('click', closeSettingsModal);
+    elements.settingsModal.addEventListener('click', (e) => {
+      if (!elements.settingsModalContent.contains(e.target)) {
+        closeSettingsModal();
+      }
+    });
+
+    // Load saved preference
+    elements.includeVideos.checked = localStorage.getItem('includeVideos') === 'true';
+    includeVideos = elements.includeVideos.checked;
+
+    elements.includeVideos.addEventListener('change', (e) => {
+      includeVideos = e.target.checked;
+      localStorage.setItem('includeVideos', includeVideos);
+    });
+  }
+
+  function openSettingsModal() {
+    elements.settingsModal.classList.remove('hidden');
+  }
+
+  function closeSettingsModal() {
+    elements.settingsModal.classList.add('hidden');
+  }
 });

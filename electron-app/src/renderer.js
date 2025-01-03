@@ -44,6 +44,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     settingsModalContent: document.getElementById('settings-modal-content'),
     closeSettings: document.getElementById('close-settings'),
     includeVideos: document.getElementById('include-videos'),
+    debugMode: document.getElementById('debug-mode'),
   };
 
   // State
@@ -51,6 +52,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let selectedContacts = new Set();
   let expandedSections = { individual: true, group: true };
   let includeVideos = false;
+  let debugMode = false;
 
   // Initialization
   initializeDateInputs();
@@ -417,7 +419,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
           return contact;
         }),
-        includeVideos: includeVideos
+        includeVideos: includeVideos,
+        debugMode: debugMode
       };
 
       const result = await window.electronAPI.runExporter(exportParams);
@@ -517,13 +520,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
 
-    // Load saved preference
+    // Load saved preferences
     elements.includeVideos.checked = localStorage.getItem('includeVideos') === 'true';
     includeVideos = elements.includeVideos.checked;
+
+    elements.debugMode.checked = localStorage.getItem('debugMode') === 'true';
+    debugMode = elements.debugMode.checked;
 
     elements.includeVideos.addEventListener('change', (e) => {
       includeVideos = e.target.checked;
       localStorage.setItem('includeVideos', includeVideos);
+    });
+
+    elements.debugMode.addEventListener('change', (e) => {
+      debugMode = e.target.checked;
+      localStorage.setItem('debugMode', debugMode);
     });
   }
 

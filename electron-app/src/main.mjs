@@ -201,7 +201,7 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
 });
 
 ipcMain.handle('run-exporter', async (event, exportParams) => {
-  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, includeVideos } = exportParams;
+  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, includeVideos, debugMode } = exportParams;
 
   try {
     const uniqueTempFolder = await createUniqueFolder(outputFolder);
@@ -220,13 +220,22 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
       params += ` -t "${contactsString}"`;
     }
 
+    const command = `"${executablePath}" ${params}`;
+
     return new Promise((resolve) => {
-      exec(`"${executablePath}" ${params}`, async (error, stdout, stderr) => {
+      exec(command, async (error, stdout, stderr) => {
         if (error) {
           resolve({ success: false, error: error.message });
         } else {
           try {
             await sanitizeFileNames(uniqueTempFolder);
+
+            // Create debug log if debug mode is enabled
+            if (debugMode) {
+              const logContent = `Command: ${command}\n\nOutput:\n${stdout}\n\nErrors:\n${stderr}`;
+              await fs.writeFile(path.join(uniqueTempFolder, 'debug.log'), logContent);
+            }
+
             const finalZipPath = await zipFolder(uniqueTempFolder, uniqueZipPath);
             resolve({ success: true, zipPath: finalZipPath });
           } catch (err) {

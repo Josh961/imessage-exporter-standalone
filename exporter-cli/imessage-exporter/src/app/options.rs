@@ -39,6 +39,7 @@ pub const OPTION_PLATFORM: &str = "platform";
 pub const OPTION_BYPASS_FREE_SPACE_CHECK: &str = "ignore-disk-warning";
 pub const OPTION_USE_CALLER_ID: &str = "use-caller-id";
 pub const OPTION_CONVERSATION_FILTER: &str = "conversation-filter";
+pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
 
 // Other CLI Text
 pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
@@ -60,6 +61,8 @@ pub struct Options {
     pub attachment_manager: AttachmentManager,
     /// If true, emit diagnostic information to stdout
     pub diagnostic: bool,
+    /// If true, list all contacts and group chats
+    pub list_contacts: bool,
     /// The type of file we are exporting data to
     pub export_type: Option<ExportType>,
     /// Where the app will save exported data
@@ -86,6 +89,7 @@ impl Options {
         let attachment_root: Option<&String> = args.get_one(OPTION_ATTACHMENT_ROOT);
         let attachment_manager_type: Option<&String> = args.get_one(OPTION_ATTACHMENT_MANAGER);
         let diagnostic = args.get_flag(OPTION_DIAGNOSTIC);
+        let list_contacts = args.get_flag(OPTION_LIST_CONTACTS);
         let export_file_type: Option<&String> = args.get_one(OPTION_EXPORT_TYPE);
         let user_export_path: Option<&String> = args.get_one(OPTION_EXPORT_PATH);
         let start_date: Option<&String> = args.get_one(OPTION_START_DATE);
@@ -263,6 +267,7 @@ impl Options {
             attachment_root: attachment_root.cloned(),
             attachment_manager: AttachmentManager::from(attachment_manager_mode),
             diagnostic,
+            list_contacts,
             export_type,
             export_path,
             query_context,
@@ -345,6 +350,14 @@ fn get_command() -> Command {
             .help("Print diagnostic information and exit\n")
             .action(ArgAction::SetTrue)
             .display_order(0),
+        )
+        .arg(
+            Arg::new(OPTION_LIST_CONTACTS)
+                .short('n')
+                .long(OPTION_LIST_CONTACTS)
+                .help("List all contacts and group chats with message counts and latest dates\n")
+                .action(ArgAction::SetTrue)
+                .display_order(1),
         )
         .arg(
             Arg::new(OPTION_EXPORT_TYPE)
@@ -463,6 +476,7 @@ impl Options {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(export_type),
             export_path: PathBuf::from("/tmp"),
             query_context: QueryContext::default(),
@@ -511,6 +525,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: true,
+            list_contacts: false,
             export_type: None,
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -623,6 +638,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Html),
             export_path: validate_path(Some(&tmp_dir), &None).unwrap(),
             query_context: QueryContext::default(),
@@ -656,6 +672,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -777,6 +794,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -807,6 +825,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -837,6 +856,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -867,6 +887,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Full),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -897,6 +918,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Clone),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),

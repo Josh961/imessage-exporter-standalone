@@ -406,6 +406,9 @@ impl Config {
     pub fn start(&self) -> Result<(), RuntimeError> {
         if self.options.diagnostic {
             self.run_diagnostic().map_err(RuntimeError::DatabaseError)?;
+        } else if self.options.list_contacts {
+            self.list_contacts_and_chats()
+                .map_err(RuntimeError::DatabaseError)?;
         } else if let Some(export_type) = &self.options.export_type {
             // Ensure that if we want to filter on things, we have stuff to filter for
             if let Some(filters) = &self.options.conversation_filter {
@@ -446,7 +449,105 @@ impl Config {
                 }
             }
         }
-        println!("Done!");
+        Ok(())
+    }
+
+    /// List all contacts and group chats with message counts and latest dates
+    fn list_contacts_and_chats(&self) -> Result<(), TableError> {
+        use imessage_database::util::dates::{format, get_local_time};
+
+        // Get message counts and latest dates for each chat
+        let sql = "
+            SELECT
+                chat.rowid as chat_id,
+                chat.display_name,
+                chat.chat_identifier,
+                COUNT(DISTINCT message.ROWID) as message_count,
+                MAX(message.date) as last_message_date,
+                GROUP_CONCAT(DISTINCT handle.id) as participants
+            FROM chat
+            JOIN chat_message_join ON chat.ROWID = chat_message_join.chat_id
+            JOIN message ON chat_message_join.message_id = message.ROWID
+            LEFT JOIN chat_handle_join ON chat.ROWID = chat_handle_join.chat_id
+            LEFT JOIN handle ON chat_handle_join.handle_id = handle.ROWID
+            GROUP BY chat.ROWID
+            HAVING message_count >= 1
+            ORDER BY last_message_date DESC
+        ";
+
+        // First get all the rows
+        let mut stmt = self.db.prepare(sql).map_err(TableError::Chat)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i32>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i32>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            })
+            .map_err(TableError::Chat)?;
+
+        // Collect all rows into a Vec to avoid multiple queries
+        let all_chats: Vec<_> = rows.collect::<Result<_, _>>().map_err(TableError::Chat)?;
+
+        // Count individual and group chats
+        let mut individual_count = 0;
+        let mut group_count = 0;
+
+        for (_, _, _, _, _, participants) in &all_chats {
+            let participants = participants.clone().unwrap_or_default();
+            let participant_count = participants.split(',').count();
+            if participant_count > 1 {
+                group_count += 1;
+            } else {
+                individual_count += 1;
+            }
+        }
+
+        println!("Total DMs: {}", individual_count);
+        println!("Total Group Chats: {}", group_count);
+        println!("Total Chats: {}", individual_count + group_count);
+
+        // First pass - print individual chats
+        for (_, display_name, chat_identifier, message_count, last_message_date, participants) in
+            &all_chats
+        {
+            let participants = participants.clone().unwrap_or_default();
+            let participant_count = participants.split(',').count();
+
+            if participant_count == 1 {
+                let date = get_local_time(last_message_date, &self.offset)
+                    .map(|d| format(&Ok(d)))
+                    .unwrap_or_else(|_| String::from("Unknown"));
+                println!("CONTACT|{}|{}|{}", participants, message_count, date);
+            }
+        }
+
+        // Second pass - print group chats
+        for (_, display_name, chat_identifier, message_count, last_message_date, participants) in
+            &all_chats
+        {
+            let participants = participants.clone().unwrap_or_default();
+            let participant_count = participants.split(',').count();
+
+            if participant_count > 1 {
+                let name = display_name.clone().unwrap_or(chat_identifier.clone());
+                let name = if name.is_empty() {
+                    chat_identifier.clone()
+                } else {
+                    name
+                };
+                let date = get_local_time(last_message_date, &self.offset)
+                    .map(|d| format(&Ok(d)))
+                    .unwrap_or_else(|_| String::from("Unknown"));
+
+                println!("GROUP|{}|{}|{}|{}", name, message_count, date, participants);
+            }
+        }
+
         Ok(())
     }
 

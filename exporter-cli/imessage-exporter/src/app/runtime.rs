@@ -361,6 +361,10 @@ impl Config {
             }
 
             println!("\nTotal chatrooms found: {:?}", all_included_chatrooms);
+            if all_included_chatrooms.is_empty() {
+                println!("No chatrooms were found with the supplied contacts.");
+                std::process::exit(0);
+            }
 
             self.options
                 .query_context

@@ -398,6 +398,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   function toggleSection(section) {
     expandedSections[section] = !expandedSections[section];
     renderContacts();
+
+    // Reapply search filter if there's a search term
+    const searchTerm = elements.contactSearch.value;
+    if (searchTerm) {
+      const event = new Event('input');
+      elements.contactSearch.dispatchEvent(event);
+    }
   }
 
   function selectAll(type) {

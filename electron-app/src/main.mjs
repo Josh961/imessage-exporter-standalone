@@ -228,6 +228,11 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
           resolve({ success: false, error: error.message });
         } else {
           try {
+            if (stdout.includes('No chatrooms were found with the supplied contacts.')) {
+              resolve({ success: false, error: 'No chats were found with the supplied contacts.' });
+              return;
+            }
+
             await sanitizeFileNames(uniqueTempFolder);
 
             // Create debug log if debug mode is enabled

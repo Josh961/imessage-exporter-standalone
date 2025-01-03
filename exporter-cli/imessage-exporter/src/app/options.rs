@@ -458,7 +458,7 @@ fn get_command() -> Command {
             Arg::new(OPTION_CONVERSATION_FILTER)
                 .short('t')
                 .long(OPTION_CONVERSATION_FILTER)
-                .help("Filter exported conversations by contact numbers or emails\nTo provide multiple filter criteria, use a comma-separated string\nAll conversations with the specified participants are exported, including group conversations\nExample: `-t steve@apple.com,5558675309`\n")
+                .help("Filter exported conversations by contact numbers or emails\nFor a single number, exports just that DM conversation\nFor multiple numbers in one group (comma-separated), exports the group chat with exactly those participants\nFor multiple groups, separate them with semicolons\nExample for one DM: `-t 5558675309`\nExample for one group: `-t 5558675309,5551234567,5559876543`\nExample for multiple groups: `-t 5558675309,5551234567;5559876543,5552345678`\n")
                 .value_name("filter")
                 .display_order(13)
         )

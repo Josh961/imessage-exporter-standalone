@@ -97,9 +97,12 @@ The [releases page](https://github.com/ReagentX/imessage-exporter/releases) prov
         
 -t, --conversation-filter <filter>
         Filter exported conversations by contact numbers or emails
-        To provide multiple filter criteria, use a comma-separated string
-        All conversations with the specified participants are exported, including group conversations
-        Example: `-t steve@apple.com,5558675309`
+        For a single number, exports just that DM conversation
+        For multiple numbers in one group (comma-separated), exports the group chat with exactly those participants
+        For multiple groups, separate them with semicolons
+        Example for one DM: `-t 5558675309`
+        Example for one group: `-t 5558675309,5551234567,5559876543`
+        Example for multiple groups: `-t 5558675309,5551234567;5559876543,5552345678`
         
 -h, --help
         Print help

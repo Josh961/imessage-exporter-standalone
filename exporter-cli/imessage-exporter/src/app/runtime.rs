@@ -237,44 +237,138 @@ impl Config {
         })
     }
 
-    /// Convert comma separated list of participant strings into table chat IDs using
+    /// Convert semicolon-separated groups of comma-separated participant strings into table chat IDs using:
     ///   1) filter `self.participant` keys based on the values (by comparing to user values)
-    ///   2) get the chat IDs keys from `self.chatroom_participants` for values that contain the selected handle_ids
+    ///   2) get the chat IDs keys from `self.chatroom_participants` for values that contain exactly the selected handle_ids
     ///   3) send those chat and handle IDs to the query context so they are included in the message table filters
+    ///
+    /// For a single phone number, only the DM conversation with that number is exported.
+    /// For multiple comma-separated numbers in one group, only the group chat with exactly those participants is exported.
+    /// For multiple semicolon-separated groups, each group is processed separately and all matching chats are exported.
+    ///
+    /// Example inputs:
+    /// - Single DM: "5558675309"
+    /// - Single group: "5558675309,5551234567,5559876543"
+    /// - Multiple groups: "5558675309,5551234567;5559876543,5552345678"
     pub(crate) fn resolve_filtered_handles(&mut self) {
         if let Some(conversation_filter) = &self.options.conversation_filter {
-            let parsed_handle_filter = conversation_filter.split(',').collect::<Vec<&str>>();
+            let groups = conversation_filter.split(';').collect::<Vec<&str>>();
+            println!("Processing {} groups", groups.len());
 
-            let mut included_chatrooms: BTreeSet<i32> = BTreeSet::new();
-            let mut included_handles: BTreeSet<i32> = BTreeSet::new();
+            let mut all_included_chatrooms: BTreeSet<i32> = BTreeSet::new();
+            let mut all_included_handles: BTreeSet<i32> = BTreeSet::new();
 
-            // First: Scan the list of participants for included handle IDs
-            self.participants
-                .iter()
-                .for_each(|(handle_id, handle_name)| {
-                    parsed_handle_filter.iter().for_each(|included_name| {
-                        if handle_name.contains(included_name) {
-                            included_handles.insert(*handle_id);
+            // Process each group separately
+            for (group_idx, group) in groups.iter().enumerate() {
+                println!("\nProcessing group {}", group_idx + 1);
+                let parsed_handle_filter = group.split(',').collect::<Vec<&str>>();
+                println!("Parsed handle filter: {:?}", parsed_handle_filter);
+
+                let mut included_handles: BTreeSet<i32> = BTreeSet::new();
+                let mut filter_to_handles: HashMap<String, BTreeSet<i32>> = HashMap::new();
+
+                // First: Scan the list of participants for included handle IDs
+                self.participants
+                    .iter()
+                    .for_each(|(handle_id, handle_name)| {
+                        parsed_handle_filter.iter().for_each(|included_name| {
+                            // Clean up the phone numbers for comparison
+                            let clean_handle = handle_name.replace(['+', ' ', '(', ')', '-'], "");
+                            let clean_filter = included_name.replace(['+', ' ', '(', ')', '-'], "");
+
+                            // For phone numbers, match the last 10 digits
+                            if clean_handle.len() >= 10 && clean_filter.len() >= 10 {
+                                let handle_suffix =
+                                    &clean_handle[clean_handle.len().saturating_sub(10)..];
+                                let filter_suffix =
+                                    &clean_filter[clean_filter.len().saturating_sub(10)..];
+                                if handle_suffix == filter_suffix {
+                                    println!(
+                                        "Found matching handle: {} for filter: {}",
+                                        handle_name, included_name
+                                    );
+                                    included_handles.insert(*handle_id);
+                                    filter_to_handles
+                                        .entry(clean_filter)
+                                        .or_default()
+                                        .insert(*handle_id);
+                                }
+                            } else if handle_name.contains(included_name) {
+                                // For non-phone numbers (like email), use contains
+                                println!(
+                                    "Found matching handle: {} for filter: {}",
+                                    handle_name, included_name
+                                );
+                                included_handles.insert(*handle_id);
+                                filter_to_handles
+                                    .entry(clean_filter)
+                                    .or_default()
+                                    .insert(*handle_id);
+                            }
+                        });
+                    });
+                println!("Found handles: {:?}", included_handles);
+                println!("Filter to handles map: {:?}", filter_to_handles);
+
+                // Verify we found a match for each filter
+                if filter_to_handles.len() != parsed_handle_filter.len() {
+                    println!(
+                        "Warning: Not all filters matched to handles in group {}",
+                        group_idx + 1
+                    );
+                    continue;
+                }
+
+                // Second, scan the list of chatrooms for IDs that contain EXACTLY the selected participants
+                self.chatroom_participants
+                    .iter()
+                    .for_each(|(chat_id, participants)| {
+                        // For single participant filter, only include DMs
+                        if parsed_handle_filter.len() == 1 {
+                            if participants.len() == 1 && participants.is_subset(&included_handles)
+                            {
+                                println!(
+                                    "Found matching DM chat: {} with participants: {:?}",
+                                    chat_id, participants
+                                );
+                                all_included_chatrooms.insert(*chat_id);
+                            }
+                        } else {
+                            // For multiple participants, check if the chat contains exactly one handle from each filter
+                            let mut all_filters_matched = true;
+                            for handles in filter_to_handles.values() {
+                                // Chat must contain exactly one handle from each filter's set of handles
+                                if participants.intersection(handles).count() != 1 {
+                                    all_filters_matched = false;
+                                    break;
+                                }
+                            }
+
+                            if all_filters_matched
+                                && participants.len() == parsed_handle_filter.len()
+                            {
+                                println!(
+                                    "Found matching group chat: {} with participants: {:?}",
+                                    chat_id, participants
+                                );
+                                all_included_chatrooms.insert(*chat_id);
+                            }
                         }
                     });
-                });
 
-            // Second, scan the list of chatrooms for IDs that contain the selected participants
-            self.chatroom_participants
-                .iter()
-                .for_each(|(chat_id, participants)| {
-                    if !participants.is_disjoint(&included_handles) {
-                        included_chatrooms.insert(*chat_id);
-                    }
-                });
+                // Add all handles from this group to the total set
+                all_included_handles.extend(included_handles);
+            }
+
+            println!("\nTotal chatrooms found: {:?}", all_included_chatrooms);
 
             self.options
                 .query_context
-                .set_selected_handle_ids(included_handles);
+                .set_selected_handle_ids(all_included_handles);
 
             self.options
                 .query_context
-                .set_selected_chat_ids(included_chatrooms);
+                .set_selected_chat_ids(all_included_chatrooms);
 
             self.log_filtered_handles_and_chats()
         }

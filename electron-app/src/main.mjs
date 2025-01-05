@@ -234,7 +234,7 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
             await fs.writeFile(debugLogPath, debugLogContent);
           }
           await deleteTempFolder(uniqueTempFolder);
-          resolve({ success: false, error: error.message + (debugMode ? '\n\nDebug log has been written to the export folder.' : '') });
+          resolve({ success: false, error: error.message + (debugMode ? ' Debug log has been written to the export folder.' : '') });
         } else {
           try {
             if (stdout.includes('No chatrooms were found with the supplied contacts.')) {
@@ -243,7 +243,7 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
                 await fs.writeFile(debugLogPath, debugLogContent);
               }
               await deleteTempFolder(uniqueTempFolder);
-              resolve({ success: false, error: 'No chats were found with the supplied contacts.' + (debugMode ? '\n\nDebug log has been written to the export folder.' : '') });
+              resolve({ success: false, error: 'No chats were found with the supplied contacts.' + (debugMode ? ' Debug log has been written to the export folder.' : '') });
               return;
             }
 
@@ -261,7 +261,7 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
               await fs.writeFile(debugLogPath, debugLogContent);
             }
             await deleteTempFolder(uniqueTempFolder);
-            resolve({ success: false, error: err.message + (debugMode ? '\n\nDebug log has been written to the export folder.' : '') });
+            resolve({ success: false, error: err.message + (debugMode ? ' Debug log has been written to the export folder.' : '') });
           }
         }
       });

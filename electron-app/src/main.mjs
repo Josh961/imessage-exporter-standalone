@@ -224,27 +224,44 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
 
     return new Promise((resolve) => {
       exec(command, async (error, stdout, stderr) => {
+        const debugLogContent = debugMode ?
+          `Command: ${command}\n\nOutput:\n${stdout}\n\nErrors:\n${stderr}${error ? '\n\nError:\n' + error.message : ''}` :
+          null;
+
         if (error) {
-          resolve({ success: false, error: error.message });
+          if (debugMode) {
+            const { fullPath: debugLogPath } = await createUniqueName(outputFolder, 'debug', '.log');
+            await fs.writeFile(debugLogPath, debugLogContent);
+          }
+          await deleteTempFolder(uniqueTempFolder);
+          resolve({ success: false, error: error.message + (debugMode ? '\n\nDebug log has been written to the export folder.' : '') });
         } else {
           try {
             if (stdout.includes('No chatrooms were found with the supplied contacts.')) {
-              resolve({ success: false, error: 'No chats were found with the supplied contacts.' });
+              if (debugMode) {
+                const { fullPath: debugLogPath } = await createUniqueName(outputFolder, 'debug', '.log');
+                await fs.writeFile(debugLogPath, debugLogContent);
+              }
+              await deleteTempFolder(uniqueTempFolder);
+              resolve({ success: false, error: 'No chats were found with the supplied contacts.' + (debugMode ? '\n\nDebug log has been written to the export folder.' : '') });
               return;
             }
 
             await sanitizeFileNames(uniqueTempFolder);
 
-            // Create debug log if debug mode is enabled
             if (debugMode) {
-              const logContent = `Command: ${command}\n\nOutput:\n${stdout}\n\nErrors:\n${stderr}`;
-              await fs.writeFile(path.join(uniqueTempFolder, 'debug.log'), logContent);
+              await fs.writeFile(path.join(uniqueTempFolder, 'debug.log'), debugLogContent);
             }
 
             const finalZipPath = await zipFolder(uniqueTempFolder, uniqueZipPath);
             resolve({ success: true, zipPath: finalZipPath });
           } catch (err) {
-            resolve({ success: false, error: err.message });
+            if (debugMode) {
+              const { fullPath: debugLogPath } = await createUniqueName(outputFolder, 'debug', '.log');
+              await fs.writeFile(debugLogPath, debugLogContent);
+            }
+            await deleteTempFolder(uniqueTempFolder);
+            resolve({ success: false, error: err.message + (debugMode ? '\n\nDebug log has been written to the export folder.' : '') });
           }
         }
       });
@@ -353,13 +370,8 @@ async function zipFolder(folderPath, zipPath) {
 
   return new Promise((resolve, reject) => {
     output.on('close', async () => {
-      try {
-        await rm(folderPath, { recursive: true, force: true });
-        resolve(zipPath);
-      } catch (error) {
-        console.error('Error deleting original folder:', error);
-        resolve(zipPath);
-      }
+      await deleteTempFolder(folderPath);
+      resolve(zipPath);
     });
     archive.on('error', reject);
 
@@ -367,4 +379,12 @@ async function zipFolder(folderPath, zipPath) {
     archive.directory(folderPath, false);
     archive.finalize();
   });
+}
+
+async function deleteTempFolder(folderPath) {
+  try {
+    await rm(folderPath, { recursive: true, force: true });
+  } catch (error) {
+    console.error('Error deleting temp folder:', error);
+  }
 }

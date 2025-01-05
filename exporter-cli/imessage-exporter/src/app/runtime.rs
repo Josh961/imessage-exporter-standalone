@@ -277,7 +277,8 @@ impl Config {
                             let clean_filter = included_name.replace(['+', ' ', '(', ')', '-'], "");
 
                             // For phone numbers, match the last 10 digits
-                            if clean_handle.len() >= 10 && clean_filter.len() >= 10 {
+                            if clean_handle.len() >= 10 && clean_filter.len() >= 10
+                                && !clean_handle.contains('@') && !clean_filter.contains('@') {
                                 let handle_suffix =
                                     &clean_handle[clean_handle.len().saturating_sub(10)..];
                                 let filter_suffix =
@@ -293,8 +294,8 @@ impl Config {
                                         .or_default()
                                         .insert(*handle_id);
                                 }
-                            } else if handle_name.contains(included_name) {
-                                // For non-phone numbers (like email), use contains
+                            } else if clean_handle == clean_filter {
+                                // For emails and other non-phone identifiers, use exact match
                                 println!(
                                     "Found matching handle: {} for filter: {}",
                                     handle_name, included_name

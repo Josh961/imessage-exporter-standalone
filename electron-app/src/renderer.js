@@ -57,6 +57,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     manualEntryModal: document.getElementById('manual-entry-modal'),
     manualEntryModalContent: document.getElementById('manual-entry-modal-content'),
     clearAllManualContacts: document.getElementById('clear-all-manual-contacts'),
+    fullExportButton: document.getElementById('full-export-button'),
+    dateRangeDisplay: document.getElementById('date-range-display'),
   };
 
   // State
@@ -446,7 +448,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       dotsElement.textContent = '.'.repeat(dots);
     }, 500);
 
-    elements.status.className = 'text-center font-semibold';
+    elements.status.className = 'text-center font-semibold text-sky-500';
 
     try {
       // Helper function to get last 10 digits of a phone number
@@ -503,7 +505,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         endDate: elements.endDate.value,
         selectedContacts: allSelectedContacts,
         includeVideos: includeVideos,
-        debugMode: debugMode
+        debugMode: debugMode,
+        isFullExport: false
       };
 
       const result = await window.electronAPI.runExporter(exportParams);
@@ -525,7 +528,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (result.success) {
       elements.status.textContent = `✅ Export completed successfully! Output folder: ${result.zipPath}`;
-      elements.status.className = 'text-center font-semibold';
+      elements.status.className = 'text-center font-semibold text-green-500';
     } else {
       elements.status.textContent = `❌ Export failed: ${result.error}`;
       elements.status.className = 'text-center font-semibold text-red-500';
@@ -595,13 +598,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   function setupSettingsListeners() {
-    elements.settingsButton.addEventListener('click', openSettingsModal);
+    elements.settingsButton.addEventListener('click', () => {
+      updateDateRangeDisplay();
+      openSettingsModal();
+    });
     elements.closeSettings.addEventListener('click', closeSettingsModal);
     elements.settingsModal.addEventListener('click', (e) => {
       if (!elements.settingsModalContent.contains(e.target)) {
         closeSettingsModal();
       }
     });
+
+    elements.fullExportButton.addEventListener('click', fullExport);
+
+    // Date change listeners
+    elements.startDate.addEventListener('change', updateDateRangeDisplay);
+    elements.endDate.addEventListener('change', updateDateRangeDisplay);
 
     // Load saved preferences
     elements.includeVideos.checked = localStorage.getItem('includeVideos') === 'true';
@@ -702,9 +714,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         <div class="flex-1 px-2">
           <span class="text-sm text-slate-700 break-words">
             ${entry.type === 'GROUP' ?
-              `Group: ${entry.contacts.join(', ')}` :
-              entry.contacts[0]
-            }
+        `Group: ${entry.contacts.join(', ')}` :
+        entry.contacts[0]
+      }
           </span>
         </div>
         <button class="delete-manual-contact text-xs text-red-500 hover:text-red-600 shrink-0 pr-2">
@@ -761,5 +773,106 @@ document.addEventListener('DOMContentLoaded', async () => {
   function clearAllManualContacts() {
     manualContacts = [];
     renderManualContacts();
+  }
+
+  async function fullExport() {
+    const inputFolder = elements.inputFolder.value;
+    const outputFolder = elements.outputFolder.value;
+    const startDate = elements.startDate.value;
+    const endDate = elements.endDate.value;
+
+    if (!inputFolder || !outputFolder) {
+      if (!inputFolder) elements.inputFolderError.classList.remove('hidden');
+      if (!outputFolder) elements.outputFolderError.classList.remove('hidden');
+      return;
+    }
+
+    closeSettingsModal();
+
+    const exportParams = {
+      inputFolder,
+      outputFolder,
+      startDate,
+      endDate,
+      selectedContacts: [], // Empty array for full export
+      includeVideos,
+      debugMode,
+      isFullExport: true // Add flag to skip contact validation
+    };
+
+    elements.status.innerHTML = 'Exporting all messages, this may take some time<span id="animatedDots">.</span>';
+    const dotsElement = document.getElementById('animatedDots');
+
+    let dots = 1;
+    exportAnimationInterval = setInterval(() => {
+      dots = (dots % 3) + 1;
+      dotsElement.textContent = '.'.repeat(dots);
+    }, 500);
+
+    elements.status.className = 'text-center font-semibold text-sky-500';
+
+    // Disable and style buttons
+    elements.exportButton.disabled = true;
+    elements.exportButton.classList.remove('hover:bg-sky-600');
+    elements.exportButton.classList.add('hover:bg-sky-500', 'opacity-60');
+
+    elements.fullExportButton.disabled = true;
+    elements.fullExportButton.classList.remove('hover:bg-sky-600');
+    elements.fullExportButton.classList.add('hover:bg-sky-500', 'opacity-60');
+
+    elements.selectContacts.disabled = true;
+    elements.manualContactEntry.disabled = true;
+    elements.selectContacts.classList.add('opacity-50', 'cursor-not-allowed');
+    elements.manualContactEntry.classList.add('opacity-50', 'cursor-not-allowed');
+
+    try {
+      const result = await window.electronAPI.runExporter(exportParams);
+      updateExportStatus(result);
+    } catch (error) {
+      elements.status.textContent = `❌ An error occurred: ${error.message}`;
+      elements.status.className = 'text-center font-semibold text-red-500';
+    } finally {
+      clearInterval(exportAnimationInterval);
+
+      // Re-enable and restore button styles
+      elements.exportButton.disabled = false;
+      elements.exportButton.classList.remove('hover:bg-sky-500', 'opacity-60');
+      elements.exportButton.classList.add('hover:bg-sky-600');
+
+      elements.fullExportButton.disabled = false;
+      elements.fullExportButton.classList.remove('hover:bg-sky-500', 'opacity-60');
+      elements.fullExportButton.classList.add('hover:bg-sky-600');
+
+      elements.selectContacts.disabled = false;
+      elements.manualContactEntry.disabled = false;
+      elements.selectContacts.classList.remove('opacity-50', 'cursor-not-allowed');
+      elements.manualContactEntry.classList.remove('opacity-50', 'cursor-not-allowed');
+    }
+  }
+
+  function updateDateRangeDisplay() {
+    const startDate = elements.startDate.value;
+    const endDate = elements.endDate.value;
+
+    if (!startDate && !endDate) {
+      elements.dateRangeDisplay.textContent = 'No date range selected - will export all messages';
+    } else if (startDate && !endDate) {
+      elements.dateRangeDisplay.textContent = `Exporting messages from ${formatDateForDisplay(startDate)} onwards`;
+    } else if (!startDate && endDate) {
+      elements.dateRangeDisplay.textContent = `Exporting messages up to ${formatDateForDisplay(endDate)}`;
+    } else {
+      elements.dateRangeDisplay.textContent = `Exporting messages from ${formatDateForDisplay(startDate)} to ${formatDateForDisplay(endDate)}`;
+    }
+  }
+
+  function formatDateForDisplay(dateString) {
+    const date = new Date(dateString);
+    // Add timezone offset to get the correct local date
+    date.setMinutes(date.getMinutes() + date.getTimezoneOffset());
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
   }
 });

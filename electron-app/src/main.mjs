@@ -201,7 +201,7 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
 });
 
 ipcMain.handle('run-exporter', async (event, exportParams) => {
-  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, includeVideos, debugMode } = exportParams;
+  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, includeVideos, debugMode, isFullExport } = exportParams;
 
   try {
     const uniqueTempFolder = await createUniqueFolder(outputFolder);
@@ -213,7 +213,7 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
     if (startDate) params += ` -s ${startDate}`;
     if (endDate) params += ` -e ${endDate}`;
 
-    if (selectedContacts && selectedContacts.length > 0) {
+    if (!isFullExport && selectedContacts && selectedContacts.length > 0) {
       const contactsString = selectedContacts.map(contact =>
         contact.includes(',') ? `"${contact}"` : contact
       ).join(';');

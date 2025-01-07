@@ -309,6 +309,17 @@
                     <input type="checkbox" id="debug-mode" class="form-checkbox h-5 w-5 text-sky-500" />
                     <span class="ml-2 text-sm text-slate-500">Debug mode (creates a log file with export details)</span>
                   </label>
+                  <hr class="my-2 border-slate-200" />
+                  <div class="flex flex-col gap-2">
+                    <span class="text-sm font-medium text-slate-700">Advanced export</span>
+                    <p class="text-sm text-slate-500">
+                      Export all messages without selecting contacts. This will export your entire message history within the specified date range.
+                    </p>
+                    <p id="date-range-display" class="text-sm italic text-slate-400"></p>
+                    <button id="full-export-button" class="mt-1 w-full rounded bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 focus:outline-none">
+                      Export all messages
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -325,7 +336,7 @@
       </div>
     </div>
     <!-- div to generate class names for use in renderer.js -->
-    <div class="opacity-60"></div>
+    <div class="text-green-500 opacity-60"></div>
     <script src="utils.js"></script>
     <script src="renderer.js"></script>
     <!-- Manual Contact Entry Modal -->

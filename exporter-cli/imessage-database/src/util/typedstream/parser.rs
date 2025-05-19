@@ -1,10 +1,12 @@
 /*!
- Logic used to deserialize data from a `typedstream`, focussing specifically on [NSAttributedString](https://developer.apple.com/documentation/foundation/nsattributedstring).
+ Logic used to deserialize data from a `typedstream`, focussing specifically on [`NSAttributedString`](https://developer.apple.com/documentation/foundation/nsattributedstring).
 
  Logic reverse engineered from `typedstream` source located at:
-   - [`typedstream.h`](https://opensource.apple.com/source/gcc/gcc-1493/libobjc/objc/typedstream.h.auto.html)
-   - [`archive.c`](https://opensource.apple.com/source/gcc/gcc-5484/libobjc/archive.c.auto.html)
-   - [`objc/typedstream.m`](https://archive.org/details/darwin_0.1)
+   - [`typedstream.h`](https://github.com/gnustep/libobjc/blob/master/objc/typedstream.h)
+   - [`archive.c`](https://github.com/gnustep/libobjc/blob/master/archive.c)
+   - [`objc/typedstream.m`](https://securitronlinux.com/news/html/d4/d6c/typedstream_8m.html)
+
+ A writeup about the reverse engineering of `typedstream` can be found [here](https://chrissardegna.com/blog/reverse-engineering-apples-typedstream-format/).
 */
 use std::collections::HashSet;
 
@@ -85,8 +87,7 @@ impl<'a> TypedStreamReader<'a> {
                 let size = 2;
                 self.idx += 1;
                 let value = i16::from_le_bytes(
-                    self.read_exact_bytes(size)?
-                        .try_into()
+                    <[u8; 2]>::try_from(self.read_exact_bytes(size)?)
                         .map_err(TypedStreamError::SliceError)?,
                 );
                 Ok(value as i64)
@@ -95,8 +96,7 @@ impl<'a> TypedStreamReader<'a> {
                 let size = 4;
                 self.idx += 1;
                 let value = i32::from_le_bytes(
-                    self.read_exact_bytes(size)?
-                        .try_into()
+                    <[u8; 4]>::try_from(self.read_exact_bytes(size)?)
                         .map_err(TypedStreamError::SliceError)?,
                 );
                 Ok(value as i64)
@@ -121,8 +121,7 @@ impl<'a> TypedStreamReader<'a> {
                 let size = 2;
                 self.idx += 1;
                 let value = u16::from_le_bytes(
-                    self.read_exact_bytes(size)?
-                        .try_into()
+                    <[u8; 2]>::try_from(self.read_exact_bytes(size)?)
                         .map_err(TypedStreamError::SliceError)?,
                 );
                 Ok(value as u64)
@@ -131,8 +130,7 @@ impl<'a> TypedStreamReader<'a> {
                 let size = 4;
                 self.idx += 1;
                 let value = u32::from_le_bytes(
-                    self.read_exact_bytes(size)?
-                        .try_into()
+                    <[u8; 4]>::try_from(self.read_exact_bytes(size)?)
                         .map_err(TypedStreamError::SliceError)?,
                 );
                 Ok(value as u64)
@@ -152,8 +150,7 @@ impl<'a> TypedStreamReader<'a> {
                 let size = 4;
                 self.idx += 1;
                 let value = f32::from_le_bytes(
-                    self.read_exact_bytes(size)?
-                        .try_into()
+                    <[u8; 4]>::try_from(self.read_exact_bytes(size)?)
                         .map_err(TypedStreamError::SliceError)?,
                 );
                 Ok(value)
@@ -173,8 +170,7 @@ impl<'a> TypedStreamReader<'a> {
                 let size = 8;
                 self.idx += 1;
                 let value = f64::from_le_bytes(
-                    self.read_exact_bytes(size)?
-                        .try_into()
+                    <[u8; 8]>::try_from(self.read_exact_bytes(size)?)
                         .map_err(TypedStreamError::SliceError)?,
                 );
                 Ok(value)
@@ -362,6 +358,9 @@ impl<'a> TypedStreamReader<'a> {
                 if embedded {
                     self.object_table
                         .push(Archivable::Type(object_types.clone()));
+                    // We only want to include the first embedded reference tag, not subsequent references to the same embed
+                    self.seen_embedded_types
+                        .insert(self.object_table.len().saturating_sub(1) as u32);
                 }
                 self.types_table.push(object_types);
                 Ok(self.types_table.last().cloned())
@@ -501,6 +500,9 @@ impl<'a> TypedStreamReader<'a> {
     /// Given a stream, construct a reader object to parse it. `typedstream` data doesn't include property
     /// names, so data is stored on [`Object`](crate::util::typedstream::models::Archivable::Object)s in order of appearance.
     ///
+    /// Yields a new [`Archivable`] as they occur in the stream, but does not retain the object's inheritance heirarchy.
+    /// Callers are responsible for assembling the deserialized stream into a useful data structure.
+    ///
     /// # Example:
     ///
     /// ```
@@ -513,11 +515,13 @@ impl<'a> TypedStreamReader<'a> {
     ///
     /// # Sample output:
     /// ```txt
-    /// Object(Class { name: "NSMutableString", version: 1 }, [String("Example")]) // The message text
-    /// Data([Integer(1), Integer(7)])  // The next object describes properties for the range of chars 1 through 7
-    /// Object(Class { name: "NSDictionary", version: 0 }, [Integer(1)])  // The first property is a `NSDictionary` with 1 item
-    /// Object(Class { name: "NSString", version: 1 }, [String("__kIMMessagePartAttributeName")])  // The first key in the `NSDictionary`
-    /// Object(Class { name: "NSNumber", version: 0 }, [Integer(0)])  // The first value in the `NSDictionary`
+    /// [
+    ///     Object(Class { name: "NSMutableString", version: 1 }, [String("Example")]) // The message text
+    ///     Data([Integer(1), Integer(7)])  // The next object describes properties for the range of chars 1 through 7
+    ///     Object(Class { name: "NSDictionary", version: 0 }, [Integer(1)])  // The first property is a `NSDictionary` with 1 item
+    ///     Object(Class { name: "NSString", version: 1 }, [String("__kIMMessagePartAttributeName")])  // The first key in the `NSDictionary`
+    ///     Object(Class { name: "NSNumber", version: 0 }, [Integer(0)])  // The first value in the `NSDictionary`
+    /// ]
     /// ```
     pub fn parse(&mut self) -> Result<Vec<Archivable>, TypedStreamError> {
         let mut out_v = vec![];

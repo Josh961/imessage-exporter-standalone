@@ -4,7 +4,10 @@
 
 use std::fmt::{Display, Formatter, Result};
 
-use crate::{message_types::text_effects::TextEffect, util::typedstream::models::Archivable};
+use crate::{
+    message_types::text_effects::TextEffect, tables::messages::message::Message,
+    util::typedstream::models::Archivable,
+};
 
 /// Defines the parts of a message bubble, i.e. the content that can exist in a single message.
 ///
@@ -73,7 +76,7 @@ impl Display for Service<'_> {
 
 /// Defines ranges of text and associated attributes parsed from [`typedstream`](crate::util::typedstream) `attributedBody` data.
 ///
-/// Ranges specify locations attributes applied to specific portions of a [`Message`](crate::tables::messages::Message)'s [`text`](crate::tables::messages::Message::text). For example, given message text with a [`Mention`](TextEffect::Mention) like:
+/// Ranges specify locations where attributes are applied to specific portions of a [`Message`]'s [`text`](crate::tables::messages::Message::text). For example, given message text with a [`Mention`](TextEffect::Mention) like:
 ///
 /// ```
 /// let message_text = "What's up, Christopher?";
@@ -188,5 +191,42 @@ impl<'a> AttachmentMeta<'a> {
             width,
             name,
         })
+    }
+}
+
+/// Represents different types of group message actions that can occur in a chat system
+#[derive(Debug)]
+pub enum GroupAction<'a> {
+    /// A new participant has been added to the group
+    ParticipantAdded(i32),
+    /// A participant has been removed from the group
+    ParticipantRemoved(i32),
+    /// The group name has been changed
+    NameChange(&'a str),
+    /// A participant has voluntarily left the group
+    ParticipantLeft,
+    /// The group icon/avatar has been updated with a new image
+    GroupIconChanged,
+    /// The group icon/avatar has been removed, reverting to default
+    GroupIconRemoved,
+}
+
+impl<'a> GroupAction<'a> {
+    /// Creates a new EventType based on the provided `item_type` and `group_action_type`
+    pub fn from_message(message: &'a Message) -> Option<Self> {
+        match (
+            message.item_type,
+            message.group_action_type,
+            message.other_handle,
+            &message.group_title,
+        ) {
+            (1, 0, Some(who), _) => Some(Self::ParticipantAdded(who)),
+            (1, 1, Some(who), _) => Some(Self::ParticipantRemoved(who)),
+            (2, _, _, Some(name)) => Some(Self::NameChange(name)),
+            (3, 0, _, _) => Some(Self::ParticipantLeft),
+            (3, 1, _, _) => Some(Self::GroupIconChanged),
+            (3, 2, _, _) => Some(Self::GroupIconRemoved),
+            _ => None,
+        }
     }
 }

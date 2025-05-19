@@ -14,7 +14,15 @@ pub const TIMESTAMP_FACTOR: i64 = 1000000000;
 /// Get the date offset for the iMessage Database
 ///
 /// This offset is used to adjust the unix timestamps stored in the iMessage database
-/// with a non-standard epoch of `2001-01-01 00:00:00` in the local time zone.
+/// with a non-standard epoch of `2001-01-01 00:00:00` in the current machine's local time zone.
+///
+/// # Example
+///
+/// ```
+/// use imessage_database::util::dates::get_offset;
+///
+/// let current_epoch = get_offset();
+/// ```
 pub fn get_offset() -> i64 {
     Utc.with_ymd_and_hms(2001, 1, 1, 0, 0, 0)
         .unwrap()
@@ -25,6 +33,15 @@ pub fn get_offset() -> i64 {
 ///
 /// This is used to create date data for anywhere dates are stored in the table, including
 /// `PLIST` payloads or [`typedstream`](crate::util::typedstream) data.
+///
+/// # Example
+///
+/// ```
+/// use imessage_database::util::dates::{get_local_time, get_offset};
+///
+/// let current_offset = get_offset();
+/// let local = get_local_time(&674526582885055488, &current_offset).unwrap();
+/// ```
 pub fn get_local_time(date_stamp: &i64, offset: &i64) -> Result<DateTime<Local>, MessageError> {
     let utc_stamp = DateTime::from_timestamp((date_stamp / TIMESTAMP_FACTOR) + offset, 0)
         .ok_or(MessageError::InvalidTimestamp(*date_stamp))?

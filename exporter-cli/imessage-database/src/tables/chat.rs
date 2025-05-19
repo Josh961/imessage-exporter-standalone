@@ -8,7 +8,10 @@ use rusqlite::{Connection, Error, Result, Row, Statement};
 
 use crate::{
     error::table::TableError,
-    tables::table::{Cacheable, Table, CHAT},
+    tables::{
+        messages::models::Service,
+        table::{Cacheable, Table, CHAT},
+    },
 };
 
 /// Represents a single row in the `chat` table.
@@ -101,5 +104,10 @@ impl Chat {
             }
             None => None,
         }
+    }
+
+    /// Get the service used by the chat, i.e. iMessage, SMS, IRC, etc.
+    pub fn service(&self) -> Service {
+        Service::from(self.service_name.as_deref())
     }
 }

@@ -7,7 +7,7 @@ use plist::Value;
 use crate::{
     error::plist::PlistParseError,
     message_types::variants::BalloonProvider,
-    util::plist::{get_string_from_dict, get_string_from_nested_dict},
+    util::plist::{get_string_from_dict, get_string_from_nested_dict, get_value_from_dict},
 };
 
 /// This struct is not documented by Apple, but represents messages displayed as
@@ -24,6 +24,8 @@ pub struct MusicMessage<'a> {
     pub album: Option<&'a str>,
     /// Track name
     pub track_name: Option<&'a str>,
+    /// Included lyrics, if any
+    pub lyrics: Option<Vec<&'a str>>,
 }
 
 impl<'a> BalloonProvider<'a> for MusicMessage<'a> {
@@ -40,6 +42,9 @@ impl<'a> BalloonProvider<'a> for MusicMessage<'a> {
                 artist: get_string_from_dict(music_metadata, "artist"),
                 album: get_string_from_dict(music_metadata, "album"),
                 track_name: get_string_from_dict(music_metadata, "name"),
+                lyrics: get_value_from_dict(music_metadata, "lyricExcerpt")
+                    .and_then(|l| get_string_from_dict(l, "lyrics"))
+                    .map(|lyrics| lyrics.split("\n").collect()),
             });
         }
         Err(PlistParseError::NoPayload)
@@ -49,23 +54,21 @@ impl<'a> BalloonProvider<'a> for MusicMessage<'a> {
 impl<'a> MusicMessage<'a> {
     /// Extract the main dictionary of data from the body of the payload
     ///
-    /// Apple Music stores the URL under `richLinkMetadata` like a normal URL, but has some 
+    /// Apple Music stores the URL under `richLinkMetadata` like a normal URL, but has some
     /// extra data stored under `specialization` that contains the track information.
     fn get_body_and_url(payload: &'a Value) -> Result<(&'a Value, &'a Value), PlistParseError> {
         let base = payload
             .as_dictionary()
-            .ok_or_else(|| PlistParseError::InvalidType(
-                "root".to_string(),
-                "dictionary".to_string(),
-            ))?
+            .ok_or_else(|| {
+                PlistParseError::InvalidType("root".to_string(), "dictionary".to_string())
+            })?
             .get("richLinkMetadata")
             .ok_or_else(|| PlistParseError::MissingKey("richLinkMetadata".to_string()))?;
         Ok((
             base.as_dictionary()
-                .ok_or_else(|| PlistParseError::InvalidType(
-                    "root".to_string(),
-                    "dictionary".to_string(),
-                ))?
+                .ok_or_else(|| {
+                    PlistParseError::InvalidType("root".to_string(), "dictionary".to_string())
+                })?
                 .get("specialization")
                 .ok_or_else(|| PlistParseError::MissingKey("specialization".to_string()))?,
             base,
@@ -102,6 +105,34 @@ mod tests {
             artist: Some("БАТЮШКА"),
             album: Some("Панихида"),
             track_name: Some("Песнь 1"),
+            lyrics: None,
+        };
+
+        assert_eq!(balloon, expected);
+    }
+
+    #[test]
+    fn test_parse_apple_music_lyrics() {
+        let plist_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/music_message/AppleMusicLyrics.plist");
+        let plist_data = File::open(plist_path).unwrap();
+        let plist = Value::from_reader(plist_data).unwrap();
+        let parsed = parse_ns_keyed_archiver(&plist).unwrap();
+
+        println!("{:#?}", parsed);
+
+        let balloon = MusicMessage::from_map(&parsed).unwrap();
+        let expected = MusicMessage {
+            url: Some(
+                "https://music.apple.com/us/lyrics/1329891623?ts=11.108&te=16.031&l=en&tk=2.v1.VsuX9f%2BaT1PyrgMgIT7ANQ%3D%3D&itsct=sharing_msg_lyrics&itscg=50401",
+            ),
+            preview: None,
+            artist: Some("Dual Core"),
+            album: Some("Downtime"),
+            track_name: Some("Another Chapter"),
+            lyrics: Some(vec!["I remember when it all started, something from a dream", "Addicted to the black and green letters on my screen"]),
         };
 
         assert_eq!(balloon, expected);

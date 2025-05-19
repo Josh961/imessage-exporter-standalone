@@ -58,4 +58,29 @@ mod tests {
 
         assert_eq!(None, m.clean_associated_guid());
     }
+
+    #[test]
+    fn can_get_valid_guid_empty() {
+        let mut m = Message::blank();
+        m.associated_message_guid = Some("".to_string());
+        assert_eq!(None, m.clean_associated_guid());
+    }
+
+    #[test]
+    fn can_get_valid_guid_too_short() {
+        let mut m = Message::blank();
+        m.associated_message_guid = Some("A44CE9D7-AAAA-BBBB-CCCC".to_string());
+        assert_eq!(None, m.clean_associated_guid());
+    }
+
+    #[test]
+    fn can_get_valid_guid_p_invalid_index() {
+        let mut m = Message::blank();
+        m.associated_message_guid =
+            Some("p:invalid/A44CE9D7-AAAA-BBBB-CCCC-23C54E1A9B6A".to_string());
+        assert_eq!(
+            Some((0usize, "A44CE9D7-AAAA-BBBB-CCCC-23C54E1A9B6A")),
+            m.clean_associated_guid()
+        );
+    }
 }

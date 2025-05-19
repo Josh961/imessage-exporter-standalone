@@ -2,7 +2,6 @@
  Defines routines for sanitizing text data.
 */
 
-
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
@@ -95,6 +94,41 @@ mod test_filename {
             "_ _ _ _ _ _ _ _ _"
         );
     }
+
+    #[test]
+    fn handles_emoji() {
+        assert_eq!(sanitize_filename("hello🌍world"), "hello🌍world");
+    }
+
+    #[test]
+    fn handles_cyrillic() {
+        assert_eq!(sanitize_filename("привет/мир"), "привет_мир");
+    }
+
+    #[test]
+    fn handles_leading_space() {
+        assert_eq!(sanitize_filename(" leading space"), " leading space");
+    }
+
+    #[test]
+    fn handles_trailing_space() {
+        assert_eq!(sanitize_filename("trailing space "), "trailing space ");
+    }
+
+    #[test]
+    fn handles_tab_char() {
+        assert_eq!(sanitize_filename("tab\there"), "tab\there");
+    }
+
+    #[test]
+    fn handles_newline() {
+        assert_eq!(sanitize_filename("new\nline"), "new\nline");
+    }
+
+    #[test]
+    fn handles_carriage_return() {
+        assert_eq!(sanitize_filename("return\r"), "return\r");
+    }
 }
 
 #[cfg(test)]
@@ -149,5 +183,98 @@ mod tests {
             &sanitize_html("<div>Hello &amp; world</div>"),
             "&lt;div&gt;Hello&nbsp;&amp;amp;&nbsp;world&lt;/div&gt;"
         );
+    }
+
+    #[test]
+    fn handles_nested_quotes() {
+        assert_eq!(
+            &sanitize_html("\"'nested quotes'\""),
+            "&quot;&apos;nested quotes&apos;&quot;"
+        );
+    }
+
+    #[test]
+    fn handles_unicode_content() {
+        assert_eq!(&sanitize_html("Hello 🌍 <world>"), "Hello 🌍 &lt;world&gt;");
+    }
+
+    #[test]
+    fn handles_html_entities() {
+        assert_eq!(
+            &sanitize_html("&lt; already escaped &gt;"),
+            "&amp;lt; already escaped &amp;gt;"
+        );
+    }
+
+    #[test]
+    fn handles_script_tags() {
+        assert_eq!(
+            &sanitize_html("<script>alert('xss')</script>"),
+            "&lt;script&gt;alert(&apos;xss&apos;)&lt;/script&gt;"
+        );
+    }
+
+    #[test]
+    fn handles_attribute_quotes() {
+        assert_eq!(&sanitize_html("attr=\"value\""), "attr=&quot;value&quot;");
+    }
+
+    #[test]
+    fn handles_backticks_in_code() {
+        assert_eq!(
+            &sanitize_html("``nested backticks``"),
+            "&grave;&grave;nested backticks&grave;&grave;"
+        );
+    }
+
+    #[test]
+    fn handles_double_quotes() {
+        assert_eq!(&sanitize_html("\"quote\""), "&quot;quote&quot;");
+    }
+
+    #[test]
+    fn handles_single_quotes() {
+        assert_eq!(&sanitize_html("'quote'"), "&apos;quote&apos;");
+    }
+
+    #[test]
+    fn handles_emoji() {
+        assert_eq!(&sanitize_html("Hello 🌍"), "Hello 🌍");
+    }
+
+    #[test]
+    fn handles_cyrillic() {
+        assert_eq!(&sanitize_html("привет"), "привет");
+    }
+
+    #[test]
+    fn handles_amp_entity() {
+        assert_eq!(&sanitize_html("&amp;"), "&amp;amp;");
+    }
+
+    #[test]
+    fn handles_lt_entity() {
+        assert_eq!(&sanitize_html("&lt;"), "&amp;lt;");
+    }
+
+    #[test]
+    fn handles_script_tag() {
+        assert_eq!(
+            &sanitize_html("<script>alert()</script>"),
+            "&lt;script&gt;alert()&lt;/script&gt;"
+        );
+    }
+
+    #[test]
+    fn handles_double_backticks() {
+        assert_eq!(
+            &sanitize_html("``code``"),
+            "&grave;&grave;code&grave;&grave;"
+        );
+    }
+
+    #[test]
+    fn handles_attribute() {
+        assert_eq!(&sanitize_html("class=\"test\""), "class=&quot;test&quot;");
     }
 }

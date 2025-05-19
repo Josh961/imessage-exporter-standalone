@@ -23,17 +23,28 @@ pub(crate) fn audio_copy_convert(
 ) -> Option<MediaType<'static>> {
     if matches!(
         mime_type,
-        MediaType::Audio("caf") | MediaType::Audio("CAF") | MediaType::Audio("x-caf; codecs=opus")
+        MediaType::Audio("caf")
+            | MediaType::Audio("CAF")
+            | MediaType::Audio("x-caf; codecs=opus")
+            | MediaType::Audio("amr")
+            | MediaType::Audio("AMR")
     ) {
         let output_type = AudioType::Mp4;
+
         // Update extension for conversion
-        to.set_extension(output_type.to_str());
-        if convert_caf(from, to, converter).is_none() {
-            eprintln!("Unable to convert {from:?}");
-        } else {
+        let mut converted_path = to.clone();
+        converted_path.set_extension(output_type.to_str());
+
+        if convert_caf(from, &converted_path, converter).is_some() {
+            // If the conversion was successful, update the path
+            *to = converted_path;
             return Some(MediaType::Audio(output_type.to_str()));
+        } else {
+            eprintln!("Unable to convert {from:?}");
         }
     }
+
+    // Fallback
     copy_raw(from, to);
     None
 }

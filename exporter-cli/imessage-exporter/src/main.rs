@@ -6,7 +6,7 @@ mod exporters;
 pub use exporters::{exporter::Exporter, html::HTML, txt::TXT};
 
 use app::{
-    options::{from_command_line, Options},
+    options::{Options, from_command_line},
     runtime::Config,
 };
 

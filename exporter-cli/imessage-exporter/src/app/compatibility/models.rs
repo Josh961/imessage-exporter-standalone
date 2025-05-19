@@ -4,7 +4,7 @@
 
 use std::{
     fmt::{Display, Formatter, Result},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 pub trait Converter {
@@ -161,18 +161,11 @@ impl Display for VideoConverter {
 /// Determine if a shell program exists on the system
 #[cfg(not(target_family = "windows"))]
 fn exists(name: &str) -> bool {
-    if let Ok(process) = Command::new("type")
-        .args(vec![name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .stdin(Stdio::null())
-        .spawn()
-    {
-        if let Ok(output) = process.wait_with_output() {
-            return output.status.success();
-        }
-    };
-    false
+    Command::new("which")
+        .arg(name)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 /// Determine if a shell program exists on the system

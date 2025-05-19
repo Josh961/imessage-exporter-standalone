@@ -31,7 +31,7 @@ impl Display for RuntimeError {
             RuntimeError::DatabaseError(why) => write!(fmt, "{why}"),
             RuntimeError::NotEnoughAvailableSpace(estimated_bytes, available_bytes) => {
                 write!(
-                    fmt, 
+                    fmt,
                     "Not enough free disk space!\nEstimated export size: {}\nDisk space available: {}\nPass `--{}` to ignore\n",
                     format_file_size(*estimated_bytes),
                     format_file_size(*available_bytes),

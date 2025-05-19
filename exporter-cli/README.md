@@ -2,7 +2,7 @@
 
 This crate provides both a library to interact with iMessage data as well as a binary that can perform some useful read-only operations using that data. The aim of this project is to provide the most comprehensive and accurate representation of iMessage data available.
 
-This software can:
+This free and open-source software can:
 
 - Save, export, backup, and archive iMessage data to open, portable formats
 - Preserve multimedia content (images, videos, audio) from conversations
@@ -30,7 +30,7 @@ Documentation for the library is located [here](imessage-database/README.md).
 
 ### Supported Features
 
-This crate supports every iMessage feature as of macOS 15.2 (24C101) and iOS 18.2 (22C152):
+This crate supports every iMessage feature as of macOS 15.5 (24F74) and iOS 18.5 (22F75):
 
 - Multi-part messages
 - Replies/Threads
@@ -59,4 +59,4 @@ The FAQ document is located [here](/docs/faq.md).
 - [SQLiteFlow](https://www.sqliteflow.com), the SQL viewer I used to explore and reverse engineer the iMessage database
 - [Xplist](https://github.com/ic005k/Xplist), an invaluable tool for reverse engineering the `payload_data` plist format
 - [Compart](https://www.compart.com/en/unicode/), an amazing resource for looking up esoteric unicode details
-- [Archive.org](https://archive.org/details/darwin_0.1), for hosting the Darwin source referenced in reverse engineering the `typedstream` format
+- [GNU Project](https://github.com/gnustep/libobjc) and [Archive.org](https://archive.org/details/darwin_0.1), for hosting source code referenced to reverse engineer the `typedstream` format

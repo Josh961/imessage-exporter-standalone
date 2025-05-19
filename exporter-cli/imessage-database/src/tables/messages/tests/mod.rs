@@ -4,3 +4,4 @@ mod edited_tests;
 mod expressive_tests;
 mod guid_tests;
 mod query_tests;
+mod announcement;

@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        message_types::variants::{CustomBalloon, Tapback, Variant},
+        message_types::variants::{CustomBalloon, Tapback, TapbackAction, Variant},
         tables::messages::Message,
     };
 
@@ -51,7 +51,7 @@ mod tests {
         m.associated_message_type = Some(2000);
         assert!(matches!(
             m.variant(),
-            Variant::Tapback(0, true, Tapback::Loved)
+            Variant::Tapback(0, TapbackAction::Added, Tapback::Loved)
         ));
     }
 
@@ -61,7 +61,7 @@ mod tests {
         m.associated_message_type = Some(3001);
         assert!(matches!(
             m.variant(),
-            Variant::Tapback(0, false, Tapback::Liked)
+            Variant::Tapback(0, TapbackAction::Removed, Tapback::Liked)
         ));
     }
 
@@ -69,7 +69,10 @@ mod tests {
     fn test_sticker() {
         let mut m = Message::blank();
         m.associated_message_type = Some(1000);
-        assert!(matches!(m.variant(), Variant::Sticker(0)));
+        assert!(matches!(
+            m.variant(),
+            Variant::Tapback(0, TapbackAction::Added, Tapback::Sticker)
+        ));
     }
 
     #[test]
@@ -79,7 +82,6 @@ mod tests {
         assert!(matches!(m.variant(), Variant::SharePlay));
     }
 
-
     #[test]
     fn test_custom_emoji_tapback() {
         let mut m = Message::blank();
@@ -87,7 +89,7 @@ mod tests {
         m.associated_message_emoji = Some("🎉".to_owned());
         assert!(matches!(
             m.variant(),
-            Variant::Tapback(0, true, Tapback::Emoji(Some("🎉")))
+            Variant::Tapback(0, TapbackAction::Added, Tapback::Emoji(Some("🎉")))
         ));
     }
 
@@ -117,5 +119,92 @@ mod tests {
         let mut m = Message::blank();
         m.associated_message_type = Some(9999);
         assert!(matches!(m.variant(), Variant::Unknown(9999)));
+    }
+
+    #[test]
+    fn test_fitness_app() {
+        let mut m = Message::blank();
+        m.associated_message_type = Some(0);
+        m.balloon_bundle_id = Some(
+            "com.apple.messages.MSMessageExtensionBalloonPlugin:XXX:com.apple.ActivityMessagesApp.MessagesExtension".to_string(),
+        );
+        assert!(matches!(m.variant(), Variant::App(CustomBalloon::Fitness)));
+    }
+
+    #[test]
+    fn test_apple_pay_app() {
+        let mut m = Message::blank();
+        m.associated_message_type = Some(0);
+        m.balloon_bundle_id = Some(
+            "com.apple.messages.MSMessageExtensionBalloonPlugin:XXX:com.apple.PassbookUIService.PeerPaymentMessagesExtension".to_string(),
+        );
+        assert!(matches!(m.variant(), Variant::App(CustomBalloon::ApplePay)));
+    }
+
+    #[test]
+    fn test_slideshow_app() {
+        let mut m = Message::blank();
+        m.associated_message_type = Some(0);
+        m.balloon_bundle_id = Some(
+            "com.apple.messages.MSMessageExtensionBalloonPlugin:XXX:com.apple.mobileslideshow.PhotosMessagesApp".to_string(),
+        );
+        assert!(matches!(
+            m.variant(),
+            Variant::App(CustomBalloon::Slideshow)
+        ));
+    }
+
+    #[test]
+    fn test_check_in_app() {
+        let mut m = Message::blank();
+        m.associated_message_type = Some(0);
+        m.balloon_bundle_id = Some(
+            "com.apple.messages.MSMessageExtensionBalloonPlugin:XXX:com.apple.SafetyMonitorApp.SafetyMonitorMessages".to_string(),
+        );
+        assert!(matches!(m.variant(), Variant::App(CustomBalloon::CheckIn)));
+    }
+
+    #[test]
+    fn test_digital_touch_app() {
+        let mut m = Message::blank();
+        m.associated_message_type = Some(0);
+        m.balloon_bundle_id = Some(
+            "com.apple.messages.MSMessageExtensionBalloonPlugin:XXX:com.apple.DigitalTouchBalloonProvider".to_string(),
+        );
+        assert!(matches!(
+            m.variant(),
+            Variant::App(CustomBalloon::DigitalTouch)
+        ));
+    }
+
+    #[test]
+    fn test_removed_custom_emoji_tapback() {
+        let mut m = Message::blank();
+        m.associated_message_type = Some(3006);
+        m.associated_message_emoji = Some("🎉".to_owned());
+        assert!(matches!(
+            m.variant(),
+            Variant::Tapback(0, TapbackAction::Removed, Tapback::Emoji(Some("🎉")))
+        ));
+    }
+
+    #[test]
+    fn test_sticker_reply() {
+        let mut m = Message::blank();
+        m.associated_message_type = Some(2007);
+        assert!(matches!(
+            m.variant(),
+            Variant::Tapback(0, TapbackAction::Added, Tapback::Sticker)
+        ));
+    }
+
+    #[test]
+    fn test_remove_sticker_reply() {
+        let mut m = Message::blank();
+        m.associated_message_type = Some(3007);
+        assert!(matches!(
+            m.variant(),
+            Variant::Tapback(0, TapbackAction::Removed, Tapback::Sticker)
+        ));
     }
 }

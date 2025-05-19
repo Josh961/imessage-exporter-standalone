@@ -26,12 +26,17 @@ pub(crate) fn image_copy_convert(
         MediaType::Image("heic") | MediaType::Image("HEIC")
     ) {
         let output_type = ImageType::Jpeg;
+
         // Update extension for conversion
-        to.set_extension(output_type.to_str());
-        if convert_heic(from, to, converter, &output_type).is_none() {
-            eprintln!("Unable to convert {from:?}");
-        } else {
+        let mut converted_path = to.clone();
+        converted_path.set_extension(output_type.to_str());
+
+        if convert_heic(from, &converted_path, converter, &output_type).is_some() {
+            // If the conversion was successful, update the path
+            *to = converted_path;
             return Some(MediaType::Image(output_type.to_str()));
+        } else {
+            eprintln!("Unable to convert {from:?}");
         }
     }
 

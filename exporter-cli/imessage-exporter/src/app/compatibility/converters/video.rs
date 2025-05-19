@@ -26,12 +26,16 @@ pub(crate) fn video_copy_convert(
         MediaType::Video("mov") | MediaType::Video("MOV") | MediaType::Video("quicktime")
     ) {
         let output_type = VideoType::Mp4;
+
         // Update extension for conversion
-        to.set_extension(output_type.to_str());
-        if convert_mov(from, to, converter).is_none() {
-            eprintln!("Unable to convert {from:?}");
-        } else {
+        let mut converted_path = to.clone();
+        converted_path.set_extension(output_type.to_str());
+
+        if convert_mov(from, &converted_path, converter).is_some() {
+            *to = converted_path;
             return Some(MediaType::Video(output_type.to_str()));
+        } else {
+            eprintln!("Unable to convert {from:?}");
         }
     }
 

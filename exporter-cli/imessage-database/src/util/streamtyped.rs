@@ -18,13 +18,15 @@ const START_PATTERN: [u8; 2] = [0x0001, 0x002b];
 /// - <https://www.compart.com/en/unicode/U+0084>
 const END_PATTERN: [u8; 2] = [0x0086, 0x0084];
 
-/// Parse the body text from a known type of `typedstream` `attributedBody` file.
+/// Parse the body [text](crate::tables::messages::message::Message::text) from a known type of `typedstream` `attributedBody` file.
 ///
 /// `attributedBody` `typedstream` data looks like:
 ///
 /// ```txt
 /// streamtyped���@���NSAttributedString�NSObject����NSString��+Example message  ��iI���� NSDictionary��i����__kIMMessagePartAttributeName����NSNumber��NSValue��*������
 /// ```
+/// 
+/// In that example, the returned body text would be `"Example message"`.
 pub fn parse(mut stream: Vec<u8>) -> Result<String, StreamTypedError> {
     // Find the start index and drain
     for idx in 0..stream.len() {

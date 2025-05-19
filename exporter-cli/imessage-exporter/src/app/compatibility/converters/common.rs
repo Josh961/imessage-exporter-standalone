@@ -3,7 +3,7 @@
 */
 
 use std::{
-    fs::{copy, create_dir_all},
+    fs::{copy, create_dir_all, read_dir},
     path::Path,
     process::{Command, Stdio},
 };
@@ -51,18 +51,48 @@ pub(super) fn ensure_paths<'a>(from: &'a Path, to: &'a Path) -> Option<(&'a str,
     Some((from_path, to_path))
 }
 
-/// Copy a file without altering it
+/// Copy a file or directory without altering it
 pub(crate) fn copy_raw(from: &Path, to: &Path) {
-    // Ensure the directory tree exists
-    if let Some(folder) = to.parent() {
-        if !folder.exists() {
-            if let Err(why) = create_dir_all(folder) {
-                eprintln!("Unable to create {folder:?}: {why}");
+    if from.is_dir() {
+        // Ensure the directory tree exists
+        if let Err(why) = create_dir_all(to) {
+            eprintln!("Unable to create directory {to:?}: {why}");
+            return;
+        }
+
+        // Iterate over the directory entries and copy them recursively
+        match read_dir(from) {
+            Ok(entries) => {
+                for entry_result in entries {
+                    match entry_result {
+                        Ok(entry) => {
+                            let from_path = entry.path();
+                            let to_path = to.join(entry.file_name());
+                            copy_raw(&from_path, &to_path);
+                        }
+                        Err(why) => {
+                            eprintln!("Failed to read item in {:?}: {why}", from);
+                        }
+                    }
+                }
+            }
+            Err(why) => {
+                eprintln!("Failed to read directory {:?}: {why}", from);
             }
         }
-    }
+    } else {
+        // Ensure the directory tree exists
+        if let Some(folder) = to.parent() {
+            if !folder.exists() {
+                if let Err(why) = create_dir_all(folder) {
+                    eprintln!("Unable to create {folder:?}: {why}");
+                    return;
+                }
+            }
+        }
 
-    if let Err(why) = copy(from, to) {
-        eprintln!("Unable to copy {from:?} to {to:?}: {why}");
-    };
+        if let Err(why) = copy(from, to) {
+            eprintln!("Unable to copy {from:?} to {to:?}: {why}");
+        };
+    }
 }

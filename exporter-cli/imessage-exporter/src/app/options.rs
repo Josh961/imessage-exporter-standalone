@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use clap::{crate_version, Arg, ArgAction, ArgMatches, Command};
+use clap::{Arg, ArgAction, ArgMatches, Command, crate_version};
 
 use imessage_database::{
     tables::{attachment::DEFAULT_ATTACHMENT_ROOT, table::DEFAULT_PATH_IOS},
@@ -39,8 +39,6 @@ pub const OPTION_PLATFORM: &str = "platform";
 pub const OPTION_BYPASS_FREE_SPACE_CHECK: &str = "ignore-disk-warning";
 pub const OPTION_USE_CALLER_ID: &str = "use-caller-id";
 pub const OPTION_CONVERSATION_FILTER: &str = "conversation-filter";
-pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
-pub const OPTION_IGNORE_VIDEOS: &str = "images-only";
 
 // Other CLI Text
 pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
@@ -62,8 +60,6 @@ pub struct Options {
     pub attachment_manager: AttachmentManager,
     /// If true, emit diagnostic information to stdout
     pub diagnostic: bool,
-    /// If true, list all contacts and group chats
-    pub list_contacts: bool,
     /// The type of file we are exporting data to
     pub export_type: Option<ExportType>,
     /// Where the app will save exported data
@@ -82,8 +78,6 @@ pub struct Options {
     pub ignore_disk_space: bool,
     /// An optional filter for conversation participants
     pub conversation_filter: Option<String>,
-    /// If true, only include image attachments in the export
-    pub images_only: bool,
 }
 
 impl Options {
@@ -92,7 +86,6 @@ impl Options {
         let attachment_root: Option<&String> = args.get_one(OPTION_ATTACHMENT_ROOT);
         let attachment_manager_type: Option<&String> = args.get_one(OPTION_ATTACHMENT_MANAGER);
         let diagnostic = args.get_flag(OPTION_DIAGNOSTIC);
-        let list_contacts = args.get_flag(OPTION_LIST_CONTACTS);
         let export_file_type: Option<&String> = args.get_one(OPTION_EXPORT_TYPE);
         let user_export_path: Option<&String> = args.get_one(OPTION_EXPORT_PATH);
         let start_date: Option<&String> = args.get_one(OPTION_START_DATE);
@@ -103,7 +96,6 @@ impl Options {
         let platform_type: Option<&String> = args.get_one(OPTION_PLATFORM);
         let ignore_disk_space = args.get_flag(OPTION_BYPASS_FREE_SPACE_CHECK);
         let conversation_filter: Option<&String> = args.get_one(OPTION_CONVERSATION_FILTER);
-        let images_only = args.get_flag(OPTION_IGNORE_VIDEOS);
 
         // Build the export type
         let export_type: Option<ExportType> = match export_file_type {
@@ -115,93 +107,49 @@ impl Options {
             None => None,
         };
 
-        // Ensure an export type is specified if other export options are selected
-        if attachment_manager_type.is_some() && export_file_type.is_none() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Option {OPTION_ATTACHMENT_MANAGER} is enabled, which requires `--{OPTION_EXPORT_TYPE}`"
-            )));
-        }
-        if user_export_path.is_some() && export_file_type.is_none() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Option {OPTION_EXPORT_PATH} is enabled, which requires `--{OPTION_EXPORT_TYPE}`"
-            )));
-        }
-        if start_date.is_some() && export_file_type.is_none() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Option {OPTION_START_DATE} is enabled, which requires `--{OPTION_EXPORT_TYPE}`"
-            )));
-        }
-        if end_date.is_some() && export_file_type.is_none() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Option {OPTION_END_DATE} is enabled, which requires `--{OPTION_EXPORT_TYPE}`"
-            )));
-        }
-        if custom_name.is_some() && export_file_type.is_none() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Option {OPTION_CUSTOM_NAME} is enabled, which requires `--{OPTION_EXPORT_TYPE}`"
-            )));
-        }
-        if use_caller_id && export_file_type.is_none() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Option {OPTION_USE_CALLER_ID} is enabled, which requires `--{OPTION_EXPORT_TYPE}`"
-            )));
-        }
-        if conversation_filter.is_some() && export_file_type.is_none() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Option {OPTION_CONVERSATION_FILTER} is enabled, which requires `--{OPTION_EXPORT_TYPE}`"
-            )));
+        // Anything in here requires `--format`
+        if export_file_type.is_none() {
+            let format_deps = [
+                (attachment_manager_type.is_some(), OPTION_ATTACHMENT_MANAGER),
+                (user_export_path.is_some(), OPTION_EXPORT_PATH),
+                (no_lazy, OPTION_DISABLE_LAZY_LOADING),
+                (start_date.is_some(), OPTION_START_DATE),
+                (end_date.is_some(), OPTION_END_DATE),
+                (custom_name.is_some(), OPTION_CUSTOM_NAME),
+                (use_caller_id, OPTION_USE_CALLER_ID),
+                (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
+            ];
+            for (set, opt) in format_deps {
+                if set {
+                    return Err(RuntimeError::InvalidOptions(format!(
+                        "Option `{opt}` is enabled, which requires `--{}`",
+                        OPTION_EXPORT_TYPE
+                    )));
+                }
+            }
         }
 
-        // Warn the user if they are exporting to a file type for which lazy loading has no effect
-        if no_lazy && export_file_type != Some(&"html".to_string()) {
-            eprintln!(
-                "Option {OPTION_DISABLE_LAZY_LOADING} is enabled, but the format specified is not `html`!"
-            );
+        // During `diagnostics`, none of these may be set
+        let diag_conflicts = [
+            (attachment_manager_type.is_some(), OPTION_ATTACHMENT_MANAGER),
+            (user_export_path.is_some(), OPTION_EXPORT_PATH),
+            (no_lazy, OPTION_DISABLE_LAZY_LOADING),
+            (export_file_type.is_some(), OPTION_EXPORT_TYPE),
+            (start_date.is_some(), OPTION_START_DATE),
+            (end_date.is_some(), OPTION_END_DATE),
+            (use_caller_id, OPTION_USE_CALLER_ID),
+            (custom_name.is_some(), OPTION_CUSTOM_NAME),
+            (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
+        ];
+        for (set, opt) in diag_conflicts {
+            if diagnostic && set {
+                return Err(RuntimeError::InvalidOptions(format!(
+                    "Diagnostics are enabled; `{opt}` is disallowed"
+                )));
+            }
         }
 
-        // Ensure that if diagnostics are enabled, no other options are
-        if diagnostic && attachment_manager_type.is_some() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Diagnostics are enabled; {OPTION_ATTACHMENT_MANAGER} is disallowed"
-            )));
-        }
-        if diagnostic && user_export_path.is_some() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Diagnostics are enabled; {OPTION_EXPORT_PATH} is disallowed"
-            )));
-        }
-        if diagnostic && export_file_type.is_some() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Diagnostics are enabled; {OPTION_EXPORT_TYPE} is disallowed"
-            )));
-        }
-        if diagnostic && start_date.is_some() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Diagnostics are enabled; {OPTION_START_DATE} is disallowed"
-            )));
-        }
-        if diagnostic && end_date.is_some() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Diagnostics are enabled; {OPTION_END_DATE} is disallowed"
-            )));
-        }
-        if diagnostic && use_caller_id {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Diagnostics are enabled; {OPTION_USE_CALLER_ID} is disallowed"
-            )));
-        }
-        if diagnostic && custom_name.is_some() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Diagnostics are enabled; {OPTION_CUSTOM_NAME} is disallowed"
-            )));
-        }
-        if diagnostic && conversation_filter.is_some() {
-            return Err(RuntimeError::InvalidOptions(format!(
-                "Diagnostics are enabled; {OPTION_CONVERSATION_FILTER} is disallowed"
-            )));
-        }
-
-        // Ensure that there are no custom name conflicts
+        // Prevent custom_name vs. use_caller_id collision
         if custom_name.is_some() && use_caller_id {
             return Err(RuntimeError::InvalidOptions(format!(
                 "`--{OPTION_CUSTOM_NAME}` is enabled; `--{OPTION_USE_CALLER_ID}` is disallowed"
@@ -229,10 +177,11 @@ impl Options {
 
         // Build the Platform
         let platform = match platform_type {
-            Some(platform_str) => Platform::from_cli(platform_str).ok_or(
-                RuntimeError::InvalidOptions(format!(
-                "{platform_str} is not a valid platform! Must be one of <{SUPPORTED_PLATFORMS}>")),
-            )?,
+            Some(platform_str) => {
+                Platform::from_cli(platform_str).ok_or(RuntimeError::InvalidOptions(format!(
+                    "{platform_str} is not a valid platform! Must be one of <{SUPPORTED_PLATFORMS}>"
+                )))?
+            }
             None => Platform::determine(&db_path),
         };
 
@@ -249,7 +198,8 @@ impl Options {
         // Warn the user that custom attachment roots have no effect on iOS backups
         if attachment_root.is_some() && platform == Platform::iOS {
             eprintln!(
-                "Option {OPTION_ATTACHMENT_ROOT} is enabled, but the platform is {}, so the root will have no effect!", Platform::iOS
+                "Option {OPTION_ATTACHMENT_ROOT} is enabled, but the platform is {}, so the root will have no effect!",
+                Platform::iOS
             );
         }
 
@@ -271,7 +221,6 @@ impl Options {
             attachment_root: attachment_root.cloned(),
             attachment_manager: AttachmentManager::from(attachment_manager_mode),
             diagnostic,
-            list_contacts,
             export_type,
             export_path,
             query_context,
@@ -281,7 +230,6 @@ impl Options {
             platform,
             ignore_disk_space,
             conversation_filter: conversation_filter.cloned(),
-            images_only,
         })
     }
 
@@ -355,14 +303,6 @@ fn get_command() -> Command {
             .help("Print diagnostic information and exit\n")
             .action(ArgAction::SetTrue)
             .display_order(0),
-        )
-        .arg(
-            Arg::new(OPTION_LIST_CONTACTS)
-                .short('n')
-                .long(OPTION_LIST_CONTACTS)
-                .help("List all contacts and group chats with message counts and latest dates\n")
-                .action(ArgAction::SetTrue)
-                .display_order(1),
         )
         .arg(
             Arg::new(OPTION_EXPORT_TYPE)
@@ -463,17 +403,9 @@ fn get_command() -> Command {
             Arg::new(OPTION_CONVERSATION_FILTER)
                 .short('t')
                 .long(OPTION_CONVERSATION_FILTER)
-                .help("Filter exported conversations by contact numbers or emails\nFor a single number, exports just that DM conversation\nFor multiple numbers in one group (comma-separated), exports the group chat with exactly those participants\nFor multiple groups, separate them with semicolons\nExample for one DM: `-t 5558675309`\nExample for one group: `-t 5558675309,5551234567,5559876543`\nExample for multiple groups: `-t 5558675309,5551234567;5559876543,5552345678`\n")
+                .help("Filter exported conversations by contact numbers or emails\nTo provide multiple filter criteria, use a comma-separated string\nAll conversations with the specified participants are exported, including group conversations\nExample: `-t steve@apple.com,5558675309`\n")
                 .value_name("filter")
                 .display_order(13)
-        )
-        .arg(
-            Arg::new(OPTION_IGNORE_VIDEOS)
-                .short('v')
-                .long(OPTION_IGNORE_VIDEOS)
-                .help("Only include image attachments in the export\nIncludes images, GIFs, and HEIC sequences\nSkips videos, audio, and other file types\n")
-                .action(ArgAction::SetTrue)
-                .display_order(14)
         )
 }
 
@@ -489,7 +421,6 @@ impl Options {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
-            list_contacts: false,
             export_type: Some(export_type),
             export_path: PathBuf::from("/tmp"),
             query_context: QueryContext::default(),
@@ -499,7 +430,6 @@ impl Options {
             platform: Platform::macOS,
             ignore_disk_space: false,
             conversation_filter: None,
-            images_only: false,
         }
     }
 }
@@ -520,15 +450,14 @@ mod arg_tests {
     use crate::app::{
         compatibility::attachment_manager::{AttachmentManager, AttachmentManagerMode},
         export_type::ExportType,
-        options::{get_command, validate_path, Options},
+        options::{Options, get_command, validate_path},
     };
 
     #[test]
     fn can_build_option_diagnostic_flag() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-d"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
+        let args = command.get_matches_from(["imessage-exporter", "-d"]);
 
         // Build the Options
         let actual = Options::from_args(&args).unwrap();
@@ -539,7 +468,6 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: true,
-            list_contacts: false,
             export_type: None,
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -549,7 +477,6 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
-            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -558,79 +485,49 @@ mod arg_tests {
     #[test]
     fn cant_build_option_diagnostic_flag_with_export_type() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-d", "-f", "txt"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-d", "-f", "txt"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_diagnostic_flag_with_export_path() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-d", "-o", "~/test"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-d", "-o", "~/test"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_diagnostic_flag_with_attachment_manager() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-d", "-c", "basic"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-d", "-c", "basic"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_diagnostic_flag_with_start_date() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-d", "-s", "2020-01-01"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-d", "-s", "2020-01-01"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_diagnostic_flag_with_end() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-d", "-e", "2020-01-01"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-d", "-e", "2020-01-01"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_diagnostic_flag_with_caller_id() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-d", "-i"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-d", "-i"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
@@ -639,9 +536,8 @@ mod arg_tests {
         let _ = fs::remove_file("/tmp/orphaned.html");
 
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "html", "-o", "/tmp"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
+        let args = command.get_matches_from(["imessage-exporter", "-f", "html", "-o", "/tmp"]);
 
         // Build the Options
         let actual = Options::from_args(&args).unwrap();
@@ -653,7 +549,6 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
-            list_contacts: false,
             export_type: Some(ExportType::Html),
             export_path: validate_path(Some(&tmp_dir), &None).unwrap(),
             query_context: QueryContext::default(),
@@ -663,7 +558,6 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
-            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -675,9 +569,8 @@ mod arg_tests {
         let _ = fs::remove_file("/tmp/orphaned.txt");
 
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "txt", "-l"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
+        let args = command.get_matches_from(["imessage-exporter", "-f", "txt", "-l"]);
 
         // Build the Options
         let actual = Options::from_args(&args).unwrap();
@@ -688,7 +581,6 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
-            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -698,7 +590,6 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
-            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -707,100 +598,65 @@ mod arg_tests {
     #[test]
     fn cant_build_option_attachment_manager_no_export_type() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-c", "clone"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-c", "clone"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_export_path_no_export_type() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-o", "~/test"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-o", "~/test"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_start_date_path_no_export_type() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-s", "2020-01-01"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-s", "2020-01-01"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_end_date_path_no_export_type() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-e", "2020-01-01"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-e", "2020-01-01"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_invalid_date() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "html", "-e", "2020-32-32"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args =
+            command.get_matches_from(["imessage-exporter", "-f", "html", "-e", "2020-32-32"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_invalid_platform() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-a", "iPad"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-a", "iPad"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_invalid_export_type() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "pdf"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-f", "pdf"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn can_build_option_custom_name() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "txt", "-m", "Name"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
+        let args = command.get_matches_from(["imessage-exporter", "-f", "txt", "-m", "Name"]);
 
         // Build the Options
         let actual = Options::from_args(&args).unwrap();
@@ -811,7 +667,6 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
-            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -821,7 +676,6 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
-            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -830,9 +684,8 @@ mod arg_tests {
     #[test]
     fn can_build_option_caller_id() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "txt", "-i"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
+        let args = command.get_matches_from(["imessage-exporter", "-f", "txt", "-i"]);
 
         // Build the Options
         let actual = Options::from_args(&args).unwrap();
@@ -843,7 +696,6 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
-            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -853,7 +705,6 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
-            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -862,9 +713,9 @@ mod arg_tests {
     #[test]
     fn can_build_option_contact_filter() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-t", "steve@apple.com", "-f", "txt"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
+        let args =
+            command.get_matches_from(["imessage-exporter", "-t", "steve@apple.com", "-f", "txt"]);
 
         // Build the Options
         let actual = Options::from_args(&args).unwrap();
@@ -875,7 +726,6 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
-            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -885,7 +735,6 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: Some(String::from("steve@apple.com")),
-            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -894,9 +743,8 @@ mod arg_tests {
     #[test]
     fn can_build_option_full() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "txt", "-c", "full"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
+        let args = command.get_matches_from(["imessage-exporter", "-f", "txt", "-c", "full"]);
 
         // Build the Options
         let actual = Options::from_args(&args).unwrap();
@@ -907,7 +755,6 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Full),
             diagnostic: false,
-            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -917,7 +764,6 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
-            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -926,9 +772,8 @@ mod arg_tests {
     #[test]
     fn can_build_option_clone() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "txt", "-c", "clone"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
+        let args = command.get_matches_from(["imessage-exporter", "-f", "txt", "-c", "clone"]);
 
         // Build the Options
         let actual = Options::from_args(&args).unwrap();
@@ -939,7 +784,6 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Clone),
             diagnostic: false,
-            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -949,7 +793,6 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
-            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -958,53 +801,78 @@ mod arg_tests {
     #[test]
     fn cant_build_option_custom_name_and_caller_id() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-f", "txt", "-m", "Name", "-i"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-f", "txt", "-m", "Name", "-i"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_caller_id_no_export() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-i"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-i"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_custom_name_no_export() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-m", "Name"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
-
-        // Build the Options
-        let actual = Options::from_args(&args);
-
-        assert!(actual.is_err());
+        let args = command.get_matches_from(["imessage-exporter", "-m", "Name"]);
+        assert!(Options::from_args(&args).is_err());
     }
 
     #[test]
     fn cant_build_option_contact_filter_no_export() {
         // Get matches from sample args
-        let cli_args: Vec<&str> = vec!["imessage-exporter", "-t", "steve@apple.com"];
         let command = get_command();
-        let args = command.get_matches_from(cli_args);
+        let args = command.get_matches_from(["imessage-exporter", "-t", "steve@apple.com"]);
+        assert!(Options::from_args(&args).is_err());
+    }
+
+    #[test]
+    fn cant_build_option_no_lazy_without_format() {
+        let args = get_command().get_matches_from(["imessage-exporter", "-l"]);
+        assert!(Options::from_args(&args).is_err());
+    }
+
+    #[test]
+    fn cant_build_option_no_lazy_with_diagnostics() {
+        let args = get_command().get_matches_from(["imessage-exporter", "-d", "-l"]);
+        assert!(Options::from_args(&args).is_err());
+    }
+
+    #[test]
+    fn can_build_option_ignore_disk_space_flag() {
+        let args = get_command().get_matches_from(["imessage-exporter", "-f", "txt", "-b"]);
 
         // Build the Options
-        let actual = Options::from_args(&args);
+        let actual = Options::from_args(&args).unwrap();
 
-        assert!(actual.is_err());
+        // Expected data
+        let expected = Options {
+            db_path: default_db_path(),
+            attachment_root: None,
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+            diagnostic: false,
+            export_type: Some(ExportType::Txt),
+            export_path: validate_path(None, &None).unwrap(),
+            query_context: QueryContext::default(),
+            no_lazy: false,
+            custom_name: None,
+            use_caller_id: false,
+            platform: Platform::default(),
+            ignore_disk_space: true,
+            conversation_filter: None,
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn cant_build_option_invalid_attachment_root() {
+        let args = get_command().get_matches_from(["imessage-exporter", "-r", "/does/not/exist"]);
+        assert!(Options::from_args(&args).is_err());
     }
 }
 
@@ -1016,7 +884,7 @@ mod path_tests {
 
     use crate::app::{
         export_type::ExportType,
-        options::{validate_path, DEFAULT_OUTPUT_DIR},
+        options::{DEFAULT_OUTPUT_DIR, validate_path},
     };
     use imessage_database::util::dirs::home;
 

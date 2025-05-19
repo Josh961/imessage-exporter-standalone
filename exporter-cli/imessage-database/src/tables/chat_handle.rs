@@ -88,6 +88,19 @@ impl Deduplicate for ChatToHandle {
     /// that represents a single chat for all of the same participants, even if they have multiple handles.
     ///
     /// Assuming no new chat-handle relationships have been written to the database, deduplicated data is deterministic across runs.
+    /// 
+    /// # Example:
+    ///
+    /// ```
+    /// use imessage_database::util::dirs::default_db_path;
+    /// use imessage_database::tables::table::{Cacheable, Deduplicate, get_connection};
+    /// use imessage_database::tables::chat_handle::ChatToHandle;
+    ///
+    /// let db_path = default_db_path();
+    /// let conn = get_connection(&db_path).unwrap();
+    /// let chatrooms = ChatToHandle::cache(&conn).unwrap();
+    /// let deduped_chatrooms = ChatToHandle::dedupe(&chatrooms);
+    /// ```
     fn dedupe(duplicated_data: &HashMap<i32, Self::T>) -> HashMap<i32, i32> {
         let mut deduplicated_chats: HashMap<i32, i32> = HashMap::new();
         let mut participants_to_unique_chat_id: HashMap<Self::T, i32> = HashMap::new();

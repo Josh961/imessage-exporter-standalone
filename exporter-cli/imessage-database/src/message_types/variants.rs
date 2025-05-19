@@ -12,6 +12,7 @@ use crate::{
         app_store::AppStoreMessage, collaboration::CollaborationMessage, music::MusicMessage,
         placemark::PlacemarkMessage, url::URLMessage,
     },
+    tables::messages::models::GroupAction,
 };
 
 /// # Tapbacks
@@ -30,7 +31,7 @@ use crate::{
 ///
 /// ## Technical detail
 ///
-/// The index specified by the prefix maps to the index of the body part given by [`Message::body()`](crate::tables::messages::Message::body).
+/// The index specified by the prefix maps to the index of the body part given by [`Message::body()`](crate::tables::messages::Message#method.body).
 ///
 /// - `bp:` GUID prefix for bubble message tapbacks (url previews, apps, etc).
 /// - `p:0/` GUID prefix for normal messages (body text, attachments).
@@ -58,6 +59,8 @@ pub enum Tapback<'a> {
     Questioned,
     /// Custom emoji tapbacks
     Emoji(Option<&'a str>),
+    /// Custom sticker tapbacks
+    Sticker,
 }
 
 impl Display for Tapback<'_> {
@@ -122,14 +125,25 @@ pub enum URLOverride<'a> {
 /// updating the name of the group or changing the group photo
 #[derive(Debug)]
 pub enum Announcement<'a> {
-    /// Someone changed the name of the group
-    NameChange(&'a str),
-    /// Someone updated the group photo
-    PhotoChange,
     /// All parts of the message were unsent
     FullyUnsent,
-    /// Types that may occur in the future, i.e. someone leaving or joining a group
+    /// A group action
+    GroupAction(GroupAction<'a>),
+    /// A user kept an audio message
+    AudioMessageKept,
+    /// Types that may occur in the future
     Unknown(&'a i32),
+}
+
+/// Tapback Action Container
+///
+/// Tapbacks can either be added or removed; this enum represents those states
+#[derive(Debug)]
+pub enum TapbackAction {
+    /// Tapback was added to the message
+    Added,
+    /// Tapback was removed from the message
+    Removed,
 }
 
 /// Message variant container
@@ -138,28 +152,20 @@ pub enum Announcement<'a> {
 /// all of the possibilities.
 #[derive(Debug)]
 pub enum Variant<'a> {
-    /// A [tapback](https://support.apple.com/guide/messages/react-with-tapbacks-icht504f698a/mac)
-    ///
-    /// The `usize` indicates the index of the message's [`body()`](crate::tables::messages::Message::body) the tapback is applied to.
-    ///
-    /// The boolean indicates whether the tapback was applied (`true`) or removed (`false`).
-    Tapback(usize, bool, Tapback<'a>),
-    /// A sticker message, either placed on another message or by itself
-    ///
-    /// If the sticker is a tapback, the `usize` indicates the index of the message's [`body()`](crate::tables::messages::Message::body) the tapback is applied to.
-    ///
-    /// If the sticker is a normal message, it is treated like an attachment, and the message's [`body()`](crate::tables::messages::Message::body) indicates the location.
-    Sticker(usize),
-    /// Container for new or unknown messages
-    Unknown(i32),
-    /// An [iMessage app](https://support.apple.com/en-us/HT206906) generated message
-    App(CustomBalloon<'a>),
     /// An iMessage with a standard text body that may include attachments
     Normal,
-    /// A message that has been edited or unsent
+    /// A message that has been [edited](crate::message_types::edited::EditStatus::Edited) or [unsent](crate::message_types::edited::EditStatus::Unsent)
     Edited,
+    /// A [tapback](https://support.apple.com/guide/messages/react-with-tapbacks-icht504f698a/mac)
+    ///
+    /// The `usize` indicates the index of the message's [`body()`](crate::tables::messages::Message#method.body) the tapback is applied to.
+    Tapback(usize, TapbackAction, Tapback<'a>),
+    /// An [iMessage app](https://support.apple.com/en-us/HT206906) generated message
+    App(CustomBalloon<'a>),
     /// A SharePlay message
     SharePlay,
+    /// Container for new or unknown messages
+    Unknown(i32),
 }
 
 /// Defines behavior for different types of messages that have custom balloons

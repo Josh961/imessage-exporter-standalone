@@ -16,7 +16,10 @@ use imessage_database::{
     },
     tables::{
         attachment::Attachment,
-        messages::{models::AttachmentMeta, Message},
+        messages::{
+            Message,
+            models::{AttachmentMeta, TextAttributes},
+        },
     },
 };
 
@@ -75,8 +78,8 @@ pub(super) trait Writer<'a> {
         message_part_idx: usize,
         indent: &str,
     ) -> Option<String>;
-    /// Format some attributed text
-    fn format_attributed(&'a self, text: &'a str, attribute: &'a TextEffect) -> Cow<'a, str>;
+    /// Format all [`TextAttributes`]s applied to a given set of text
+    fn format_attributes(&'a self, text: &'a str, attributes: &'a [TextAttributes]) -> String;
     fn write_to_file(file: &mut BufWriter<File>, text: &str) -> Result<(), RuntimeError>;
 }
 
@@ -116,7 +119,10 @@ pub(super) trait BalloonFormatter<T> {
     ) -> String;
 }
 
-pub(super) trait TextEffectFormatter {
+/// Defines behavior for applying a [`TextEffect`] to the desired output format
+pub(super) trait TextEffectFormatter<'a> {
+    /// Format a specific [`TextEffect`]
+    fn format_effect(&'a self, text: &'a str, effect: &'a TextEffect) -> Cow<'a, str>;
     /// Format message text containing a [`Mention`](imessage_database::message_types::text_effects::TextEffect::Mention)
     fn format_mention(&self, text: &str, mentioned: &str) -> String;
     /// Format message text containing a [`Link`](imessage_database::message_types::text_effects::TextEffect::Link)

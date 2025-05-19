@@ -37,25 +37,33 @@ pub(crate) fn sticker_copy_convert(
     };
 
     if let Some(output_type) = output_type {
-        to.set_extension(output_type.to_str());
+        // Update extension for conversion
+        let mut converted_path = to.clone();
+        converted_path.set_extension(output_type.to_str());
+
         // If the attachment is an animated sticker, attempt to convert it to a gif
         // Fall back to the normal converter if this fails
         if matches!(output_type, ImageType::Gif) {
             if let Some(video_converter) = video_converter {
-                if convert_heics(from, to, video_converter).is_some() {
+                if convert_heics(from, &converted_path, video_converter).is_some() {
+                    *to = converted_path;
                     return Some(MediaType::Image(output_type.to_str()));
+                } else {
+                    eprintln!("Unable to convert {from:?}");
                 }
             }
         }
 
-        // Standard `HEIC` converter
-        if convert_heic(from, to, image_converter, &output_type).is_none() {
-            eprintln!("Unable to convert {from:?}");
-        } else {
+        // Standard `HEIC` converter fallback
+        if convert_heic(from, &converted_path, image_converter, &output_type).is_some() {
+            *to = converted_path;
             return Some(MediaType::Image(output_type.to_str()));
+        } else {
+            eprintln!("Unable to convert {from:?}");
         }
     }
 
+    // Fallback
     copy_raw(from, to);
     None
 }

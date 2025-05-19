@@ -1,12 +1,9 @@
 use crate::{
     message_types::{
-        edited::EditStatus,
+        edited::{EditStatus, EditedMessage},
         text_effects::{Animation, Style, TextEffect, Unit},
     },
-    tables::messages::{
-        models::{AttachmentMeta, BubbleComponent, TextAttributes},
-        Message,
-    },
+    tables::messages::models::{AttachmentMeta, BubbleComponent, TextAttributes},
     util::typedstream::models::{Archivable, OutputData},
 };
 
@@ -23,12 +20,16 @@ pub enum BubbleResult<'a> {
 }
 
 /// Logic to use deserialized typedstream data to parse the message body
-pub(crate) fn parse_body_typedstream(message: &Message) -> Option<Vec<BubbleComponent>> {
+pub(crate) fn parse_body_typedstream<'a>(
+    components: Option<&'a Vec<Archivable>>,
+    text: Option<&'a str>,
+    edited_parts: Option<&'a EditedMessage>,
+) -> Option<Vec<BubbleComponent<'a>>> {
     // Create the output data
     let mut out_v = vec![];
 
     // Start to iterate over the ranges
-    if let Some(components) = &message.components {
+    if let Some(components) = components {
         // The first item is the text itself, so skip over it when iterating
         let mut idx = 1;
         let mut current_start;
@@ -36,12 +37,7 @@ pub(crate) fn parse_body_typedstream(message: &Message) -> Option<Vec<BubbleComp
 
         // We want to index into the message text, so we need a table to align
         // Apple's indexes with the actual chars, not the bytes
-        let char_index_table: Vec<usize> = message
-            .text
-            .as_ref()?
-            .char_indices()
-            .map(|(a, _)| a)
-            .collect();
+        let char_index_table: Vec<usize> = text.as_ref()?.char_indices().map(|(a, _)| a).collect();
 
         while idx < components.len() {
             // The first part of the range sometimes indicates the part number, but not always
@@ -67,13 +63,9 @@ pub(crate) fn parse_body_typedstream(message: &Message) -> Option<Vec<BubbleComp
             let slice: &[Archivable] = get_n_dict_objects(components, idx, num_attrs);
 
             // Determine the type of the bubble and add it to the body parts vec
-            if let Some(bubble) = get_bubble_type(
-                slice,
-                message,
-                current_start,
-                current_end,
-                &char_index_table,
-            ) {
+            if let Some(bubble) =
+                get_bubble_type(slice, text, current_start, current_end, &char_index_table)
+            {
                 match bubble {
                     BubbleResult::New(item) => out_v.push(item),
                     BubbleResult::Continuation(effect) => match out_v.last_mut() {
@@ -89,7 +81,7 @@ pub(crate) fn parse_body_typedstream(message: &Message) -> Option<Vec<BubbleComp
     }
 
     // Add retracted components into the body
-    if let Some(edited_message) = &message.edited_parts {
+    if let Some(edited_message) = &edited_parts {
         for (idx, edited_message_part) in edited_message.parts.iter().enumerate() {
             if matches!(edited_message_part.status, EditStatus::Unsent) {
                 if idx >= out_v.len() {
@@ -151,23 +143,23 @@ fn get_n_dict_objects(components: &[Archivable], idx: usize, num_objects: usize)
 
 /// Determine the type of bubble the current range represents
 ///
-/// App messages are handled in [`Message::body()`]; they are detected by the presence of data in the `balloon_bundle_id` column.
+/// App messages are handled in [`body()`](crate::tables::table::AttributedBody); they are detected by the presence of data in the `balloon_bundle_id` column.
 fn get_bubble_type<'a>(
     components: &'a [Archivable],
-    message: &'a Message,
+    text: Option<&str>,
     start: usize,
     end: usize,
     char_indices: &[usize],
 ) -> Option<BubbleResult<'a>> {
-    let range_start = get_char_idx(message.text.as_ref()?, start, char_indices);
-    let range_end = get_char_idx(message.text.as_ref()?, end, char_indices);
+    let range_start = get_char_idx(text.as_ref()?, start, char_indices);
+    let range_end = get_char_idx(text.as_ref()?, end, char_indices);
     for (idx, key) in components.iter().enumerate() {
         if let Some(key_name) = key.as_nsstring() {
             match key_name {
                 "__kIMFileTransferGUIDAttributeName" => {
                     return Some(BubbleResult::New(BubbleComponent::Attachment(
                         AttachmentMeta::from_components(components)?,
-                    )))
+                    )));
                 }
                 "__kIMMentionConfirmedMention" => {
                     return Some(BubbleResult::Continuation(TextAttributes::new(
@@ -246,10 +238,10 @@ fn resolve_styles(components: &[Archivable]) -> Vec<Style> {
 }
 
 /// Fallback logic to parse the body from the message string content
-pub(crate) fn parse_body_legacy(message: &Message) -> Vec<BubbleComponent> {
+pub(crate) fn parse_body_legacy(text: &Option<String>) -> Vec<BubbleComponent> {
     let mut out_v = vec![];
     // Naive logic for when `typedstream` component parsing fails
-    match &message.text {
+    match text {
         Some(text) => {
             let mut start: usize = 0;
             let mut end: usize = 0;
@@ -302,9 +294,9 @@ mod typedstream_tests {
             text_effects::{Animation, Style, TextEffect, Unit},
         },
         tables::messages::{
-            body::parse_body_typedstream,
-            models::{BubbleComponent, TextAttributes, AttachmentMeta},
             Message,
+            body::parse_body_typedstream,
+            models::{AttachmentMeta, BubbleComponent, TextAttributes},
         },
         util::typedstream::parser::TypedStreamReader,
     };
@@ -326,7 +318,12 @@ mod typedstream_tests {
         m.components = parser.parse().ok();
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 10,
@@ -352,7 +349,12 @@ mod typedstream_tests {
         m.components = parser.parse().ok();
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Attachment(AttachmentMeta {
                 guid: Some("F0B18A15-E9A5-4B18-A38F-685B7B3FF037"),
                 transcription: None,
@@ -380,7 +382,12 @@ mod typedstream_tests {
         m.components = parser.parse().ok();
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 6,
@@ -406,7 +413,12 @@ mod typedstream_tests {
         m.components = parser.parse().ok();
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![
                 BubbleComponent::Attachment(AttachmentMeta {
                     guid: Some("at_0_F0668F79-20C2-49C9-A87F-1B007ABB0CED"),
@@ -455,7 +467,12 @@ mod typedstream_tests {
         m.components = parser.parse().ok();
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![
                 BubbleComponent::Text(vec![TextAttributes::new(0, 28, TextEffect::Default)]),
                 BubbleComponent::Attachment(AttachmentMeta {
@@ -501,10 +518,16 @@ mod typedstream_tests {
                 EditedMessagePart {
                     status: EditStatus::Edited,
                     edit_history: vec![
-                        EditedEvent::new(743907435000000000, "Second test".to_string(), None),
+                        EditedEvent::new(
+                            743907435000000000,
+                            Some("Second test".to_string()),
+                            None,
+                            None,
+                        ),
                         EditedEvent::new(
                             743907448000000000,
-                            "Second test was edited!".to_string(),
+                            Some("Second test was edited!".to_string()),
+                            None,
                             None,
                         ),
                     ],
@@ -517,7 +540,12 @@ mod typedstream_tests {
         });
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![
                 BubbleComponent::Text(vec![TextAttributes::new(0, 28, TextEffect::Default)]),
                 BubbleComponent::Attachment(AttachmentMeta {
@@ -553,7 +581,12 @@ mod typedstream_tests {
         m.components = parser.parse().ok();
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![
                 BubbleComponent::Attachment(AttachmentMeta {
                     guid: Some("at_0_2E5F12C3-E649-48AA-954D-3EA67C016BCC"),
@@ -584,7 +617,12 @@ mod typedstream_tests {
         m.components = parser.parse().ok();
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Attachment(AttachmentMeta {
                 guid: Some("at_0_BE588799-C4BC-47DF-A56D-7EE90C74911D"),
                 transcription: None,
@@ -619,7 +657,12 @@ mod typedstream_tests {
             .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 56,
@@ -652,7 +695,12 @@ mod typedstream_tests {
             .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Text(vec![
                 TextAttributes::new(0, 5, TextEffect::Default),
                 TextAttributes::new(5, 8, TextEffect::Mention("+15558675309")),
@@ -685,7 +733,12 @@ mod typedstream_tests {
             .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Text(vec![
                 TextAttributes::new(0, 6, TextEffect::OTP),
                 TextAttributes::new(6, 52, TextEffect::Default),
@@ -717,7 +770,12 @@ mod typedstream_tests {
             .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Text(vec![
                 TextAttributes::new(0, 11, TextEffect::Default),
                 TextAttributes::new(11, 21, TextEffect::Link("tel:0000000000")),
@@ -749,7 +807,12 @@ mod typedstream_tests {
             .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Text(vec![
                 TextAttributes::new(0, 20, TextEffect::Link("mailto:asdfghjklq@gmail.com")),
                 TextAttributes::new(20, 31, TextEffect::Default),
@@ -781,7 +844,12 @@ mod typedstream_tests {
             .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Text(vec![
                 TextAttributes::new(0, 17, TextEffect::Default),
                 TextAttributes::new(17, 25, TextEffect::Conversion(Unit::Timezone)),
@@ -814,7 +882,12 @@ mod typedstream_tests {
             .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![
                 BubbleComponent::Text(vec![TextAttributes::new(0, 0, TextEffect::Default)]),
                 BubbleComponent::Attachment(AttachmentMeta {
@@ -839,7 +912,12 @@ mod typedstream_tests {
         });
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Retracted,]
         );
     }
@@ -868,7 +946,12 @@ mod typedstream_tests {
             .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Text(vec![
                 TextAttributes::new(0, 4, TextEffect::Styles(vec![Style::Bold])),
                 TextAttributes::new(4, 5, TextEffect::Default),
@@ -916,7 +999,12 @@ mod typedstream_tests {
             .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Text(vec![
                 TextAttributes::new(0, 3, TextEffect::Animated(Animation::Big)),
                 TextAttributes::new(3, 4, TextEffect::Default),
@@ -959,7 +1047,12 @@ mod typedstream_tests {
             .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Text(vec![
                 TextAttributes::new(0, 9, TextEffect::Styles(vec![Style::Underline])),
                 TextAttributes::new(9, 17, TextEffect::Default),
@@ -993,7 +1086,12 @@ mod typedstream_tests {
             .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
 
         assert_eq!(
-            parse_body_typedstream(&m).unwrap(),
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
             vec![BubbleComponent::Attachment(AttachmentMeta {
                 guid: Some("4C339597-EBBB-4978-9B87-521C0471A848"),
                 transcription: Some("This is a test"),
@@ -1003,6 +1101,122 @@ mod typedstream_tests {
             }),]
         );
     }
+
+    #[test]
+    fn can_get_message_body_apple_music_lyrics() {
+        let mut m = Message::blank();
+        m.text = Some("\u{FFFC}".to_string());
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/typedstream/AppleMusicLyrics");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        m.components = parser.parse().ok();
+
+        parse_body_typedstream(
+            m.components.as_ref(),
+            m.text.as_deref(),
+            m.edited_parts.as_ref(),
+        )
+        .unwrap()
+        .iter()
+        .enumerate()
+        .for_each(|(idx, item)| println!("\t{idx}: {item:#?}"));
+
+        assert_eq!(
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap(),
+            vec![BubbleComponent::Text(vec![TextAttributes::new(
+                0,
+                3,
+                TextEffect::Link(
+                    "https://music.apple.com/us/lyrics/1329891623?ts=11.108&te=16.031&l=en&tk=2.v1.VsuX9f%2BaT1PyrgMgIT7ANQ%3D%3D&itsct=sharing_msg_lyrics&itscg=50401"
+                )
+            ),])]
+        );
+    }
+
+    #[test]
+    fn can_get_message_body_multiple_attachment() {
+        let mut m = Message::blank();
+        m.text = Some("\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}".to_string());
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/typedstream/MultiAttachment");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamReader::from(&bytes);
+        m.components = parser.parse().ok();
+
+        parse_body_typedstream(
+            m.components.as_ref(),
+            m.text.as_deref(),
+            m.edited_parts.as_ref(),
+        )
+        .unwrap()
+        .iter()
+        .enumerate()
+        .for_each(|(idx, item)| println!("\t{idx}: {item:#?}"));
+
+        assert_eq!(
+            parse_body_typedstream(
+                m.components.as_ref(),
+                m.text.as_deref(),
+                m.edited_parts.as_ref()
+            )
+            .unwrap()[..5],
+            vec![
+                BubbleComponent::Attachment(AttachmentMeta {
+                    guid: Some("at_0_48B9C973-3466-438C-BE72-E5B498D30772"),
+                    transcription: None,
+                    height: None,
+                    width: None,
+                    name: None
+                }),
+                BubbleComponent::Attachment(AttachmentMeta {
+                    guid: Some("at_1_48B9C973-3466-438C-BE72-E5B498D30772"),
+                    transcription: None,
+                    height: None,
+                    width: None,
+                    name: None
+                }),
+                BubbleComponent::Attachment(AttachmentMeta {
+                    guid: Some("at_2_48B9C973-3466-438C-BE72-E5B498D30772"),
+                    transcription: None,
+                    height: None,
+                    width: None,
+                    name: None
+                }),
+                BubbleComponent::Attachment(AttachmentMeta {
+                    guid: Some("at_3_48B9C973-3466-438C-BE72-E5B498D30772"),
+                    transcription: None,
+                    height: None,
+                    width: None,
+                    name: None
+                }),
+                BubbleComponent::Attachment(AttachmentMeta {
+                    guid: Some("at_4_48B9C973-3466-438C-BE72-E5B498D30772"),
+                    transcription: None,
+                    height: None,
+                    width: None,
+                    name: None
+                })
+            ]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1010,9 +1224,9 @@ mod legacy_tests {
     use crate::{
         message_types::text_effects::TextEffect,
         tables::messages::{
-            body::parse_body_legacy,
-            models::{BubbleComponent, TextAttributes, AttachmentMeta},
             Message,
+            body::parse_body_legacy,
+            models::{AttachmentMeta, BubbleComponent, TextAttributes},
         },
     };
 
@@ -1021,7 +1235,7 @@ mod legacy_tests {
         let mut m = Message::blank();
         m.text = Some("🙈".to_string());
         assert_eq!(
-            parse_body_legacy(&m),
+            parse_body_legacy(&m.text),
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 4,
@@ -1035,7 +1249,7 @@ mod legacy_tests {
         let mut m = Message::blank();
         m.text = Some("🙈🙈🙈".to_string());
         assert_eq!(
-            parse_body_legacy(&m),
+            parse_body_legacy(&m.text),
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 12,
@@ -1049,7 +1263,7 @@ mod legacy_tests {
         let mut m = Message::blank();
         m.text = Some("Hello world".to_string());
         assert_eq!(
-            parse_body_legacy(&m),
+            parse_body_legacy(&m.text),
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 11,
@@ -1063,7 +1277,7 @@ mod legacy_tests {
         let mut m = Message::blank();
         m.text = Some("\u{FFFC}Hello world".to_string());
         assert_eq!(
-            parse_body_legacy(&m),
+            parse_body_legacy(&m.text),
             vec![
                 BubbleComponent::Attachment(AttachmentMeta::default()),
                 BubbleComponent::Text(vec![TextAttributes::new(3, 14, TextEffect::Default),])
@@ -1076,7 +1290,7 @@ mod legacy_tests {
         let mut m = Message::blank();
         m.text = Some("\u{FFFD}Hello world".to_string());
         assert_eq!(
-            parse_body_legacy(&m),
+            parse_body_legacy(&m.text),
             vec![
                 BubbleComponent::App,
                 BubbleComponent::Text(vec![TextAttributes::new(3, 14, TextEffect::Default),])
@@ -1089,7 +1303,7 @@ mod legacy_tests {
         let mut m = Message::blank();
         m.text = Some("One\u{FFFD}\u{FFFC}Two\u{FFFC}Three\u{FFFC}four".to_string());
         assert_eq!(
-            parse_body_legacy(&m),
+            parse_body_legacy(&m.text),
             vec![
                 BubbleComponent::Text(vec![TextAttributes::new(0, 3, TextEffect::Default),]),
                 BubbleComponent::App,
@@ -1108,7 +1322,7 @@ mod legacy_tests {
         let mut m = Message::blank();
         m.text = Some("\u{FFFD}\u{FFFC}Two\u{FFFC}Three\u{FFFC}".to_string());
         assert_eq!(
-            parse_body_legacy(&m),
+            parse_body_legacy(&m.text),
             vec![
                 BubbleComponent::App,
                 BubbleComponent::Attachment(AttachmentMeta::default()),

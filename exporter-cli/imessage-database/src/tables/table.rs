@@ -6,7 +6,7 @@ use std::{collections::HashMap, fs::metadata, path::Path};
 
 use rusqlite::{blob::Blob, Connection, Error, OpenFlags, Result, Row, Statement};
 
-use crate::error::table::TableError;
+use crate::{error::table::TableError, tables::messages::models::BubbleComponent};
 
 /// Defines behavior for SQL Table data
 pub trait Table {
@@ -48,6 +48,51 @@ pub trait GetBlob {
     fn get_blob<'a>(&self, db: &'a Connection, column: &str) -> Option<Blob<'a>>;
 }
 
+/// Defines behavior for deserializing a message's [`typedstream`](crate::util::typedstream) body data in native Rust
+pub trait AttributedBody {
+    /// Get a vector of a message body's components. If the text has not been captured, the vector will be empty.
+    ///
+    /// # Parsing
+    ///
+    /// There are two different ways this crate will attempt to parse this data.
+    ///
+    /// ## Default parsing
+    ///
+    /// In most cases, the message body will be deserialized using the [`typedstream`](crate::util::typedstream) deserializer.
+    ///
+    /// *Note*: message body text can be formatted with a [`Vec`] of [`TextAttributes`](crate::tables::messages::models::TextAttributes).
+    ///
+    /// ## Legacy parsing
+    ///
+    /// If the `typedstream` data cannot be deserialized, this method falls back to a legacy string parsing algorithm that
+    /// only supports unstyled text.
+    ///
+    /// If the message has attachments, there will be one [`U+FFFC`](https://www.compart.com/en/unicode/U+FFFC) character
+    /// for each attachment and one [`U+FFFD`](https://www.compart.com/en/unicode/U+FFFD) for app messages that we need
+    /// to format.
+    /// 
+    /// ## Sample
+    ///
+    /// An iMessage that contains body text like:
+    ///
+    /// ```
+    /// let message_text = "\u{FFFC}Check out this photo!";
+    /// ```
+    ///
+    /// Will have a `body()` of:
+    ///
+    /// ```
+    /// use imessage_database::message_types::text_effects::TextEffect;
+    /// use imessage_database::tables::messages::{models::{TextAttributes, BubbleComponent, AttachmentMeta}};
+    ///  
+    /// let result = vec![
+    ///     BubbleComponent::Attachment(AttachmentMeta::default()),
+    ///     BubbleComponent::Text(vec![TextAttributes::new(3, 24, TextEffect::Default)]),
+    /// ];
+    /// ```
+    fn body(&self) -> Vec<BubbleComponent>;
+}
+
 /// Get a connection to the iMessage `SQLite` database
 // # Example:
 ///
@@ -62,11 +107,11 @@ pub trait GetBlob {
 /// ```
 pub fn get_connection(path: &Path) -> Result<Connection, TableError> {
     if path.exists() && path.is_file() {
-        return match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        return match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX) {
             Ok(res) => Ok(res),
             Err(why) => Err(
                 TableError::CannotConnect(
-                    format!("Unable to read from chat database: {why}\nEnsure full disk access is enabled for your terminal emulator in System Settings > Security and Privacy > Full Disk Access")
+                    format!("Unable to read from chat database: {why}\nEnsure full disk access is enabled for your terminal emulator in System Settings > Privacy & Security > Full Disk Access")
                 )),
             };
     };

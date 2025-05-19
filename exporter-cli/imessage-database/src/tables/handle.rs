@@ -15,7 +15,9 @@ use crate::{
 #[derive(Debug)]
 pub struct Handle {
     pub rowid: i32,
+    /// Identifier for a contact, i.e. a phone number or email address
     pub id: String,
+    /// Field used to disambiguate divergent handles that represent the same contact
     pub person_centric_id: Option<String>,
 }
 
@@ -99,6 +101,19 @@ impl Deduplicate for Handle {
     /// that represents a single handle for all of the deduplicate handles.
     ///
     /// Assuming no new handles have been written to the database, deduplicated data is deterministic across runs.
+    /// 
+    /// # Example:
+    ///
+    /// ```
+    /// use imessage_database::util::dirs::default_db_path;
+    /// use imessage_database::tables::table::{Cacheable, Deduplicate, get_connection};
+    /// use imessage_database::tables::handle::Handle;
+    ///
+    /// let db_path = default_db_path();
+    /// let conn = get_connection(&db_path).unwrap();
+    /// let chatrooms = Handle::cache(&conn).unwrap();
+    /// let deduped_chatrooms = Handle::dedupe(&chatrooms);
+    /// ```
     fn dedupe(duplicated_data: &HashMap<i32, Self::T>) -> HashMap<i32, i32> {
         let mut deduplicated_participants: HashMap<i32, i32> = HashMap::new();
         let mut participant_to_unique_participant_id: HashMap<Self::T, i32> = HashMap::new();

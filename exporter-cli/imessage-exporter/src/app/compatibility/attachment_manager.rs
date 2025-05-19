@@ -27,7 +27,7 @@ use imessage_database::{
     },
 };
 
-use filetime::{set_file_times, FileTime};
+use filetime::{FileTime, set_file_times};
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub struct AttachmentManager {
@@ -127,15 +127,6 @@ impl AttachmentManager {
         attachment: &'a mut Attachment,
         config: &Config,
     ) -> Option<()> {
-        // If images_only is enabled, only allow images and GIFs
-        if config.options.images_only {
-            match attachment.mime_type() {
-                MediaType::Image(_) => (), // Allow all image types
-                MediaType::Video(ext) if ext == "heics" || ext == "HEICS" => (), // Allow HEIC sequences (they become GIFs)
-                _ => return Some(()), // Skip all other types
-            }
-        }
-
         // Resolve the path to the attachment
         let attachment_path = attachment.resolved_attachment_path(
             &config.options.platform,
@@ -162,8 +153,10 @@ impl AttachmentManager {
             // Add a stable filename
             to.push(attachment.rowid.to_string());
 
-            // Set the new file's extension to the original one
-            to.set_extension(attachment.extension()?);
+            // Set the new file's extension to the original one, if provided
+            if !from.is_dir() && attachment.extension().is_some() {
+                to.set_extension(attachment.extension()?);
+            }
 
             // If the same file was referenced more than once, i.e. in a reply or response that we render twice, escape early
             if to.exists() {

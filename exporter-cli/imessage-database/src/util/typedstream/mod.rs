@@ -15,6 +15,10 @@
  - Pure Rust implementation for efficient and safe deserialization
  - No dependencies on Apple frameworks
  - Robust error handling for malformed or incomplete `typedstream` data
+
+ ## Reverse Engineering
+
+ A blog post describing the reverse engineering of `typedstream` is located [here](https://chrissardegna.com/blog/reverse-engineering-apples-typedstream-format/).
 */
 
 pub mod models;

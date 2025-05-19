@@ -42,7 +42,7 @@ fn iter_messages() -> Result<(), TableError> {
         msg.generate_text(&db);
 
         /// Emit debug info for each message
-        println!("{:?}", msg)
+        println!("{:#?}", msg)
     }
 
     Ok(())

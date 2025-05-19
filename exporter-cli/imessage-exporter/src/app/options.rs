@@ -40,6 +40,7 @@ pub const OPTION_BYPASS_FREE_SPACE_CHECK: &str = "ignore-disk-warning";
 pub const OPTION_USE_CALLER_ID: &str = "use-caller-id";
 pub const OPTION_CONVERSATION_FILTER: &str = "conversation-filter";
 pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
+pub const OPTION_IGNORE_VIDEOS: &str = "images-only";
 
 // Other CLI Text
 pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
@@ -81,6 +82,8 @@ pub struct Options {
     pub ignore_disk_space: bool,
     /// An optional filter for conversation participants
     pub conversation_filter: Option<String>,
+    /// If true, only include image attachments in the export
+    pub images_only: bool,
 }
 
 impl Options {
@@ -100,6 +103,7 @@ impl Options {
         let platform_type: Option<&String> = args.get_one(OPTION_PLATFORM);
         let ignore_disk_space = args.get_flag(OPTION_BYPASS_FREE_SPACE_CHECK);
         let conversation_filter: Option<&String> = args.get_one(OPTION_CONVERSATION_FILTER);
+        let images_only = args.get_flag(OPTION_IGNORE_VIDEOS);
 
         // Build the export type
         let export_type: Option<ExportType> = match export_file_type {
@@ -235,6 +239,7 @@ impl Options {
             platform,
             ignore_disk_space,
             conversation_filter: conversation_filter.cloned(),
+            images_only,
         })
     }
 
@@ -420,6 +425,14 @@ fn get_command() -> Command {
                 .value_name("filter")
                 .display_order(14)
         )
+        .arg(
+            Arg::new(OPTION_IGNORE_VIDEOS)
+                .short('v')
+                .long(OPTION_IGNORE_VIDEOS)
+                .help("Only include image attachments in the export\nIncludes images, GIFs, and HEIC sequences\nSkips videos, audio, and other file types\n")
+                .action(ArgAction::SetTrue)
+                .display_order(15)
+        )
 }
 
 #[cfg(test)]
@@ -444,6 +457,7 @@ impl Options {
             platform: Platform::macOS,
             ignore_disk_space: false,
             conversation_filter: None,
+            images_only: false,
         }
     }
 }
@@ -492,6 +506,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -574,6 +589,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -607,6 +623,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -694,6 +711,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -724,6 +742,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -755,6 +774,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: Some(String::from("steve@apple.com")),
+            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -785,6 +805,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -815,6 +836,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -887,6 +909,7 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: true,
             conversation_filter: None,
+            images_only: false,
         };
 
         assert_eq!(actual, expected);
@@ -896,6 +919,30 @@ mod arg_tests {
     fn cant_build_option_invalid_attachment_root() {
         let args = get_command().get_matches_from(["imessage-exporter", "-r", "/does/not/exist"]);
         assert!(Options::from_args(&args).is_err());
+    }
+
+    #[test]
+    fn can_build_option_images_only_flag() {
+        let args = get_command().get_matches_from(["imessage-exporter", "-f", "txt", "-v"]);
+        let actual = Options::from_args(&args).unwrap();
+        let expected = Options {
+            db_path: default_db_path(),
+            attachment_root: None,
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+            diagnostic: false,
+            list_contacts: false,
+            export_type: Some(ExportType::Txt),
+            export_path: validate_path(None, &None).unwrap(),
+            query_context: QueryContext::default(),
+            no_lazy: false,
+            custom_name: None,
+            use_caller_id: false,
+            platform: Platform::default(),
+            ignore_disk_space: false,
+            conversation_filter: None,
+            images_only: true,
+        };
+        assert_eq!(actual, expected);
     }
 }
 

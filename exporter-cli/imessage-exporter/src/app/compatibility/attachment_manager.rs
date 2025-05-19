@@ -127,6 +127,15 @@ impl AttachmentManager {
         attachment: &'a mut Attachment,
         config: &Config,
     ) -> Option<()> {
+        // If images_only is enabled, only allow images and GIFs
+        if config.options.images_only {
+            match attachment.mime_type() {
+                MediaType::Image(_) => (), // Allow all image types
+                MediaType::Video(ext) if ext == "heics" || ext == "HEICS" => (), // Allow HEIC sequences (they become GIFs)
+                _ => return Some(()), // Skip all other types
+            }
+        }
+
         // Resolve the path to the attachment
         let attachment_path = attachment.resolved_attachment_path(
             &config.options.platform,

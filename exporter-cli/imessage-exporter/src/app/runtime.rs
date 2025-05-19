@@ -268,8 +268,10 @@ impl Config {
 
                         let is_match = if is_potential_phone_comparison {
                             // Phone number suffix matching
-                            let handle_suffix = &clean_handle[clean_handle.len().saturating_sub(10)..];
-                            let filter_suffix = &clean_filter[clean_filter.len().saturating_sub(10)..];
+                            let handle_suffix =
+                                &clean_handle[clean_handle.len().saturating_sub(10)..];
+                            let filter_suffix =
+                                &clean_filter[clean_filter.len().saturating_sub(10)..];
                             handle_suffix == filter_suffix
                         } else {
                             // Exact match for emails or other non-phone/short identifiers
@@ -360,7 +362,12 @@ impl Config {
                 .set_selected_handle_ids(all_included_handles);
             self.options
                 .query_context
-                .set_selected_chat_ids(all_included_chatrooms);
+                .set_selected_chat_ids(all_included_chatrooms.clone());
+
+            if all_included_chatrooms.is_empty() {
+                eprintln!("No chatrooms were found with the supplied contacts.");
+                std::process::exit(0);
+            }
 
             self.log_filtered_handles_and_chats()
         }

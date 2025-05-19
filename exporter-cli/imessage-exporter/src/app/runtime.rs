@@ -260,34 +260,20 @@ impl Config {
                     for (handle_id, handle_name_str) in &self.participants {
                         let clean_handle = handle_name_str.replace(['+', ' ', '(', ')', '-'], "");
 
-                        // For phone numbers, match the last 10 digits if both are long enough
-                        // Otherwise, do a simple contains check (e.g., for emails or partial numbers)
-                        let is_match = if clean_handle.chars().all(char::is_numeric)
-                            && clean_handle.len() >= 10
-                            && clean_filter.chars().all(char::is_numeric)
+                        // Determine if it's a potential phone number comparison (long enough, no '@')
+                        let is_potential_phone_comparison = clean_handle.len() >= 10
                             && clean_filter.len() >= 10
-                        {
-                            let handle_suffix =
-                                &clean_handle[clean_handle.len().saturating_sub(10)..];
-                            let filter_suffix =
-                                &clean_filter[clean_filter.len().saturating_sub(10)..];
+                            && !clean_handle.contains('@')
+                            && !clean_filter.contains('@');
+
+                        let is_match = if is_potential_phone_comparison {
+                            // Phone number suffix matching
+                            let handle_suffix = &clean_handle[clean_handle.len().saturating_sub(10)..];
+                            let filter_suffix = &clean_filter[clean_filter.len().saturating_sub(10)..];
                             handle_suffix == filter_suffix
                         } else {
-                            // Original logic: handle_name_str.contains(included_name_filter_str)
-                            // Exact match for individual filters means the cleaned versions should be equal,
-                            // or for emails, contains might still be desired by user.
-                            // For now, let's stick to exact match on cleaned strings for non-numeric,
-                            // or contains for the original strings if not numeric-to-numeric comparison.
-                            if clean_handle.chars().all(char::is_numeric)
-                                || clean_filter.chars().all(char::is_numeric)
-                            {
-                                handle_name_str.contains(included_name_filter_str)
-                            // fallback for mixed or short numerics
-                            } else {
-                                clean_handle == clean_filter
-                                    || handle_name_str.contains(included_name_filter_str)
-                                // Exact for emails, or contains as fallback
-                            }
+                            // Exact match for emails or other non-phone/short identifiers
+                            clean_handle == clean_filter
                         };
 
                         if is_match {

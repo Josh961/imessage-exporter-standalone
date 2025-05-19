@@ -39,6 +39,7 @@ pub const OPTION_PLATFORM: &str = "platform";
 pub const OPTION_BYPASS_FREE_SPACE_CHECK: &str = "ignore-disk-warning";
 pub const OPTION_USE_CALLER_ID: &str = "use-caller-id";
 pub const OPTION_CONVERSATION_FILTER: &str = "conversation-filter";
+pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
 
 // Other CLI Text
 pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
@@ -60,6 +61,8 @@ pub struct Options {
     pub attachment_manager: AttachmentManager,
     /// If true, emit diagnostic information to stdout
     pub diagnostic: bool,
+    /// If true, list all contacts and group chats
+    pub list_contacts: bool,
     /// The type of file we are exporting data to
     pub export_type: Option<ExportType>,
     /// Where the app will save exported data
@@ -86,6 +89,7 @@ impl Options {
         let attachment_root: Option<&String> = args.get_one(OPTION_ATTACHMENT_ROOT);
         let attachment_manager_type: Option<&String> = args.get_one(OPTION_ATTACHMENT_MANAGER);
         let diagnostic = args.get_flag(OPTION_DIAGNOSTIC);
+        let list_contacts = args.get_flag(OPTION_LIST_CONTACTS);
         let export_file_type: Option<&String> = args.get_one(OPTION_EXPORT_TYPE);
         let user_export_path: Option<&String> = args.get_one(OPTION_EXPORT_PATH);
         let start_date: Option<&String> = args.get_one(OPTION_START_DATE);
@@ -221,6 +225,7 @@ impl Options {
             attachment_root: attachment_root.cloned(),
             attachment_manager: AttachmentManager::from(attachment_manager_mode),
             diagnostic,
+            list_contacts,
             export_type,
             export_path,
             query_context,
@@ -305,11 +310,19 @@ fn get_command() -> Command {
             .display_order(0),
         )
         .arg(
+            Arg::new(OPTION_LIST_CONTACTS)
+                .short('n')
+                .long(OPTION_LIST_CONTACTS)
+                .help("List all contacts and group chats with message counts and latest dates")
+                .action(ArgAction::SetTrue)
+                .display_order(1),
+        )
+        .arg(
             Arg::new(OPTION_EXPORT_TYPE)
             .short('f')
             .long(OPTION_EXPORT_TYPE)
             .help("Specify a single file format to export messages into\n")
-            .display_order(1)
+            .display_order(2)
             .value_name(SUPPORTED_FILE_TYPES),
         )
         .arg(
@@ -317,7 +330,7 @@ fn get_command() -> Command {
             .short('c')
             .long(OPTION_ATTACHMENT_MANAGER)
             .help(format!("Specify an optional method to use when copying message attachments\n`clone` will copy all files without converting anything\n`basic` will copy all files and convert HEIC images to JPEG\n`full` will copy all files and convert HEIC files to JPEG, CAF to MP4, and MOV to MP4\nIf omitted, the default is `{}`\nImageMagick is required to convert images on non-macOS platforms\nffmpeg is required to convert audio on non-macOS platforms and video on all platforms\n", AttachmentManagerMode::default()))
-            .display_order(2)
+            .display_order(3)
             .value_name(SUPPORTED_ATTACHMENT_MANAGER_MODES),
         )
         .arg(
@@ -325,7 +338,7 @@ fn get_command() -> Command {
                 .short('p')
                 .long(OPTION_DB_PATH)
                 .help(format!("Specify an optional custom path for the iMessage database location\nFor macOS, specify a path to a `chat.db` file\nFor iOS, specify a path to the root of an unencrypted backup directory\nIf omitted, the default directory is {}\n", default_db_path().display()))
-                .display_order(3)
+                .display_order(4)
                 .value_name("path/to/source"),
         )
         .arg(
@@ -333,7 +346,7 @@ fn get_command() -> Command {
                 .short('r')
                 .long(OPTION_ATTACHMENT_ROOT)
                 .help(format!("Specify an optional custom path to look for attachments in (macOS only)\nOnly use this if attachments are stored separately from the database's default location\nThe default location is {}\n", DEFAULT_ATTACHMENT_ROOT.replacen('~', &home(), 1)))
-                .display_order(4)
+                .display_order(5)
                 .value_name("path/to/attachments"),
         )
         .arg(
@@ -341,7 +354,7 @@ fn get_command() -> Command {
             .short('a')
             .long(OPTION_PLATFORM)
             .help("Specify the platform the database was created on\nIf omitted, the platform type is determined automatically\n")
-            .display_order(5)
+            .display_order(6)
             .value_name(SUPPORTED_PLATFORMS),
         )
         .arg(
@@ -349,7 +362,7 @@ fn get_command() -> Command {
                 .short('o')
                 .long(OPTION_EXPORT_PATH)
                 .help(format!("Specify an optional custom directory for outputting exported data\nIf omitted, the default directory is {}/{DEFAULT_OUTPUT_DIR}\n", home()))
-                .display_order(6)
+                .display_order(7)
                 .value_name("path/to/save/files"),
         )
         .arg(
@@ -357,7 +370,7 @@ fn get_command() -> Command {
                 .short('s')
                 .long(OPTION_START_DATE)
                 .help("The start date filter\nOnly messages sent on or after this date will be included\n")
-                .display_order(7)
+                .display_order(8)
                 .value_name("YYYY-MM-DD"),
         )
         .arg(
@@ -365,7 +378,7 @@ fn get_command() -> Command {
                 .short('e')
                 .long(OPTION_END_DATE)
                 .help("The end date filter\nOnly messages sent before this date will be included\n")
-                .display_order(8)
+                .display_order(9)
                 .value_name("YYYY-MM-DD"),
         )
         .arg(
@@ -374,22 +387,22 @@ fn get_command() -> Command {
                 .long(OPTION_DISABLE_LAZY_LOADING)
                 .help("Do not include `loading=\"lazy\"` in HTML export `img` tags\nThis will make pages load slower but PDF generation work\n")
                 .action(ArgAction::SetTrue)
-                .display_order(9),
+                .display_order(10),
         )
         .arg(
             Arg::new(OPTION_CUSTOM_NAME)
                 .short('m')
                 .long(OPTION_CUSTOM_NAME)
-                .help(format!("Specify an optional custom name for the database owner's messages in exports\nConflicts with --{OPTION_USE_CALLER_ID}\n"))
-                .display_order(10)
+                .help(format!("Specify an optional custom name for the database owner's messages in exports\nConflicts with --{}", OPTION_USE_CALLER_ID))
+                .display_order(11)
         )
         .arg(
             Arg::new(OPTION_USE_CALLER_ID)
                 .short('i')
                 .long(OPTION_USE_CALLER_ID)
-                .help(format!("Use the database owner's caller ID in exports instead of \"Me\"\nConflicts with --{OPTION_CUSTOM_NAME}\n"))
+                .help(format!("Use the database owner's caller ID in exports instead of \"Me\"\nConflicts with --{}", OPTION_CUSTOM_NAME))
                 .action(ArgAction::SetTrue)
-                .display_order(11)
+                .display_order(12)
         )
         .arg(
             Arg::new(OPTION_BYPASS_FREE_SPACE_CHECK)
@@ -397,7 +410,7 @@ fn get_command() -> Command {
                 .long(OPTION_BYPASS_FREE_SPACE_CHECK)
                 .help("Bypass the disk space check when exporting data\nBy default, exports will not run if there is not enough free disk space\n")
                 .action(ArgAction::SetTrue)
-                .display_order(12)
+                .display_order(13)
         )
         .arg(
             Arg::new(OPTION_CONVERSATION_FILTER)
@@ -405,7 +418,7 @@ fn get_command() -> Command {
                 .long(OPTION_CONVERSATION_FILTER)
                 .help("Filter exported conversations by contact numbers or emails\nTo provide multiple filter criteria, use a comma-separated string\nAll conversations with the specified participants are exported, including group conversations\nExample: `-t steve@apple.com,5558675309`\n")
                 .value_name("filter")
-                .display_order(13)
+                .display_order(14)
         )
 }
 
@@ -421,6 +434,7 @@ impl Options {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(export_type),
             export_path: PathBuf::from("/tmp"),
             query_context: QueryContext::default(),
@@ -468,6 +482,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: true,
+            list_contacts: false,
             export_type: None,
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -549,6 +564,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Html),
             export_path: validate_path(Some(&tmp_dir), &None).unwrap(),
             query_context: QueryContext::default(),
@@ -581,6 +597,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -667,6 +684,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -696,6 +714,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -726,6 +745,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -755,6 +775,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Full),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -784,6 +805,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Clone),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),
@@ -855,6 +877,7 @@ mod arg_tests {
             attachment_root: None,
             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
             diagnostic: false,
+            list_contacts: false,
             export_type: Some(ExportType::Txt),
             export_path: validate_path(None, &None).unwrap(),
             query_context: QueryContext::default(),

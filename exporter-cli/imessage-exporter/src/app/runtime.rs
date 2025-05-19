@@ -14,11 +14,11 @@ use fs2::available_space;
 use rusqlite::Connection;
 
 use crate::{
-    Exporter, HTML, TXT,
     app::{
         compatibility::attachment_manager::AttachmentManagerMode, error::RuntimeError,
         export_type::ExportType, options::Options, sanitizers::sanitize_filename,
     },
+    Exporter, HTML, TXT,
 };
 
 use imessage_database::{
@@ -30,8 +30,8 @@ use imessage_database::{
         handle::Handle,
         messages::Message,
         table::{
-            ATTACHMENTS_DIR, Cacheable, Deduplicate, Diagnostic, ME, ORPHANED, UNKNOWN,
-            get_connection, get_db_size,
+            get_connection, get_db_size, Cacheable, Deduplicate, Diagnostic, ATTACHMENTS_DIR, ME,
+            ORPHANED, UNKNOWN,
         },
     },
     util::{dates::get_offset, size::format_file_size},
@@ -406,6 +406,9 @@ impl Config {
     pub fn start(&self) -> Result<(), RuntimeError> {
         if self.options.diagnostic {
             self.run_diagnostic().map_err(RuntimeError::DatabaseError)?;
+        } else if self.options.list_contacts {
+            self.list_contacts_and_chats()
+                .map_err(RuntimeError::DatabaseError)?;
         } else if let Some(export_type) = &self.options.export_type {
             // Ensure that if we want to filter on things, we have stuff to filter for
             if let Some(filters) = &self.options.conversation_filter {
@@ -447,6 +450,131 @@ impl Config {
             }
         }
         println!("Done!");
+        Ok(())
+    }
+
+    /// List all contacts and group chats with message counts and latest dates
+    fn list_contacts_and_chats(&self) -> Result<(), TableError> {
+        use imessage_database::util::dates::{format, get_local_time};
+
+        // Get message counts and latest dates for each chat
+        let sql = "
+            SELECT
+                chat.rowid as chat_id,
+                chat.display_name,
+                chat.chat_identifier,
+                COUNT(DISTINCT message.ROWID) as message_count,
+                MAX(message.date) as last_message_date,
+                GROUP_CONCAT(DISTINCT handle.id) as participants
+            FROM chat
+            JOIN chat_message_join ON chat.ROWID = chat_message_join.chat_id
+            JOIN message ON chat_message_join.message_id = message.ROWID
+            LEFT JOIN chat_handle_join ON chat.ROWID = chat_handle_join.chat_id
+            LEFT JOIN handle ON chat_handle_join.handle_id = handle.ROWID
+            GROUP BY chat.ROWID
+            HAVING message_count >= 1
+            ORDER BY last_message_date DESC
+        ";
+
+        // First get all the rows
+        let mut stmt = self.db.prepare(sql).map_err(TableError::Chat)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i32>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i32>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            })
+            .map_err(TableError::Chat)?;
+
+        // Collect all rows into a Vec to avoid multiple queries
+        let all_chats: Vec<_> = rows.collect::<Result<_, _>>().map_err(TableError::Chat)?;
+
+        // Count individual and group chats
+        let mut individual_count = 0;
+        let mut group_count = 0;
+
+        for (_, _, _, _, _, participants_str_opt) in &all_chats {
+            if let Some(participants_str) = participants_str_opt {
+                let participant_count = participants_str.split(',').count();
+                if participant_count > 1 {
+                    group_count += 1;
+                } else {
+                    individual_count += 1;
+                }
+            } else {
+                // Assuming a chat with no participants listed in chat_handle_join is an individual chat (e.g. with a deleted contact)
+                // or a chat that only contains the user themselves.
+                individual_count += 1;
+            }
+        }
+
+        println!("Total DMs: {}", individual_count);
+        println!("Total Group Chats: {}", group_count);
+        println!("Total Chats: {}", individual_count + group_count);
+
+        // First pass - print individual chats
+        for (
+            _,
+            display_name,
+            chat_identifier,
+            message_count,
+            last_message_date,
+            participants_str_opt,
+        ) in &all_chats
+        {
+            let is_group_chat = if let Some(participants_str) = participants_str_opt {
+                participants_str.split(',').count() > 1
+            } else {
+                false // Treat as individual if no participants listed
+            };
+
+            if !is_group_chat {
+                let date = get_local_time(last_message_date, &self.offset)
+                    .map(|d| format(&Ok(d)))
+                    .unwrap_or_else(|_| String::from("Unknown"));
+                // For individual chats, participants_str_opt might be Some(handle_id_str) or None
+                // If Some, use it. If None, it might be a chat with self or a deleted contact; use chat_identifier.
+                let contact_id = participants_str_opt.as_deref().unwrap_or(chat_identifier);
+                println!("CONTACT|{}|{}|{}", contact_id, message_count, date);
+            }
+        }
+
+        // Second pass - print group chats
+        for (
+            _,
+            display_name,
+            chat_identifier,
+            message_count,
+            last_message_date,
+            participants_str_opt,
+        ) in &all_chats
+        {
+            if let Some(participants_str) = participants_str_opt {
+                if participants_str.split(',').count() > 1 {
+                    let name = display_name
+                        .clone()
+                        .unwrap_or_else(|| chat_identifier.clone());
+                    let name = if name.is_empty() {
+                        chat_identifier.clone()
+                    } else {
+                        name
+                    };
+                    let date = get_local_time(last_message_date, &self.offset)
+                        .map(|d| format(&Ok(d)))
+                        .unwrap_or_else(|_| String::from("Unknown"));
+
+                    println!(
+                        "GROUP|{}|{}|{}|{}",
+                        name, message_count, date, participants_str
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -544,7 +672,7 @@ impl Config {
 
 #[cfg(test)]
 mod filename_tests {
-    use crate::{Config, Options, app::runtime::MAX_LENGTH};
+    use crate::{app::runtime::MAX_LENGTH, Config, Options};
 
     use imessage_database::tables::chat::Chat;
 
@@ -1023,7 +1151,7 @@ mod directory_tests {
 mod chat_filter_tests {
     use std::collections::BTreeSet;
 
-    use crate::{Config, Options, app::export_type::ExportType};
+    use crate::{app::export_type::ExportType, Config, Options};
 
     #[test]
     fn can_generate_filter_string_multiple() {

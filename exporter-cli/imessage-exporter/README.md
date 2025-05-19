@@ -46,7 +46,13 @@ The [releases page](https://github.com/ReagentX/imessage-exporter/releases) prov
 ```txt
 -d, --diagnostics
         Print diagnostic information and exit
-        
+
+-n, --list-contacts
+        List all contacts and group chats with message counts and latest dates
+        Shows total number of DMs and group chats
+        For each DM: shows phone/email, message count, and last message date
+        For each group: shows name, message count, last message date, and participant list
+
 -f, --format <txt, html>
         Specify a single file format to export messages into
         

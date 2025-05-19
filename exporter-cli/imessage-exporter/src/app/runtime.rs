@@ -243,38 +243,138 @@ impl Config {
     ///   3) send those chat and handle IDs to the query context so they are included in the message table filters
     pub(crate) fn resolve_filtered_handles(&mut self) {
         if let Some(conversation_filter) = &self.options.conversation_filter {
-            let parsed_handle_filter = conversation_filter.split(',').collect::<Vec<&str>>();
+            let groups = conversation_filter.split(';').collect::<Vec<&str>>();
+            let mut all_included_chatrooms: BTreeSet<i32> = BTreeSet::new();
+            let mut all_included_handles: BTreeSet<i32> = BTreeSet::new();
 
-            let mut included_chatrooms: BTreeSet<i32> = BTreeSet::new();
-            let mut included_handles: BTreeSet<i32> = BTreeSet::new();
+            for group in groups {
+                let parsed_handle_filter = group.split(',').collect::<Vec<&str>>();
+                let mut current_group_included_handles: BTreeSet<i32> = BTreeSet::new();
+                let mut filter_to_handles: HashMap<String, BTreeSet<i32>> = HashMap::new();
 
-            // First: Scan the list of participants for included handle IDs
-            self.participants
-                .iter()
-                .for_each(|(handle_id, handle_name)| {
-                    parsed_handle_filter.iter().for_each(|included_name| {
-                        if handle_name.contains(included_name) {
-                            included_handles.insert(*handle_id);
+                // First: Scan the list of participants for included handle IDs for the current group
+                for included_name_filter_str in &parsed_handle_filter {
+                    let clean_filter =
+                        included_name_filter_str.replace(['+', ' ', '(', ')', '-'], "");
+                    let mut found_match_for_current_filter = false;
+                    for (handle_id, handle_name_str) in &self.participants {
+                        let clean_handle = handle_name_str.replace(['+', ' ', '(', ')', '-'], "");
+
+                        // For phone numbers, match the last 10 digits if both are long enough
+                        // Otherwise, do a simple contains check (e.g., for emails or partial numbers)
+                        let is_match = if clean_handle.chars().all(char::is_numeric)
+                            && clean_handle.len() >= 10
+                            && clean_filter.chars().all(char::is_numeric)
+                            && clean_filter.len() >= 10
+                        {
+                            let handle_suffix =
+                                &clean_handle[clean_handle.len().saturating_sub(10)..];
+                            let filter_suffix =
+                                &clean_filter[clean_filter.len().saturating_sub(10)..];
+                            handle_suffix == filter_suffix
+                        } else {
+                            // Original logic: handle_name_str.contains(included_name_filter_str)
+                            // Exact match for individual filters means the cleaned versions should be equal,
+                            // or for emails, contains might still be desired by user.
+                            // For now, let's stick to exact match on cleaned strings for non-numeric,
+                            // or contains for the original strings if not numeric-to-numeric comparison.
+                            if clean_handle.chars().all(char::is_numeric)
+                                || clean_filter.chars().all(char::is_numeric)
+                            {
+                                handle_name_str.contains(included_name_filter_str)
+                            // fallback for mixed or short numerics
+                            } else {
+                                clean_handle == clean_filter
+                                    || handle_name_str.contains(included_name_filter_str)
+                                // Exact for emails, or contains as fallback
+                            }
+                        };
+
+                        if is_match {
+                            current_group_included_handles.insert(*handle_id);
+                            filter_to_handles
+                                .entry(clean_filter.clone())
+                                .or_default()
+                                .insert(*handle_id);
+                            found_match_for_current_filter = true;
                         }
-                    });
-                });
-
-            // Second, scan the list of chatrooms for IDs that contain the selected participants
-            self.chatroom_participants
-                .iter()
-                .for_each(|(chat_id, participants)| {
-                    if !participants.is_disjoint(&included_handles) {
-                        included_chatrooms.insert(*chat_id);
                     }
-                });
+                    if !found_match_for_current_filter {
+                        eprintln!(
+                            "Warning: No matching handle found for filter '{}' in group '{}'",
+                            included_name_filter_str, group
+                        );
+                    }
+                }
+
+                // Verify we found a set of handles for each filter string in this group
+                if filter_to_handles.len() != parsed_handle_filter.len()
+                    && !parsed_handle_filter.is_empty()
+                {
+                    eprintln!("Warning: Not all filters in group '{}' matched to handles. Skipping this group.", group);
+                    continue;
+                }
+
+                // Second, scan the list of chatrooms
+                for (chat_id, chat_participants) in &self.chatroom_participants {
+                    if parsed_handle_filter.len() == 1 {
+                        // DM case
+                        // Chat must have exactly one participant, and that participant must be in current_group_included_handles
+                        if chat_participants.len() == 1
+                            && chat_participants.is_subset(&current_group_included_handles)
+                        {
+                            all_included_chatrooms.insert(*chat_id);
+                        }
+                    } else {
+                        // Group chat case
+                        // Check if the chat_participants are an exact match to the current_group_included_handles
+                        // This means:
+                        // 1. The number of participants in the chat must be equal to the number of filters in the group.
+                        // 2. Every handle_id in chat_participants must be present in current_group_included_handles.
+                        // 3. Every filter in the group must be represented by at least one handle in chat_participants.
+
+                        if chat_participants.len() == parsed_handle_filter.len()
+                            && chat_participants.is_subset(&current_group_included_handles)
+                        {
+                            // To ensure each filter is represented, we check that the set of all handles resolved from all filters
+                            // is equivalent to the chat participants.
+                            // This is implicitly handled if chat_participants.len() == parsed_handle_filter.len()
+                            // and each filter successfully mapped to at least one handle in current_group_included_handles
+                            // which is then a subset of chat_participants.
+                            // A more robust check for exact group match:
+                            let mut group_filters_represented_in_chat = true;
+                            if !filter_to_handles.is_empty() {
+                                // only if we have filters to check against
+                                for handles_for_one_filter in filter_to_handles.values() {
+                                    if chat_participants
+                                        .intersection(handles_for_one_filter)
+                                        .next()
+                                        .is_none()
+                                    {
+                                        group_filters_represented_in_chat = false;
+                                        break;
+                                    }
+                                }
+                            } else if !parsed_handle_filter.is_empty() {
+                                // if filter_to_handles is empty but parsed_handle_filter was not, it means no handles were found for any filter.
+                                group_filters_represented_in_chat = false;
+                            }
+
+                            if group_filters_represented_in_chat {
+                                all_included_chatrooms.insert(*chat_id);
+                            }
+                        }
+                    }
+                }
+                all_included_handles.extend(current_group_included_handles);
+            }
 
             self.options
                 .query_context
-                .set_selected_handle_ids(included_handles);
-
+                .set_selected_handle_ids(all_included_handles);
             self.options
                 .query_context
-                .set_selected_chat_ids(included_chatrooms);
+                .set_selected_chat_ids(all_included_chatrooms);
 
             self.log_filtered_handles_and_chats()
         }

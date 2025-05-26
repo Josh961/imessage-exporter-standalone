@@ -244,95 +244,160 @@ impl Config {
     pub(crate) fn resolve_filtered_handles(&mut self) {
         if let Some(conversation_filter) = &self.options.conversation_filter {
             let groups = conversation_filter.split(';').collect::<Vec<&str>>();
+            println!("Processing {} groups", groups.len());
             let mut all_included_chatrooms: BTreeSet<i32> = BTreeSet::new();
             let mut all_included_handles: BTreeSet<i32> = BTreeSet::new();
 
-            for group in groups {
+            for (group_idx, group) in groups.iter().enumerate() {
+                println!("\nProcessing group {}", group_idx + 1);
                 let parsed_handle_filter = group.split(',').collect::<Vec<&str>>();
+                println!("Parsed handle filter: {:?}", parsed_handle_filter);
                 let mut current_group_included_handles: BTreeSet<i32> = BTreeSet::new();
                 let mut filter_to_handles: HashMap<String, BTreeSet<i32>> = HashMap::new();
+                let mut unresolved_filter_strings: BTreeSet<String> = BTreeSet::new();
 
                 // First: Scan the list of participants for included handle IDs for the current group
-                for included_name_filter_str in &parsed_handle_filter {
-                    let clean_filter =
-                        included_name_filter_str.replace(['+', ' ', '(', ')', '-'], "");
-                    let mut found_match_for_current_filter = false;
+                for included_name_filter_str_raw in &parsed_handle_filter {
+                    let included_name_filter_str = included_name_filter_str_raw.trim();
+                    if included_name_filter_str.is_empty() {
+                        println!("Skipping empty filter part in group '{}'", group);
+                        continue;
+                    }
+
+                    // Normalize the filter string
+                    let clean_filter = self.normalize_identifier(included_name_filter_str);
+
+                    // Skip if we've already processed this exact filter (handles duplicates)
+                    if filter_to_handles.contains_key(&clean_filter) {
+                        println!("Skipping duplicate filter: {}", included_name_filter_str);
+                        continue;
+                    }
+
+                    let mut found_match_for_current_filter_in_handles = false;
+
                     for (handle_id, handle_name_str) in &self.participants {
-                        let clean_handle = handle_name_str.replace(['+', ' ', '(', ')', '-'], "");
+                        let clean_handle = self.normalize_identifier(handle_name_str);
 
-                        // Determine if it's a potential phone number comparison (long enough, no '@')
-                        let is_potential_phone_comparison = clean_handle.len() >= 10
-                            && clean_filter.len() >= 10
-                            && !clean_handle.contains('@')
-                            && !clean_filter.contains('@');
-
-                        let is_match = if is_potential_phone_comparison {
-                            // Phone number suffix matching
-                            let handle_suffix =
-                                &clean_handle[clean_handle.len().saturating_sub(10)..];
-                            let filter_suffix =
-                                &clean_filter[clean_filter.len().saturating_sub(10)..];
-                            handle_suffix == filter_suffix
-                        } else {
-                            // Exact match for emails or other non-phone/short identifiers
-                            clean_handle == clean_filter
-                        };
-
-                        if is_match {
+                        if self.identifiers_match(&clean_filter, &clean_handle) {
                             current_group_included_handles.insert(*handle_id);
                             filter_to_handles
                                 .entry(clean_filter.clone())
                                 .or_default()
                                 .insert(*handle_id);
-                            found_match_for_current_filter = true;
+                            println!(
+                                "Found matching handle: {} for filter: {}",
+                                handle_name_str, included_name_filter_str
+                            );
+                            found_match_for_current_filter_in_handles = true;
                         }
                     }
-                    if !found_match_for_current_filter {
+                    if !found_match_for_current_filter_in_handles {
                         eprintln!(
-                            "Warning: No matching handle found for filter '{}' in group '{}'",
+                            "Warning: No matching handle found for filter '{}' in group '{}'. Will attempt direct chat ID match if this is a DM filter.",
                             included_name_filter_str, group
                         );
+                        unresolved_filter_strings.insert(clean_filter.clone());
                     }
                 }
+                println!(
+                    "Found handles for group {}: {:?}",
+                    group_idx + 1,
+                    current_group_included_handles
+                );
+                println!(
+                    "Filter to handles map for group {}: {:?}",
+                    group_idx + 1,
+                    filter_to_handles
+                );
+                println!(
+                    "Unresolved filter strings for group {}: {:?}",
+                    group_idx + 1,
+                    unresolved_filter_strings
+                );
 
-                // Verify we found a set of handles for each filter string in this group
-                if filter_to_handles.len() != parsed_handle_filter.len()
-                    && !parsed_handle_filter.is_empty()
+                // Group Validity Check & Processing Logic
+                if parsed_handle_filter.is_empty()
+                    || parsed_handle_filter.iter().all(|f| f.trim().is_empty())
                 {
-                    eprintln!("Warning: Not all filters in group '{}' matched to handles. Skipping this group.", group);
+                    eprintln!("Warning: Filter group '{}' is empty or contains only empty filter strings. Skipping.", group);
+                    continue;
+                }
+
+                if parsed_handle_filter.len() > 1 && !unresolved_filter_strings.is_empty() {
+                    eprintln!("Warning: Group chat filter '{}' has unresolved components ({:?}). Group chat filters require all parts to match known contacts. Skipping this group.", group, unresolved_filter_strings);
                     continue;
                 }
 
                 // Second, scan the list of chatrooms
                 for (chat_id, chat_participants) in &self.chatroom_participants {
-                    if parsed_handle_filter.len() == 1 {
+                    if parsed_handle_filter
+                        .iter()
+                        .filter(|f| !f.trim().is_empty())
+                        .count()
+                        == 1
+                    {
                         // DM case
-                        // Chat must have exactly one participant, and that participant must be in current_group_included_handles
-                        if chat_participants.len() == 1
-                            && chat_participants.is_subset(&current_group_included_handles)
-                        {
-                            all_included_chatrooms.insert(*chat_id);
+                        let dm_filter_str_raw = parsed_handle_filter
+                            .iter()
+                            .find(|s| !s.trim().is_empty())
+                            .map_or("", |s| s.trim());
+                        if dm_filter_str_raw.is_empty() {
+                            continue;
+                        } // Should be caught by group validity check, but defensive
+
+                        let dm_filter_clean = self.normalize_identifier(dm_filter_str_raw);
+
+                        if chat_participants.len() == 1 {
+                            // It's a DM chat
+                            let mut matched_dm = false;
+                            // Try match via resolved handle first
+                            if let Some(handles_for_filter) =
+                                filter_to_handles.get(&dm_filter_clean)
+                            {
+                                if !handles_for_filter.is_empty()
+                                    && chat_participants.is_subset(handles_for_filter)
+                                {
+                                    println!(
+                                        "Found matching DM chat (via handle): {} with participants: {:?}",
+                                        chat_id, chat_participants
+                                    );
+                                    all_included_chatrooms.insert(*chat_id);
+                                    matched_dm = true;
+                                }
+                            }
+
+                            // If not matched by handle, and the filter was unresolved (or no handles for it), try direct chat_identifier match
+                            if !matched_dm && unresolved_filter_strings.contains(&dm_filter_clean) {
+                                if let Some(chat_obj) = self.chatrooms.get(chat_id) {
+                                    let clean_chat_identifier =
+                                        self.normalize_identifier(&chat_obj.chat_identifier);
+
+                                    if self
+                                        .identifiers_match(&dm_filter_clean, &clean_chat_identifier)
+                                    {
+                                        println!(
+                                            "Found matching DM chat (via direct chat_identifier): {} with chat_identifier: {}",
+                                            chat_id, chat_obj.chat_identifier
+                                        );
+                                        all_included_chatrooms.insert(*chat_id);
+                                    }
+                                }
+                            }
                         }
                     } else {
-                        // Group chat case
-                        // Check if the chat_participants are an exact match to the current_group_included_handles
-                        // This means:
-                        // 1. The number of participants in the chat must be equal to the number of filters in the group.
-                        // 2. Every handle_id in chat_participants must be present in current_group_included_handles.
-                        // 3. Every filter in the group must be represented by at least one handle in chat_participants.
-
-                        if chat_participants.len() == parsed_handle_filter.len()
+                        // Group chat case (more than 1 non-empty filter)
+                        // This part only runs if !unresolved_filter_strings.is_empty() was false for this group.
+                        // So, all filters in parsed_handle_filter should have corresponding entries in filter_to_handles.
+                        let non_empty_filter_count = parsed_handle_filter
+                            .iter()
+                            .filter(|f| !f.trim().is_empty())
+                            .count();
+                        if chat_participants.len() == non_empty_filter_count
                             && chat_participants.is_subset(&current_group_included_handles)
                         {
-                            // To ensure each filter is represented, we check that the set of all handles resolved from all filters
-                            // is equivalent to the chat participants.
-                            // This is implicitly handled if chat_participants.len() == parsed_handle_filter.len()
-                            // and each filter successfully mapped to at least one handle in current_group_included_handles
-                            // which is then a subset of chat_participants.
-                            // A more robust check for exact group match:
                             let mut group_filters_represented_in_chat = true;
                             if !filter_to_handles.is_empty() {
-                                // only if we have filters to check against
+                                //Iterate over the BTreeSet<i32> (set of handle IDs) for each distinct cleaned filter string
                                 for handles_for_one_filter in filter_to_handles.values() {
                                     if chat_participants
                                         .intersection(handles_for_one_filter)
@@ -343,12 +408,18 @@ impl Config {
                                         break;
                                     }
                                 }
-                            } else if !parsed_handle_filter.is_empty() {
-                                // if filter_to_handles is empty but parsed_handle_filter was not, it means no handles were found for any filter.
+                            } else if non_empty_filter_count > 0 {
+                                // This means filter_to_handles is empty, but the user did provide non-empty filters.
+                                // This should ideally be caught by the group validity check that ensures no unresolved_filter_strings for groups.
+                                // If reached, it means none of the filters resolved, so they can't be represented.
                                 group_filters_represented_in_chat = false;
                             }
 
                             if group_filters_represented_in_chat {
+                                println!(
+                                    "Found matching group chat: {} with participants: {:?}",
+                                    chat_id, chat_participants
+                                );
                                 all_included_chatrooms.insert(*chat_id);
                             }
                         }
@@ -366,11 +437,60 @@ impl Config {
 
             if all_included_chatrooms.is_empty() {
                 eprintln!("No chatrooms were found with the supplied contacts.");
+                println!("No chatrooms were found with the supplied contacts.");
                 std::process::exit(0);
             }
+            println!("\nTotal chatrooms found: {:?}", all_included_chatrooms);
 
             self.log_filtered_handles_and_chats()
         }
+    }
+
+    /// Normalize an identifier (phone number or email) for comparison
+    fn normalize_identifier(&self, identifier: &str) -> String {
+        let mut normalized = identifier.replace(['+', ' ', '(', ')', '-', '.'], "");
+
+        // For emails, convert to lowercase for case-insensitive matching
+        if normalized.contains('@') {
+            normalized = normalized.to_lowercase();
+        }
+
+        normalized
+    }
+
+    /// Check if two normalized identifiers match
+    fn identifiers_match(&self, filter: &str, handle: &str) -> bool {
+        // Check for exact match first
+        if filter == handle {
+            return true;
+        }
+
+        // For phone numbers (both long and short), try intelligent matching
+        let both_are_numeric = !handle.contains('@')
+            && !filter.contains('@')
+            && handle.chars().all(|c| c.is_ascii_digit())
+            && filter.chars().all(|c| c.is_ascii_digit());
+
+        if both_are_numeric {
+            // For long phone numbers (10+ digits), use suffix matching
+            if handle.len() >= 10 && filter.len() >= 10 {
+                let handle_suffix = &handle[handle.len().saturating_sub(10)..];
+                let filter_suffix = &filter[filter.len().saturating_sub(10)..];
+                return handle_suffix == filter_suffix;
+            }
+
+            // For shorter numbers (5-9 digits), try suffix matching with the shorter length
+            // This handles toll-free numbers, short codes, etc.
+            if handle.len() >= 5 && filter.len() >= 5 {
+                let min_len = handle.len().min(filter.len());
+                let handle_suffix = &handle[handle.len().saturating_sub(min_len)..];
+                let filter_suffix = &filter[filter.len().saturating_sub(min_len)..];
+                return handle_suffix == filter_suffix;
+            }
+        }
+
+        // No partial matching - we want to match exactly one contact, not multiple
+        false
     }
 
     /// If we set some filtered chatrooms, emit how many will be included in the export

@@ -1,6 +1,6 @@
 {
   "name": "imessage-exporter-standalone",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Export your iMessage chats to backup files",
   "author": "My Forever Books",
   "type": "module",

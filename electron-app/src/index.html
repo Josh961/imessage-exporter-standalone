@@ -311,12 +311,26 @@
                   </label>
                   <hr class="my-2 border-slate-200" />
                   <div class="flex flex-col gap-2">
-                    <span class="text-sm font-medium text-slate-700">Advanced export</span>
+                    <span class="text-sm font-medium text-slate-700">Slow export (more thorough)</span>
+                    <p class="text-sm text-slate-500">
+                      Uses an alternative method that's more thorough when standard contact filtering encounters issues. Takes longer but ensures your selected contacts are
+                      exported.
+                    </p>
+                    <span id="filtered-contacts-display" class="text-sm text-slate-600"></span>
+                    <button
+                      id="filtered-export-button"
+                      class="mt-1 w-full rounded border border-sky-500 bg-white px-4 py-2 text-sm font-semibold text-sky-500 transition-all duration-200 hover:border-sky-600 hover:bg-sky-50 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2">
+                      Export with slow method
+                    </button>
+                    <hr class="my-2 border-slate-200" />
+                    <span class="text-sm font-medium text-slate-700">Full export (no contact filtering)</span>
                     <p class="text-sm text-slate-500">
                       Export all messages without selecting contacts. This will export your entire message history within the specified date range.
                     </p>
                     <p id="date-range-display" class="text-sm italic text-slate-400"></p>
-                    <button id="full-export-button" class="mt-1 w-full rounded bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 focus:outline-none">
+                    <button
+                      id="full-export-button"
+                      class="mt-1 w-full rounded border border-sky-500 bg-white px-4 py-2 text-sm font-semibold text-sky-500 transition-all duration-200 hover:border-sky-600 hover:bg-sky-50 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2">
                       Export all messages
                     </button>
                   </div>

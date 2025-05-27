@@ -58,7 +58,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     manualEntryModalContent: document.getElementById('manual-entry-modal-content'),
     clearAllManualContacts: document.getElementById('clear-all-manual-contacts'),
     fullExportButton: document.getElementById('full-export-button'),
+    filteredExportButton: document.getElementById('filtered-export-button'),
     dateRangeDisplay: document.getElementById('date-range-display'),
+    filteredContactsDisplay: document.getElementById('filtered-contacts-display'),
   };
 
   // State
@@ -395,6 +397,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     elements.selectedContactsCount.textContent = `Selected: ${selectedIndividualCount} contact${selectedIndividualCount !== 1 ? 's' : ''}, ${selectedGroupCount} group chat${selectedGroupCount !== 1 ? 's' : ''}`;
     elements.selectedContactsCountTwo.textContent = `Selected: ${selectedIndividualCount} contact${selectedIndividualCount !== 1 ? 's' : ''}, ${selectedGroupCount} group chat${selectedGroupCount !== 1 ? 's' : ''}`;
+
+    updateFilteredExportDisplay();
   }
 
   function toggleSection(section) {
@@ -600,6 +604,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function setupSettingsListeners() {
     elements.settingsButton.addEventListener('click', () => {
       updateDateRangeDisplay();
+      updateFilteredExportDisplay();
       openSettingsModal();
     });
     elements.closeSettings.addEventListener('click', closeSettingsModal);
@@ -610,10 +615,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     elements.fullExportButton.addEventListener('click', fullExport);
+    elements.filteredExportButton.addEventListener('click', filteredExport);
 
     // Date change listeners
-    elements.startDate.addEventListener('change', updateDateRangeDisplay);
-    elements.endDate.addEventListener('change', updateDateRangeDisplay);
+    elements.startDate.addEventListener('change', () => {
+      updateDateRangeDisplay();
+      updateFilteredExportDisplay();
+    });
+    elements.endDate.addEventListener('change', () => {
+      updateDateRangeDisplay();
+      updateFilteredExportDisplay();
+    });
 
     // Load saved preferences
     elements.includeVideos.checked = localStorage.getItem('includeVideos') === 'true';
@@ -748,6 +760,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       button.addEventListener('click', handleDelete);
     });
+
+    updateFilteredExportDisplay();
   }
 
   function setupManualEntryListeners() {
@@ -782,6 +796,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const endDate = elements.endDate.value;
 
     if (!inputFolder || !outputFolder) {
+      closeSettingsModal();
       if (!inputFolder) elements.inputFolderError.classList.remove('hidden');
       if (!outputFolder) elements.outputFolderError.classList.remove('hidden');
       return;
@@ -817,8 +832,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.exportButton.classList.add('hover:bg-sky-500', 'opacity-60');
 
     elements.fullExportButton.disabled = true;
-    elements.fullExportButton.classList.remove('hover:bg-sky-600');
-    elements.fullExportButton.classList.add('hover:bg-sky-500', 'opacity-60');
+    elements.fullExportButton.classList.remove('hover:bg-sky-50', 'hover:border-sky-600', 'hover:shadow-md', 'hover:scale-[1.02]');
+    elements.fullExportButton.classList.add('opacity-60');
 
     elements.selectContacts.disabled = true;
     elements.manualContactEntry.disabled = true;
@@ -840,8 +855,141 @@ document.addEventListener('DOMContentLoaded', async () => {
       elements.exportButton.classList.add('hover:bg-sky-600');
 
       elements.fullExportButton.disabled = false;
-      elements.fullExportButton.classList.remove('hover:bg-sky-500', 'opacity-60');
-      elements.fullExportButton.classList.add('hover:bg-sky-600');
+      elements.fullExportButton.classList.remove('opacity-60');
+      elements.fullExportButton.classList.add('hover:bg-sky-50', 'hover:border-sky-600', 'hover:shadow-md', 'hover:scale-[1.02]');
+
+      elements.selectContacts.disabled = false;
+      elements.manualContactEntry.disabled = false;
+      elements.selectContacts.classList.remove('opacity-50', 'cursor-not-allowed');
+      elements.manualContactEntry.classList.remove('opacity-50', 'cursor-not-allowed');
+    }
+  }
+
+  async function filteredExport() {
+    const inputFolder = elements.inputFolder.value;
+    const outputFolder = elements.outputFolder.value;
+    const startDate = elements.startDate.value;
+    const endDate = elements.endDate.value;
+
+    if (!inputFolder || !outputFolder) {
+      closeSettingsModal();
+      if (!inputFolder) elements.inputFolderError.classList.remove('hidden');
+      if (!outputFolder) elements.outputFolderError.classList.remove('hidden');
+      return;
+    }
+
+    if (selectedContacts.size === 0 && manualContacts.length === 0) {
+      closeSettingsModal();
+      elements.status.textContent = 'Select at least one contact or add a manual contact for slow export';
+      elements.status.className = 'text-center font-semibold text-red-500';
+      return;
+    }
+
+    closeSettingsModal();
+
+    // Get all selected contacts first
+    const getLast10Digits = (number) => {
+      const digits = number.replace(/\D/g, '');
+      return digits.slice(-10);
+    };
+
+    const areGroupsEqual = (group1, group2) => {
+      if (group1.length !== group2.length) return false;
+      const numbers1 = group1.map(n => getLast10Digits(n)).sort();
+      const numbers2 = group2.map(n => getLast10Digits(n)).sort();
+      return numbers1.every((num, idx) => num === numbers2[idx]);
+    };
+
+    const selectedContactsList = Array.from(selectedContacts).map(contact => {
+      const contactData = contacts.find(c => (c.displayName || c.contact) === contact);
+      if (contactData && contactData.type === 'GROUP') {
+        return contactData.participants.split(',').map(p => p.trim());
+      }
+      return contact;
+    });
+
+    const manualContactsList = manualContacts.filter(entry => {
+      if (entry.type === 'GROUP') {
+        return !selectedContactsList.some(selectedContact => {
+          if (Array.isArray(selectedContact)) {
+            return areGroupsEqual(selectedContact, entry.contacts);
+          }
+          return false;
+        });
+      }
+      const manualNumber = getLast10Digits(entry.contacts[0]);
+      return !Array.from(selectedContacts).some(contact => {
+        const contactData = contacts.find(c => (c.displayName || c.contact) === contact);
+        if (contactData && contactData.type === 'CONTACT') {
+          return getLast10Digits(contactData.contact) === manualNumber;
+        }
+        return false;
+      });
+    }).map(entry => entry.type === 'GROUP' ? entry.contacts : entry.contacts[0]);
+
+    const allSelectedContacts = [...selectedContactsList, ...manualContactsList];
+
+    const exportParams = {
+      inputFolder,
+      outputFolder,
+      startDate,
+      endDate,
+      selectedContacts: allSelectedContacts,
+      includeVideos,
+      debugMode,
+      isFilteredExport: true // New flag for filtered export
+    };
+
+    elements.status.innerHTML = 'Using slow export method, this may take some time<span id="animatedDots">.</span>';
+    const dotsElement = document.getElementById('animatedDots');
+
+    let dots = 1;
+    exportAnimationInterval = setInterval(() => {
+      dots = (dots % 3) + 1;
+      dotsElement.textContent = '.'.repeat(dots);
+    }, 500);
+
+    elements.status.className = 'text-center font-semibold text-sky-500';
+
+    // Disable and style buttons
+    elements.exportButton.disabled = true;
+    elements.exportButton.classList.remove('hover:bg-sky-600');
+    elements.exportButton.classList.add('hover:bg-sky-500', 'opacity-60');
+
+    elements.fullExportButton.disabled = true;
+    elements.fullExportButton.classList.remove('hover:bg-sky-50', 'hover:border-sky-600', 'hover:shadow-md', 'hover:scale-[1.02]');
+    elements.fullExportButton.classList.add('opacity-60');
+
+    elements.filteredExportButton.disabled = true;
+    elements.filteredExportButton.classList.remove('hover:bg-sky-50', 'hover:border-sky-600', 'hover:shadow-md', 'hover:scale-[1.02]');
+    elements.filteredExportButton.classList.add('opacity-60');
+
+    elements.selectContacts.disabled = true;
+    elements.manualContactEntry.disabled = true;
+    elements.selectContacts.classList.add('opacity-50', 'cursor-not-allowed');
+    elements.manualContactEntry.classList.add('opacity-50', 'cursor-not-allowed');
+
+    try {
+      const result = await window.electronAPI.runExporter(exportParams);
+      updateExportStatus(result);
+    } catch (error) {
+      elements.status.textContent = `❌ An error occurred: ${error.message}`;
+      elements.status.className = 'text-center font-semibold text-red-500';
+    } finally {
+      clearInterval(exportAnimationInterval);
+
+      // Re-enable and restore button styles
+      elements.exportButton.disabled = false;
+      elements.exportButton.classList.remove('hover:bg-sky-500', 'opacity-60');
+      elements.exportButton.classList.add('hover:bg-sky-600');
+
+      elements.fullExportButton.disabled = false;
+      elements.fullExportButton.classList.remove('opacity-60');
+      elements.fullExportButton.classList.add('hover:bg-sky-50', 'hover:border-sky-600', 'hover:shadow-md', 'hover:scale-[1.02]');
+
+      elements.filteredExportButton.disabled = false;
+      elements.filteredExportButton.classList.remove('opacity-60');
+      elements.filteredExportButton.classList.add('hover:bg-sky-50', 'hover:border-sky-600', 'hover:shadow-md', 'hover:scale-[1.02]');
 
       elements.selectContacts.disabled = false;
       elements.manualContactEntry.disabled = false;
@@ -863,6 +1011,47 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else {
       elements.dateRangeDisplay.textContent = `Exporting messages from ${formatDateForDisplay(startDate)} to ${formatDateForDisplay(endDate)}`;
     }
+  }
+
+  function updateFilteredExportDisplay() {
+    // Update contacts display
+    const selectedIndividualCount = Array.from(selectedContacts).filter(contact =>
+      contacts.find(c => (c.displayName || c.contact) === contact && c.type === 'CONTACT')
+    ).length;
+
+    const selectedGroupCount = Array.from(selectedContacts).filter(contact =>
+      contacts.find(c => (c.displayName || c.contact) === contact && c.type === 'GROUP')
+    ).length;
+
+    const manualIndividualCount = manualContacts.filter(c => c.type === 'CONTACT').length;
+    const manualGroupCount = manualContacts.filter(c => c.type === 'GROUP').length;
+
+    const totalIndividual = selectedIndividualCount + manualIndividualCount;
+    const totalGroup = selectedGroupCount + manualGroupCount;
+
+    let contactText;
+    if (totalIndividual === 0 && totalGroup === 0) {
+      contactText = 'No contacts selected';
+    } else {
+      contactText = `Selected: ${totalIndividual} contact${totalIndividual !== 1 ? 's' : ''}, ${totalGroup} group chat${totalGroup !== 1 ? 's' : ''}`;
+    }
+
+    // Add date range information (same logic as updateDateRangeDisplay)
+    const startDate = elements.startDate.value;
+    const endDate = elements.endDate.value;
+
+    let dateText;
+    if (!startDate && !endDate) {
+      dateText = 'No date range selected - will export all messages';
+    } else if (startDate && !endDate) {
+      dateText = `Exporting messages from ${formatDateForDisplay(startDate)} onwards`;
+    } else if (!startDate && endDate) {
+      dateText = `Exporting messages up to ${formatDateForDisplay(endDate)}`;
+    } else {
+      dateText = `Exporting messages from ${formatDateForDisplay(startDate)} to ${formatDateForDisplay(endDate)}`;
+    }
+
+    elements.filteredContactsDisplay.innerHTML = `${contactText}<br><span class="text-sm italic text-slate-400">${dateText}</span>`;
   }
 
   function formatDateForDisplay(dateString) {

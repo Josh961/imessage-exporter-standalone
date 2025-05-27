@@ -7,11 +7,81 @@ import fs, { rm } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const store = new Store();
+
+// Utility functions for filtering
+function normalizeIdentifier(identifier) {
+  let normalized = identifier.replace(/[\+\s\(\)\-\.]/g, '');
+
+  // For emails, convert to lowercase for case-insensitive matching
+  if (normalized.includes('@')) {
+    normalized = normalized.toLowerCase();
+  }
+
+  return normalized;
+}
+
+function identifiersMatch(filter, handle) {
+  // Check for exact match first
+  if (filter === handle) {
+    return true;
+  }
+
+  // For phone numbers (both long and short), try intelligent matching
+  const bothAreNumeric = !handle.includes('@') &&
+    !filter.includes('@') &&
+    /^\d+$/.test(handle) &&
+    /^\d+$/.test(filter);
+
+  if (bothAreNumeric) {
+    // For long phone numbers (10+ digits), use suffix matching
+    if (handle.length >= 10 && filter.length >= 10) {
+      const handleSuffix = handle.slice(-10);
+      const filterSuffix = filter.slice(-10);
+      return handleSuffix === filterSuffix;
+    }
+
+    // For shorter numbers (5-9 digits), try suffix matching with the shorter length
+    // This handles toll-free numbers, short codes, etc.
+    if (handle.length >= 5 && filter.length >= 5) {
+      const minLen = Math.min(handle.length, filter.length);
+      const handleSuffix = handle.slice(-minLen);
+      const filterSuffix = filter.slice(-minLen);
+      return handleSuffix === filterSuffix;
+    }
+  }
+
+  return false;
+}
+
+function extractIdentifiersFromFilename(filename) {
+  // Remove .txt extension
+  const nameWithoutExt = filename.replace(/\.txt$/, '');
+
+  // Split by common separators and clean up
+  const parts = nameWithoutExt.split(/[_\-\s,]+/).filter(part => part.length > 0);
+
+  const identifiers = [];
+  for (const part of parts) {
+    // Check if it looks like an email
+    if (part.includes('@')) {
+      identifiers.push(part);
+    }
+    // Check if it looks like a phone number (5+ digits)
+    else if (/\d{5,}/.test(part)) {
+      // Extract the numeric part
+      const numbers = part.match(/\d+/g);
+      if (numbers) {
+        identifiers.push(...numbers.filter(num => num.length >= 5));
+      }
+    }
+  }
+
+  return identifiers;
+}
 
 let mainWindow;
 
@@ -201,7 +271,7 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
 });
 
 ipcMain.handle('run-exporter', async (event, exportParams) => {
-  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, includeVideos, debugMode, isFullExport } = exportParams;
+  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, includeVideos, debugMode, isFullExport, isFilteredExport } = exportParams;
 
   try {
     const uniqueTempFolder = await createUniqueFolder(outputFolder);
@@ -213,7 +283,7 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
     if (startDate) params += ` -s ${startDate}`;
     if (endDate) params += ` -e ${endDate}`;
 
-    if (!isFullExport && selectedContacts && selectedContacts.length > 0) {
+    if (!isFullExport && !isFilteredExport && selectedContacts && selectedContacts.length > 0) {
       const contactsString = selectedContacts.map(contact =>
         contact.includes(',') ? `"${contact}"` : contact
       ).join(';');
@@ -249,8 +319,14 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
 
             await sanitizeFileNames(uniqueTempFolder);
 
+            let filteringLog = '';
+            if (isFilteredExport && selectedContacts && selectedContacts.length > 0) {
+              filteringLog = await filterExportedFiles(uniqueTempFolder, selectedContacts);
+            }
+
             if (debugMode) {
-              await fs.writeFile(path.join(uniqueTempFolder, 'debug.log'), debugLogContent);
+              const fullDebugContent = debugLogContent + (filteringLog ? '\n\n=== FILTERING LOG ===\n' + filteringLog : '');
+              await fs.writeFile(path.join(uniqueTempFolder, 'debug.log'), fullDebugContent);
             }
 
             const finalZipPath = await zipFolder(uniqueTempFolder, uniqueZipPath);
@@ -387,4 +463,211 @@ async function deleteTempFolder(folderPath) {
   } catch (error) {
     console.error('Error deleting temp folder:', error);
   }
+}
+
+async function filterExportedFiles(tempFolder, selectedContacts) {
+  const logMessages = [];
+
+  try {
+    const files = await fs.readdir(tempFolder);
+    const txtFiles = files.filter(file => file.endsWith('.txt'));
+
+    logMessages.push(`Starting filtered export cleanup...`);
+    logMessages.push(`Found ${txtFiles.length} conversation files to process`);
+    logMessages.push(`Selected contacts: ${JSON.stringify(selectedContacts, null, 2)}`);
+
+    // Helper function to check if a group matches
+    const isGroupMatch = (filename, selectedContact) => {
+      if (!Array.isArray(selectedContact)) return false;
+
+      const filenameIdentifiers = extractIdentifiersFromFilename(filename);
+      const normalizedFilename = filenameIdentifiers.map(normalizeIdentifier);
+      const normalizedSelected = selectedContact.map(normalizeIdentifier);
+
+      // Check if all selected contacts have a match in the filename
+      return normalizedSelected.every(selectedId =>
+        normalizedFilename.some(filenameId => identifiersMatch(selectedId, filenameId))
+      ) && normalizedSelected.length === normalizedFilename.length;
+    };
+
+    // Helper function to check if an individual contact matches EXACTLY (no group chats)
+    const isIndividualMatch = (filename, selectedContact) => {
+      if (Array.isArray(selectedContact)) return false;
+
+      const filenameIdentifiers = extractIdentifiersFromFilename(filename);
+      const normalizedFilename = filenameIdentifiers.map(normalizeIdentifier);
+      const normalizedSelected = normalizeIdentifier(selectedContact);
+
+      // For individual contacts, the file should contain EXACTLY one identifier that matches
+      const result = normalizedFilename.length === 1 &&
+        normalizedFilename.some(filenameId => identifiersMatch(normalizedSelected, filenameId));
+
+      return result;
+    };
+
+    // Determine which files to keep
+    const filesToKeep = new Set();
+
+    logMessages.push(`\nAnalyzing conversation files...`);
+    for (const txtFile of txtFiles) {
+      const shouldKeep = selectedContacts.some(selectedContact => {
+        if (Array.isArray(selectedContact)) {
+          return isGroupMatch(txtFile, selectedContact);
+        } else {
+          return isIndividualMatch(txtFile, selectedContact);
+        }
+      });
+
+      if (shouldKeep) {
+        filesToKeep.add(txtFile);
+        // Log which contact type matched
+        const matchingContact = selectedContacts.find(selectedContact => {
+          if (Array.isArray(selectedContact)) {
+            return isGroupMatch(txtFile, selectedContact);
+          } else {
+            return isIndividualMatch(txtFile, selectedContact);
+          }
+        });
+
+        if (Array.isArray(matchingContact)) {
+          logMessages.push(`✓ Keeping group chat file: ${txtFile} (matches ${matchingContact.join(', ')})`);
+        } else {
+          logMessages.push(`✓ Keeping individual chat file: ${txtFile} (matches ${matchingContact})`);
+        }
+      } else {
+        logMessages.push(`✗ Will delete unmatched file: ${txtFile}`);
+      }
+    }
+
+    // Delete files that don't match selected contacts
+    logMessages.push(`\nDeleting unmatched conversation files...`);
+    for (const txtFile of txtFiles) {
+      if (!filesToKeep.has(txtFile)) {
+        const filePath = path.join(tempFolder, txtFile);
+        await fs.unlink(filePath);
+        logMessages.push(`Deleted: ${txtFile}`);
+      }
+    }
+
+    // Handle attachments folder - only keep attachments referenced by kept files
+    const attachmentsFolder = path.join(tempFolder, 'attachments');
+    try {
+      await fs.access(attachmentsFolder);
+
+      // Read all kept txt files to find referenced attachments
+      const referencedAttachmentPaths = new Set();
+
+      logMessages.push(`\nScanning kept files for attachment references...`);
+      for (const keptFile of filesToKeep) {
+        const filePath = path.join(tempFolder, keptFile);
+        const content = await fs.readFile(filePath, 'utf8');
+        const lines = content.split('\n');
+        let attachmentCount = 0;
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          // Check if line looks like an attachment path (starts with "attachments\" or "attachments/")
+          if (trimmedLine.startsWith('attachments\\') || trimmedLine.startsWith('attachments/')) {
+            // Normalize path separators and add to referenced set
+            const normalizedPath = trimmedLine.replace(/\\/g, '/');
+            referencedAttachmentPaths.add(normalizedPath);
+            attachmentCount++;
+          }
+        }
+
+        if (attachmentCount > 0) {
+          logMessages.push(`Found ${attachmentCount} attachment references in ${keptFile}`);
+        }
+      }
+
+      logMessages.push(`Total unique attachments referenced: ${referencedAttachmentPaths.size}`);
+
+      // Recursively process attachments folder to delete unreferenced files and empty folders
+      const attachmentLog = await cleanupAttachmentsFolder(attachmentsFolder, referencedAttachmentPaths, tempFolder);
+      logMessages.push(...attachmentLog);
+
+    } catch (error) {
+      // Attachments folder doesn't exist, which is fine
+      logMessages.push('No attachments folder found');
+    }
+
+    logMessages.push(`\n=== FILTERING SUMMARY ===`);
+    logMessages.push(`Kept ${filesToKeep.size} out of ${txtFiles.length} conversation files`);
+    logMessages.push(`Deleted ${txtFiles.length - filesToKeep.size} conversation files`);
+    logMessages.push(`Filtered export cleanup complete`);
+
+    return logMessages.join('\n');
+
+  } catch (error) {
+    logMessages.push(`ERROR during filtering: ${error.message}`);
+    logMessages.push(`Stack trace: ${error.stack}`);
+    return logMessages.join('\n');
+  }
+}
+
+async function cleanupAttachmentsFolder(attachmentsFolder, referencedAttachmentPaths, tempFolder) {
+  const logMessages = [];
+
+  try {
+    // Get all subdirectories in attachments folder (like "25", "26", etc.)
+    const attachmentSubdirs = await fs.readdir(attachmentsFolder, { withFileTypes: true });
+
+    logMessages.push(`\nProcessing attachments folder with ${attachmentSubdirs.length} subdirectories...`);
+
+    for (const subdir of attachmentSubdirs) {
+      if (subdir.isDirectory()) {
+        const subdirPath = path.join(attachmentsFolder, subdir.name);
+        const subdirFiles = await fs.readdir(subdirPath);
+        let hasReferencedFiles = false;
+        let keptCount = 0;
+        let deletedCount = 0;
+
+        // Check each file in the subdirectory
+        for (const fileName of subdirFiles) {
+          const relativePath = `attachments/${subdir.name}/${fileName}`;
+
+          if (referencedAttachmentPaths.has(relativePath)) {
+            hasReferencedFiles = true;
+            keptCount++;
+          } else {
+            // Delete unreferenced file
+            const filePath = path.join(subdirPath, fileName);
+            await fs.unlink(filePath);
+            deletedCount++;
+          }
+        }
+
+        logMessages.push(`Subdirectory ${subdir.name}: kept ${keptCount}, deleted ${deletedCount} files`);
+
+        // If no files are left in the subdirectory, delete the subdirectory
+        if (!hasReferencedFiles) {
+          try {
+            await fs.rmdir(subdirPath);
+            logMessages.push(`Deleted empty attachment subdirectory: ${subdir.name}`);
+          } catch (error) {
+            // Directory might not be empty due to hidden files, etc.
+            logMessages.push(`Could not delete subdirectory ${subdir.name}: ${error.message}`);
+          }
+        }
+      }
+    }
+
+    // Check if attachments folder is now empty and delete if so
+    try {
+      const remainingItems = await fs.readdir(attachmentsFolder);
+      if (remainingItems.length === 0) {
+        await fs.rmdir(attachmentsFolder);
+        logMessages.push('Deleted empty attachments folder');
+      } else {
+        logMessages.push(`Attachments folder still contains ${remainingItems.length} items`);
+      }
+    } catch (error) {
+      logMessages.push(`Could not delete attachments folder: ${error.message}`);
+    }
+
+  } catch (error) {
+    logMessages.push(`ERROR cleaning up attachments folder: ${error.message}`);
+  }
+
+  return logMessages;
 }

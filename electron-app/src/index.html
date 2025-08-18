@@ -84,16 +84,9 @@
             class="focus:shadow-outline rounded border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none">
             Select contacts
           </button>
-          <span class="text-sm text-slate-600">or</span>
-          <button
-            id="manual-contact-entry"
-            class="focus:shadow-outline rounded border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none">
-            Manual contact entry
-          </button>
         </div>
         <div class="flex flex-col gap-1">
           <span id="selected-contacts-count" class="text-sm text-slate-600">Selected: 0 contacts, 0 group chats</span>
-          <span id="manual-contacts-count-home" class="text-sm text-slate-600">Manual: 0 contacts, 0 group chats</span>
         </div>
         <button id="export-button" type="submit" class="focus:shadow-outline w-full rounded bg-sky-500 px-4 py-2 font-semibold text-white hover:bg-sky-600 focus:outline-none">
           Export messages
@@ -353,68 +346,5 @@
     <div class="text-green-500 opacity-60"></div>
     <script src="utils.js"></script>
     <script src="renderer.js"></script>
-    <!-- Manual Contact Entry Modal -->
-    <div id="manual-entry-modal" class="fixed inset-0 z-20 hidden overflow-y-auto">
-      <div class="flex min-h-screen items-center justify-center p-4">
-        <div class="fixed inset-0 transition-opacity" aria-hidden="true">
-          <div class="absolute inset-0 bg-slate-500 opacity-75"></div>
-        </div>
-        <span class="hidden sm:inline-block sm:h-screen sm:align-middle" aria-hidden="true">&#8203;</span>
-        <div
-          id="manual-entry-modal-content"
-          class="inline-block transform overflow-hidden rounded-lg bg-white text-left align-middle shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl sm:align-middle">
-          <div class="bg-white px-4 pb-4 pt-5 sm:p-6">
-            <div class="sm:flex sm:items-start">
-              <div class="mt-3 w-full text-left">
-                <h3 class="mb-4 text-lg font-medium leading-6 text-slate-900">Manual contact entry</h3>
-                <div class="space-y-4">
-                  <div>
-                    <label for="manual-contact" class="mb-1 block text-sm font-medium text-slate-700"> Enter contact(s) </label>
-                    <div class="flex gap-2">
-                      <input
-                        type="text"
-                        id="manual-contact"
-                        class="flex-1 rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-                        placeholder="Enter phone number(s)" />
-                      <button
-                        id="add-manual-contact"
-                        class="rounded bg-sky-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2">
-                        Add
-                      </button>
-                    </div>
-                    <div id="manual-contact-warning" class="mt-1 hidden text-sm text-orange-500"></div>
-                    <div class="mt-2 space-y-1 text-xs text-slate-500">
-                      <p>Examples:</p>
-                      <p>• Individual chat: 4125551234</p>
-                      <p>• Group chat: 4125551234,4125556789,4125550000</p>
-                      <p>Numbers can be formatted or unformatted: (412) 555-1234 or 4125551234</p>
-                    </div>
-                  </div>
-                  <div>
-                    <div class="flex items-center justify-between">
-                      <span class="text-sm font-medium text-slate-700">Added contacts</span>
-                      <div class="flex items-center gap-2">
-                        <button id="clear-all-manual-contacts" class="hidden text-sm text-red-600 hover:text-red-500">Delete all</button>
-                        <span id="manual-contacts-count" class="text-sm text-slate-600"></span>
-                      </div>
-                    </div>
-                    <div id="manual-contacts-list" class="mt-2 space-y-2">
-                      <!-- Manual contacts will be added here -->
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
-            <button
-              id="close-manual-entry"
-              class="mt-3 inline-flex w-full justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-base font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none sm:mt-0 sm:w-auto sm:text-sm">
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
   </body>
 </html>

@@ -46,17 +46,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     closeSettings: document.getElementById('close-settings'),
     includeVideos: document.getElementById('include-videos'),
     debugMode: document.getElementById('debug-mode'),
-    manualContact: document.getElementById('manual-contact'),
-    addManualContact: document.getElementById('add-manual-contact'),
-    manualContactsList: document.getElementById('manual-contacts-list'),
-    manualContactsCount: document.getElementById('manual-contacts-count'),
-    manualContactsCountHome: document.getElementById('manual-contacts-count-home'),
-    manualContactWarning: document.getElementById('manual-contact-warning'),
-    manualContactEntry: document.getElementById('manual-contact-entry'),
-    closeManualEntry: document.getElementById('close-manual-entry'),
-    manualEntryModal: document.getElementById('manual-entry-modal'),
-    manualEntryModalContent: document.getElementById('manual-entry-modal-content'),
-    clearAllManualContacts: document.getElementById('clear-all-manual-contacts'),
     fullExportButton: document.getElementById('full-export-button'),
     filteredExportButton: document.getElementById('filtered-export-button'),
     dateRangeDisplay: document.getElementById('date-range-display'),
@@ -66,7 +55,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // State
   let contacts = [];
   let selectedContacts = new Set();
-  let manualContacts = [];
   let expandedSections = { individual: true, group: true };
   let includeVideos = false;
   let debugMode = false;
@@ -179,7 +167,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupExportButtonListener();
     setupPermissionsModalListeners();
     setupSettingsListeners();
-    setupManualEntryListeners();
   }
 
   function setupPermissionsModalListeners() {
@@ -461,14 +448,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         return digits.slice(-10);
       };
 
-      // Helper function to compare two arrays of phone numbers
-      const areGroupsEqual = (group1, group2) => {
-        if (group1.length !== group2.length) return false;
-        const numbers1 = group1.map(n => getLast10Digits(n)).sort();
-        const numbers2 = group2.map(n => getLast10Digits(n)).sort();
-        return numbers1.every((num, idx) => num === numbers2[idx]);
-      };
-
       // Get all selected contacts first
       const selectedContactsList = Array.from(selectedContacts).map(contact => {
         const contactData = contacts.find(c => (c.displayName || c.contact) === contact);
@@ -478,29 +457,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         return contact;
       });
 
-      // Filter manual contacts to exclude those that match selected contacts
-      const manualContactsList = manualContacts.filter(entry => {
-        if (entry.type === 'GROUP') {
-          // For groups, check if there's a matching group in selected contacts
-          return !selectedContactsList.some(selectedContact => {
-            if (Array.isArray(selectedContact)) {
-              return areGroupsEqual(selectedContact, entry.contacts);
-            }
-            return false;
-          });
-        }
-        // For individual contacts, check last 10 digits
-        const manualNumber = getLast10Digits(entry.contacts[0]);
-        return !Array.from(selectedContacts).some(contact => {
-          const contactData = contacts.find(c => (c.displayName || c.contact) === contact);
-          if (contactData && contactData.type === 'CONTACT') {
-            return getLast10Digits(contactData.contact) === manualNumber;
-          }
-          return false;
-        });
-      }).map(entry => entry.type === 'GROUP' ? entry.contacts : entry.contacts[0]);
-
-      const allSelectedContacts = [...selectedContactsList, ...manualContactsList];
+      const allSelectedContacts = selectedContactsList;
 
       const exportParams = {
         inputFolder: elements.inputFolder.value,
@@ -549,8 +506,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   function validateExportInputs() {
     let isValid = true;
 
-    if (selectedContacts.size === 0 && manualContacts.length === 0) {
-      elements.status.textContent = 'Select at least one contact or add a manual contact to export';
+    if (selectedContacts.size === 0) {
+      elements.status.textContent = 'Select at least one contact to export';
       elements.status.className = 'text-center font-semibold text-red-500';
       isValid = false;
     }
@@ -653,142 +610,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.settingsModal.classList.add('hidden');
   }
 
-  function openManualEntryModal() {
-    elements.manualEntryModal.classList.remove('hidden');
-    elements.manualContact.focus();
-  }
-
-  function closeManualEntryModal() {
-    elements.manualEntryModal.classList.add('hidden');
-    elements.manualContact.value = '';
-  }
-
-  function addManualContact() {
-    const input = elements.manualContact.value.trim();
-    if (!input) {
-      elements.manualContactWarning.textContent = 'Please enter a phone number';
-      elements.manualContactWarning.classList.remove('hidden');
-      elements.manualContact.focus();
-      return;
-    }
-
-    const isGroup = input.includes(',');
-    const contacts = isGroup ? input.split(',').map(c => c.trim()) : [input.trim()];
-
-    if (contacts.some(c => !c)) {
-      elements.manualContactWarning.textContent = 'Please enter valid phone numbers';
-      elements.manualContactWarning.classList.remove('hidden');
-      elements.manualContact.focus();
-      return;
-    }
-
-    // Check for duplicates
-    elements.manualContactWarning.classList.add('hidden');
-    if (isGroup) {
-      const exists = manualContacts.some(entry =>
-        entry.type === 'GROUP' &&
-        entry.contacts.length === contacts.length &&
-        entry.contacts.every(c1 => contacts.some(c2 => formatPhoneNumber(c1) === formatPhoneNumber(c2)))
-      );
-      if (exists) {
-        elements.manualContactWarning.textContent = 'This group chat has already been added';
-        elements.manualContactWarning.classList.remove('hidden');
-        elements.manualContact.focus();
-        return;
-      }
-    } else {
-      const exists = manualContacts.some(entry =>
-        entry.type === 'CONTACT' &&
-        formatPhoneNumber(entry.contacts[0]) === formatPhoneNumber(contacts[0])
-      );
-      if (exists) {
-        elements.manualContactWarning.textContent = 'This contact has already been added';
-        elements.manualContactWarning.classList.remove('hidden');
-        elements.manualContact.focus();
-        return;
-      }
-    }
-
-    manualContacts.push({
-      type: isGroup ? 'GROUP' : 'CONTACT',
-      contacts: contacts,
-      id: Date.now() + Math.random()
-    });
-
-    elements.manualContact.value = '';
-    elements.manualContact.focus();
-    renderManualContacts();
-  }
-
-  function renderManualContacts() {
-    elements.manualContactsList.innerHTML = manualContacts.map(entry => `
-      <div class="flex items-start gap-4 p-3 bg-slate-50 rounded border border-slate-200 hover:border-slate-300 transition-colors" data-id="${entry.id}">
-        <div class="flex-1 px-2">
-          <span class="text-sm text-slate-700 break-words">
-            ${entry.type === 'GROUP' ?
-        `Group: ${entry.contacts.join(', ')}` :
-        entry.contacts[0]
-      }
-          </span>
-        </div>
-        <button class="delete-manual-contact text-xs text-red-500 hover:text-red-600 shrink-0 pr-2">
-          Delete
-        </button>
-      </div>
-    `).join('');
-
-    // Show/hide delete all button based on contacts
-    elements.clearAllManualContacts.classList.toggle('hidden', manualContacts.length === 0);
-
-    // Update manual contacts count
-    const individualCount = manualContacts.filter(c => c.type === 'CONTACT').length;
-    const groupCount = manualContacts.filter(c => c.type === 'GROUP').length;
-
-    // Update count on home screen only
-    elements.manualContactsCountHome.textContent =
-      `Manual: ${individualCount} contact${individualCount !== 1 ? 's' : ''}, ${groupCount} group chat${groupCount !== 1 ? 's' : ''}`;
-
-    // Add event listeners for delete buttons
-    elements.manualContactsList.querySelectorAll('.delete-manual-contact').forEach(button => {
-      const handleDelete = (e) => {
-        e.stopPropagation();
-        const container = e.target.closest('[data-id]');
-        const id = parseFloat(container.dataset.id);
-        manualContacts = manualContacts.filter(c => c.id !== id);
-        renderManualContacts();
-      };
-
-      button.addEventListener('click', handleDelete);
-    });
-
-    updateFilteredExportDisplay();
-  }
-
-  function setupManualEntryListeners() {
-    elements.manualContactEntry.addEventListener('click', openManualEntryModal);
-    elements.closeManualEntry.addEventListener('click', closeManualEntryModal);
-    elements.addManualContact.addEventListener('click', addManualContact);
-    elements.clearAllManualContacts.addEventListener('click', clearAllManualContacts);
-    elements.manualContact.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        addManualContact();
-      }
-    });
-
-    // Close manual entry modal when clicking outside
-    elements.manualEntryModal.addEventListener('click', (e) => {
-      if (!elements.manualEntryModalContent.contains(e.target)) {
-        closeManualEntryModal();
-      }
-    });
-  }
-
-  function clearAllManualContacts() {
-    manualContacts = [];
-    renderManualContacts();
-  }
-
   async function fullExport() {
     const inputFolder = elements.inputFolder.value;
     const outputFolder = elements.outputFolder.value;
@@ -836,9 +657,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.fullExportButton.classList.add('opacity-60');
 
     elements.selectContacts.disabled = true;
-    elements.manualContactEntry.disabled = true;
     elements.selectContacts.classList.add('opacity-50', 'cursor-not-allowed');
-    elements.manualContactEntry.classList.add('opacity-50', 'cursor-not-allowed');
 
     try {
       const result = await window.electronAPI.runExporter(exportParams);
@@ -859,9 +678,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       elements.fullExportButton.classList.add('hover:bg-sky-50', 'hover:border-sky-600', 'hover:shadow-md', 'hover:scale-[1.02]');
 
       elements.selectContacts.disabled = false;
-      elements.manualContactEntry.disabled = false;
       elements.selectContacts.classList.remove('opacity-50', 'cursor-not-allowed');
-      elements.manualContactEntry.classList.remove('opacity-50', 'cursor-not-allowed');
     }
   }
 
@@ -878,9 +695,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    if (selectedContacts.size === 0 && manualContacts.length === 0) {
+    if (selectedContacts.size === 0) {
       closeSettingsModal();
-      elements.status.textContent = 'Select at least one contact or add a manual contact for slow export';
+      elements.status.textContent = 'Select at least one contact for slow export';
       elements.status.className = 'text-center font-semibold text-red-500';
       return;
     }
@@ -893,13 +710,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       return digits.slice(-10);
     };
 
-    const areGroupsEqual = (group1, group2) => {
-      if (group1.length !== group2.length) return false;
-      const numbers1 = group1.map(n => getLast10Digits(n)).sort();
-      const numbers2 = group2.map(n => getLast10Digits(n)).sort();
-      return numbers1.every((num, idx) => num === numbers2[idx]);
-    };
-
     const selectedContactsList = Array.from(selectedContacts).map(contact => {
       const contactData = contacts.find(c => (c.displayName || c.contact) === contact);
       if (contactData && contactData.type === 'GROUP') {
@@ -908,26 +718,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       return contact;
     });
 
-    const manualContactsList = manualContacts.filter(entry => {
-      if (entry.type === 'GROUP') {
-        return !selectedContactsList.some(selectedContact => {
-          if (Array.isArray(selectedContact)) {
-            return areGroupsEqual(selectedContact, entry.contacts);
-          }
-          return false;
-        });
-      }
-      const manualNumber = getLast10Digits(entry.contacts[0]);
-      return !Array.from(selectedContacts).some(contact => {
-        const contactData = contacts.find(c => (c.displayName || c.contact) === contact);
-        if (contactData && contactData.type === 'CONTACT') {
-          return getLast10Digits(contactData.contact) === manualNumber;
-        }
-        return false;
-      });
-    }).map(entry => entry.type === 'GROUP' ? entry.contacts : entry.contacts[0]);
-
-    const allSelectedContacts = [...selectedContactsList, ...manualContactsList];
+    const allSelectedContacts = selectedContactsList;
 
     const exportParams = {
       inputFolder,
@@ -965,9 +756,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.filteredExportButton.classList.add('opacity-60');
 
     elements.selectContacts.disabled = true;
-    elements.manualContactEntry.disabled = true;
     elements.selectContacts.classList.add('opacity-50', 'cursor-not-allowed');
-    elements.manualContactEntry.classList.add('opacity-50', 'cursor-not-allowed');
 
     try {
       const result = await window.electronAPI.runExporter(exportParams);
@@ -992,9 +781,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       elements.filteredExportButton.classList.add('hover:bg-sky-50', 'hover:border-sky-600', 'hover:shadow-md', 'hover:scale-[1.02]');
 
       elements.selectContacts.disabled = false;
-      elements.manualContactEntry.disabled = false;
       elements.selectContacts.classList.remove('opacity-50', 'cursor-not-allowed');
-      elements.manualContactEntry.classList.remove('opacity-50', 'cursor-not-allowed');
     }
   }
 
@@ -1023,11 +810,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       contacts.find(c => (c.displayName || c.contact) === contact && c.type === 'GROUP')
     ).length;
 
-    const manualIndividualCount = manualContacts.filter(c => c.type === 'CONTACT').length;
-    const manualGroupCount = manualContacts.filter(c => c.type === 'GROUP').length;
-
-    const totalIndividual = selectedIndividualCount + manualIndividualCount;
-    const totalGroup = selectedGroupCount + manualGroupCount;
+    const totalIndividual = selectedIndividualCount;
+    const totalGroup = selectedGroupCount;
 
     let contactText;
     if (totalIndividual === 0 && totalGroup === 0) {

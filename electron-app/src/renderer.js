@@ -60,19 +60,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   let debugMode = false;
 
   // Initialization
-  initializeDateInputs();
   await loadLastSelectedFolders();
   await setDefaultiMessageBackupFolder();
   updateFooter();
   setupEventListeners();
 
   // Helper Functions
-  function initializeDateInputs() {
-    const oneYearAgo = new Date();
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-    elements.startDate.value = oneYearAgo.toISOString().split('T')[0];
-  }
-
   async function loadLastSelectedFolders() {
     const lastInputFolder = await window.electronAPI.getLastInputFolder();
     const lastOutputFolder = await window.electronAPI.getLastOutputFolder();
@@ -182,7 +175,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         elements.permissionsGranted.classList.remove('hidden');
         elements.restartAppButton.classList.remove('hidden');
       } else {
-        alert('Full Disk Access has not been granted yet. Please try again.');
+        alert('Full Disk Access has not been granted yet. Try again.');
       }
     });
 
@@ -266,7 +259,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function loadContacts() {
     if (!elements.inputFolder.value) {
-      alert('Please select an input folder first.');
+      alert('Select an input folder first.');
       return;
     }
 
@@ -274,7 +267,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (result.success) {
       contacts = result.contacts.filter(x => x.contact && x.messageCount >= 20);
       if (contacts.length === 0) {
-        alert('No contacts found in the selected folder. Please check that the iMessage backup folder is correct.');
+        alert('No contacts found in the selected folder. Check that the iMessage backup folder is correct.');
         return;
       }
       renderContacts();
@@ -430,7 +423,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.exportButton.classList.remove('hover:bg-sky-600');
     elements.exportButton.classList.add('hover:bg-sky-500', 'opacity-60');
 
-    elements.status.innerHTML = 'Exporting, please wait<span id="animatedDots">.</span>';
+    elements.status.innerHTML = 'Exporting<span id="animatedDots">...</span>';
     const dotsElement = document.getElementById('animatedDots');
 
     let dots = 1;
@@ -504,13 +497,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function validateExportInputs() {
-    let isValid = true;
-
+    // Check contacts first - takes precedence
     if (selectedContacts.size === 0) {
       elements.status.textContent = 'Select at least one contact to export';
       elements.status.className = 'text-center font-semibold text-red-500';
-      isValid = false;
+      return false;
     }
+
+    let isValid = true;
 
     if (!elements.inputFolder.value) {
       elements.inputFolderError.classList.remove('hidden');
@@ -524,7 +518,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const startDate = elements.startDate.value;
     const endDate = elements.endDate.value;
 
-    if (startDate && !isValidDate(startDate)) {
+    if (!startDate) {
+      elements.status.textContent = 'Start date is required';
+      elements.status.className = 'text-center font-semibold text-red-500';
+      isValid = false;
+    } else if (!isValidDate(startDate)) {
       elements.status.textContent = 'Invalid start date';
       elements.status.className = 'text-center font-semibold text-red-500';
       isValid = false;
@@ -616,10 +614,35 @@ document.addEventListener('DOMContentLoaded', async () => {
     const startDate = elements.startDate.value;
     const endDate = elements.endDate.value;
 
-    if (!inputFolder || !outputFolder) {
+    if (!inputFolder || !outputFolder || !startDate) {
       closeSettingsModal();
       if (!inputFolder) elements.inputFolderError.classList.remove('hidden');
       if (!outputFolder) elements.outputFolderError.classList.remove('hidden');
+      if (!startDate) {
+        elements.status.textContent = 'Start date is required';
+        elements.status.className = 'text-center font-semibold text-red-500';
+      }
+      return;
+    }
+
+    if (!isValidDate(startDate)) {
+      closeSettingsModal();
+      elements.status.textContent = 'Invalid start date';
+      elements.status.className = 'text-center font-semibold text-red-500';
+      return;
+    }
+
+    if (endDate && !isValidDate(endDate)) {
+      closeSettingsModal();
+      elements.status.textContent = 'Invalid end date';
+      elements.status.className = 'text-center font-semibold text-red-500';
+      return;
+    }
+
+    if (endDate && new Date(startDate) > new Date(endDate)) {
+      closeSettingsModal();
+      elements.status.textContent = 'Start date cannot be after end date';
+      elements.status.className = 'text-center font-semibold text-red-500';
       return;
     }
 
@@ -688,10 +711,35 @@ document.addEventListener('DOMContentLoaded', async () => {
     const startDate = elements.startDate.value;
     const endDate = elements.endDate.value;
 
-    if (!inputFolder || !outputFolder) {
+    if (!inputFolder || !outputFolder || !startDate) {
       closeSettingsModal();
       if (!inputFolder) elements.inputFolderError.classList.remove('hidden');
       if (!outputFolder) elements.outputFolderError.classList.remove('hidden');
+      if (!startDate) {
+        elements.status.textContent = 'Start date is required';
+        elements.status.className = 'text-center font-semibold text-red-500';
+      }
+      return;
+    }
+
+    if (!isValidDate(startDate)) {
+      closeSettingsModal();
+      elements.status.textContent = 'Invalid start date';
+      elements.status.className = 'text-center font-semibold text-red-500';
+      return;
+    }
+
+    if (endDate && !isValidDate(endDate)) {
+      closeSettingsModal();
+      elements.status.textContent = 'Invalid end date';
+      elements.status.className = 'text-center font-semibold text-red-500';
+      return;
+    }
+
+    if (endDate && new Date(startDate) > new Date(endDate)) {
+      closeSettingsModal();
+      elements.status.textContent = 'Start date cannot be after end date';
+      elements.status.className = 'text-center font-semibold text-red-500';
       return;
     }
 
@@ -789,12 +837,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const startDate = elements.startDate.value;
     const endDate = elements.endDate.value;
 
-    if (!startDate && !endDate) {
-      elements.dateRangeDisplay.textContent = 'No date range selected - will export all messages';
-    } else if (startDate && !endDate) {
+    if (!startDate) {
+      elements.dateRangeDisplay.textContent = 'Select a start date';
+    } else if (!endDate) {
       elements.dateRangeDisplay.textContent = `Exporting messages from ${formatDateForDisplay(startDate)} onwards`;
-    } else if (!startDate && endDate) {
-      elements.dateRangeDisplay.textContent = `Exporting messages up to ${formatDateForDisplay(endDate)}`;
     } else {
       elements.dateRangeDisplay.textContent = `Exporting messages from ${formatDateForDisplay(startDate)} to ${formatDateForDisplay(endDate)}`;
     }
@@ -825,12 +871,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const endDate = elements.endDate.value;
 
     let dateText;
-    if (!startDate && !endDate) {
-      dateText = 'No date range selected - will export all messages';
-    } else if (startDate && !endDate) {
+    if (!startDate) {
+      dateText = 'Select a start date';
+    } else if (!endDate) {
       dateText = `Exporting messages from ${formatDateForDisplay(startDate)} onwards`;
-    } else if (!startDate && endDate) {
-      dateText = `Exporting messages up to ${formatDateForDisplay(endDate)}`;
     } else {
       dateText = `Exporting messages from ${formatDateForDisplay(startDate)} to ${formatDateForDisplay(endDate)}`;
     }

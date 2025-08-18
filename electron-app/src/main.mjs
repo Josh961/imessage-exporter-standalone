@@ -85,9 +85,12 @@ function extractIdentifiersFromFilename(filename) {
 
 let mainWindow;
 
-// Define executables for different platforms
+// Define executables for different platforms and architectures
 const EXECUTABLES = {
-  darwin: 'imessage-exporter-mac',
+  darwin: {
+    arm64: 'imessage-exporter-mac-arm64',
+    x64: 'imessage-exporter-mac-x64'
+  },
   win32: 'imessage-exporter-win.exe'
 };
 
@@ -356,6 +359,11 @@ function getResourcePath() {
 }
 
 function getExecutableName() {
+  if (process.platform === 'darwin') {
+    // Detect CPU architecture for macOS
+    const arch = process.arch; // Will be 'arm64' for Apple Silicon or 'x64' for Intel
+    return EXECUTABLES.darwin[arch] || EXECUTABLES.darwin.x64; // Default to x64 if arch not recognized
+  }
   return EXECUTABLES[process.platform] || EXECUTABLES.win32; // Default to Windows executable if platform is not recognized
 }
 

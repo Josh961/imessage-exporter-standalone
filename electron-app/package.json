@@ -13,7 +13,9 @@
     "package": "npm run build && electron-builder build",
     "package:mac": "npm run build && electron-builder build --mac",
     "package:win": "npm run build && electron-builder build --win",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "build-exporter-win": "node scripts/build-exporter-win.js",
+    "build-exporter-mac": "node scripts/build-exporter-mac.js"
   },
   "dependencies": {
     "archiver": "^5.3.1",
@@ -51,11 +53,17 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "icon": "assets/icon.icns",

@@ -670,13 +670,14 @@ impl Config {
     fn list_contacts_and_chats(&self) -> Result<(), TableError> {
         use imessage_database::util::dates::{format, get_local_time};
 
-        // Get message counts and latest dates for each chat
+        // Get message counts and first/last dates for each chat
         let sql = "
             SELECT
                 chat.rowid as chat_id,
                 chat.display_name,
                 chat.chat_identifier,
                 COUNT(DISTINCT message.ROWID) as message_count,
+                MIN(message.date) as first_message_date,
                 MAX(message.date) as last_message_date,
                 GROUP_CONCAT(DISTINCT handle.id) as participants
             FROM chat
@@ -698,8 +699,9 @@ impl Config {
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, i32>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, i64>(4)?,  // first_message_date
+                    row.get::<_, i64>(5)?,  // last_message_date
+                    row.get::<_, Option<String>>(6)?,
                 ))
             })
             .map_err(TableError::Chat)?;
@@ -711,7 +713,7 @@ impl Config {
         let mut individual_count = 0;
         let mut group_count = 0;
 
-        for (_, _, _, _, _, participants_str_opt) in &all_chats {
+        for (_, _, _, _, _, _, participants_str_opt) in &all_chats {
             if let Some(participants_str) = participants_str_opt {
                 let participant_count = participants_str.split(',').count();
                 if participant_count > 1 {
@@ -736,6 +738,7 @@ impl Config {
             display_name,
             chat_identifier,
             message_count,
+            first_message_date,
             last_message_date,
             participants_str_opt,
         ) in &all_chats
@@ -747,13 +750,16 @@ impl Config {
             };
 
             if !is_group_chat {
-                let date = get_local_time(last_message_date, &self.offset)
+                let first_date = get_local_time(first_message_date, &self.offset)
+                    .map(|d| format(&Ok(d)))
+                    .unwrap_or_else(|_| String::from("Unknown"));
+                let last_date = get_local_time(last_message_date, &self.offset)
                     .map(|d| format(&Ok(d)))
                     .unwrap_or_else(|_| String::from("Unknown"));
                 // For individual chats, participants_str_opt might be Some(handle_id_str) or None
                 // If Some, use it. If None, it might be a chat with self or a deleted contact; use chat_identifier.
                 let contact_id = participants_str_opt.as_deref().unwrap_or(chat_identifier);
-                println!("CONTACT|{}|{}|{}", contact_id, message_count, date);
+                println!("CONTACT|{}|{}|{}|{}", contact_id, message_count, first_date, last_date);
             }
         }
 
@@ -763,6 +769,7 @@ impl Config {
             display_name,
             chat_identifier,
             message_count,
+            first_message_date,
             last_message_date,
             participants_str_opt,
         ) in &all_chats
@@ -777,13 +784,16 @@ impl Config {
                     } else {
                         name
                     };
-                    let date = get_local_time(last_message_date, &self.offset)
+                    let first_date = get_local_time(first_message_date, &self.offset)
+                        .map(|d| format(&Ok(d)))
+                        .unwrap_or_else(|_| String::from("Unknown"));
+                    let last_date = get_local_time(last_message_date, &self.offset)
                         .map(|d| format(&Ok(d)))
                         .unwrap_or_else(|_| String::from("Unknown"));
 
                     println!(
-                        "GROUP|{}|{}|{}|{}",
-                        name, message_count, date, participants_str
+                        "GROUP|{}|{}|{}|{}|{}",
+                        name, message_count, first_date, last_date, participants_str
                     );
                 }
             }

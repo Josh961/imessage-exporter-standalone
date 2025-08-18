@@ -184,28 +184,19 @@
                       class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500" />
                   </div>
                   <div class="mt-1">
-                    <div class="mb-2 flex items-center gap-4">
+                    <div class="toggle-individual-header mb-2 flex cursor-pointer items-center gap-2">
+                      <svg class="individual-toggle-icon h-4 w-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                      </svg>
                       <span class="font-semibold">Individual Chats</span>
-                      <div>
-                        <button
-                          class="select-all-individual mr-2 rounded border border-slate-300 bg-white px-2 py-1 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none">
-                          Select all
-                        </button>
-                        <button
-                          class="clear-all-individual mr-2 rounded border border-slate-300 bg-white px-2 py-1 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none">
-                          Clear all
-                        </button>
-                        <button
-                          class="toggle-individual mr-2 rounded border border-slate-300 bg-white px-2 py-1 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none">
-                          Collapse
-                        </button>
-                      </div>
                     </div>
                     <div class="individual-chats mt-2">
                       <table class="w-full">
                         <thead>
                           <tr>
-                            <th class="text-left font-semibold">Select</th>
+                            <th class="w-10 text-left">
+                              <input type="checkbox" class="select-all-individual rounded border-slate-300 text-sky-500 focus:ring-sky-500" />
+                            </th>
                             <th class="text-left font-semibold">Contact</th>
                             <th class="text-left font-semibold">Messages</th>
                             <th class="text-left font-semibold">Date Range</th>
@@ -216,28 +207,19 @@
                     </div>
                   </div>
                   <div class="mb-2 mt-6">
-                    <div class="flex items-center gap-4">
+                    <div class="toggle-group-header mb-2 flex cursor-pointer items-center gap-2">
+                      <svg class="group-toggle-icon h-4 w-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                      </svg>
                       <span class="font-semibold">Group Chats</span>
-                      <div>
-                        <button
-                          class="select-all-group mr-2 rounded border border-slate-300 bg-white px-2 py-1 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none">
-                          Select all
-                        </button>
-                        <button
-                          class="clear-all-group mr-2 rounded border border-slate-300 bg-white px-2 py-1 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none">
-                          Clear all
-                        </button>
-                        <button
-                          class="toggle-group mr-2 rounded border border-slate-300 bg-white px-2 py-1 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none">
-                          Collapse
-                        </button>
-                      </div>
                     </div>
                     <div class="group-chats mt-2">
                       <table class="w-full">
                         <thead>
                           <tr>
-                            <th class="text-left font-semibold">Select</th>
+                            <th class="w-10 text-left">
+                              <input type="checkbox" class="select-all-group rounded border-slate-300 text-sky-500 focus:ring-sky-500" />
+                            </th>
                             <th class="text-left font-semibold">Group Name<span class="font-normal text-slate-600"> (hover for details)</span></th>
                             <th class="text-left font-semibold">Participants</th>
                             <th class="text-left font-semibold">Messages</th>

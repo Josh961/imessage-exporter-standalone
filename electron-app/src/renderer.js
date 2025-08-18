@@ -25,12 +25,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     contactsList: document.getElementById('contacts-list'),
     individualChatsBody: document.getElementById('individual-chats-body'),
     groupChatsBody: document.getElementById('group-chats-body'),
-    toggleIndividual: document.querySelector('.toggle-individual'),
-    toggleGroup: document.querySelector('.toggle-group'),
+    toggleIndividualHeader: document.querySelector('.toggle-individual-header'),
+    toggleGroupHeader: document.querySelector('.toggle-group-header'),
+    individualToggleIcon: document.querySelector('.individual-toggle-icon'),
+    groupToggleIcon: document.querySelector('.group-toggle-icon'),
     selectAllIndividual: document.querySelector('.select-all-individual'),
-    clearAllIndividual: document.querySelector('.clear-all-individual'),
     selectAllGroup: document.querySelector('.select-all-group'),
-    clearAllGroup: document.querySelector('.clear-all-group'),
     selectedContactsCount: document.getElementById('selected-contacts-count'),
     selectedContactsCountTwo: document.getElementById('selected-contacts-count-two'),
     contactSearch: document.getElementById('contact-search'),
@@ -371,12 +371,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   function setupContactSelectionListeners() {
     elements.selectContacts.addEventListener('click', loadContacts);
     elements.closeContactsModal.addEventListener('click', closeContactsModal);
-    elements.toggleIndividual.addEventListener('click', () => toggleSection('individual'));
-    elements.toggleGroup.addEventListener('click', () => toggleSection('group'));
-    elements.selectAllIndividual.addEventListener('click', () => selectAll('CONTACT'));
-    elements.clearAllIndividual.addEventListener('click', () => clearAll('CONTACT'));
-    elements.selectAllGroup.addEventListener('click', () => selectAll('GROUP'));
-    elements.clearAllGroup.addEventListener('click', () => clearAll('GROUP'));
+    elements.toggleIndividualHeader.addEventListener('click', () => toggleSection('individual'));
+    elements.toggleGroupHeader.addEventListener('click', () => toggleSection('group'));
+
+    // Handle select all checkboxes
+    elements.selectAllIndividual.addEventListener('change', (e) => {
+      if (e.target.checked) {
+        selectAll('CONTACT');
+      } else {
+        clearAll('CONTACT');
+      }
+    });
+
+    elements.selectAllGroup.addEventListener('change', (e) => {
+      if (e.target.checked) {
+        selectAll('GROUP');
+      } else {
+        clearAll('GROUP');
+      }
+    });
 
     elements.contactSearch.addEventListener('input', (e) => {
       const searchTerm = e.target.value.toLowerCase().replace(/[()-\s]/g, '');
@@ -440,11 +453,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.individualChatsBody.innerHTML = renderContactRows(individualChats, false);
     elements.groupChatsBody.innerHTML = renderContactRows(groupChats, true);
 
-    elements.toggleIndividual.textContent = expandedSections.individual ? 'Collapse' : 'Expand';
-    elements.toggleGroup.textContent = expandedSections.group ? 'Collapse' : 'Expand';
+    // Update arrow icons based on expanded state
+    elements.individualToggleIcon.style.transform = expandedSections.individual ? 'rotate(90deg)' : 'rotate(0deg)';
+    elements.groupToggleIcon.style.transform = expandedSections.group ? 'rotate(90deg)' : 'rotate(0deg)';
 
     document.querySelector('.individual-chats').classList.toggle('hidden', !expandedSections.individual);
     document.querySelector('.group-chats').classList.toggle('hidden', !expandedSections.group);
+
+    // Update select all checkbox states
+    updateSelectAllCheckboxStates();
 
     setupContactCheckboxListeners();
   }
@@ -514,6 +531,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           selectedContacts.delete(contact);
         }
         updateSelectedContactsCount();
+        updateSelectAllCheckboxStates();
       });
     });
 
@@ -537,6 +555,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  function updateSelectAllCheckboxStates() {
+    // Update individual select all checkbox
+    const individualChats = contacts.filter(c => c.type === 'CONTACT');
+    const selectedIndividualCount = individualChats.filter(chat =>
+      selectedContacts.has(chat.displayName || chat.contact)
+    ).length;
+
+    if (individualChats.length > 0) {
+      elements.selectAllIndividual.checked = selectedIndividualCount === individualChats.length;
+      elements.selectAllIndividual.indeterminate = selectedIndividualCount > 0 && selectedIndividualCount < individualChats.length;
+    }
+
+    // Update group select all checkbox
+    const groupChats = contacts.filter(c => c.type === 'GROUP');
+    const selectedGroupCount = groupChats.filter(chat =>
+      selectedContacts.has(chat.displayName || chat.contact)
+    ).length;
+
+    if (groupChats.length > 0) {
+      elements.selectAllGroup.checked = selectedGroupCount === groupChats.length;
+      elements.selectAllGroup.indeterminate = selectedGroupCount > 0 && selectedGroupCount < groupChats.length;
+    }
+  }
+
   function updateSelectedContactsCount() {
     const selectedIndividualCount = Array.from(selectedContacts).filter(contact =>
       contacts.find(c => (c.displayName || c.contact) === contact && c.type === 'CONTACT')
@@ -554,6 +596,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function toggleSection(section) {
     expandedSections[section] = !expandedSections[section];
+
+    // Update arrow rotation
+    if (section === 'individual') {
+      if (expandedSections[section]) {
+        elements.individualToggleIcon.style.transform = 'rotate(90deg)';
+      } else {
+        elements.individualToggleIcon.style.transform = 'rotate(0deg)';
+      }
+    } else if (section === 'group') {
+      if (expandedSections[section]) {
+        elements.groupToggleIcon.style.transform = 'rotate(90deg)';
+      } else {
+        elements.groupToggleIcon.style.transform = 'rotate(0deg)';
+      }
+    }
+
     renderContacts();
 
     // Reapply search filter if there's a search term

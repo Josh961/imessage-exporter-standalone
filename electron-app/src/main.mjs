@@ -264,9 +264,34 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
         const contacts = stdout.split('\n')
           .filter(line => line.trim().length > 0)
           .map(line => {
-            const [type, contact, messageCount, lastMessageDate, participants] = line.split('|');
-            return { type, contact, messageCount: parseInt(messageCount), lastMessageDate, participants };
-          });
+            const parts = line.split('|');
+            if (parts[0] === 'CONTACT') {
+              // CONTACT format: CONTACT|contact_id|message_count|first_date|last_date
+              const [type, contact, messageCount, firstMessageDate, lastMessageDate] = parts;
+              return {
+                type,
+                contact,
+                messageCount: parseInt(messageCount),
+                firstMessageDate,
+                lastMessageDate
+              };
+            } else if (parts[0] === 'GROUP') {
+              // GROUP format: GROUP|name|message_count|first_date|last_date|participants
+              const [type, contact, messageCount, firstMessageDate, lastMessageDate, participants] = parts;
+              return {
+                type,
+                contact,
+                messageCount: parseInt(messageCount),
+                firstMessageDate,
+                lastMessageDate,
+                participants
+              };
+            } else {
+              // Skip any other lines (like Total DMs, Total Group Chats, etc.)
+              return null;
+            }
+          })
+          .filter(contact => contact !== null);
         resolve({ success: true, contacts });
       }
     });

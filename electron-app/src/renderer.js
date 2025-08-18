@@ -316,6 +316,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   function renderContactRows(chats, isGroupChat) {
     return chats.map(chat => {
       const participantCount = isGroupChat && chat.participants ? chat.participants.split(',').length : null;
+
+      // Format the date range
+      let dateRangeText = '';
+      if (chat.firstMessageDate && chat.lastMessageDate) {
+        const firstDate = new Date(chat.firstMessageDate);
+        const lastDate = new Date(chat.lastMessageDate);
+
+        // Format dates to show just the date without time
+        const firstDateStr = firstDate.toLocaleDateString('en-US', {
+          year: 'numeric', month: 'short', day: 'numeric'
+        });
+        const lastDateStr = lastDate.toLocaleDateString('en-US', {
+          year: 'numeric', month: 'short', day: 'numeric'
+        });
+
+        if (firstDateStr === lastDateStr) {
+          dateRangeText = firstDateStr;
+        } else {
+          dateRangeText = `${firstDateStr} - ${lastDateStr}`;
+        }
+      } else if (chat.lastMessageDate) {
+        // Fallback to just last message date if first is not available
+        dateRangeText = formatDate(chat.lastMessageDate);
+      }
+
       return `
         <tr>
           <td><input type="checkbox" id="${chat.displayName || chat.contact}" value="${chat.displayName || chat.contact}" ${selectedContacts.has(chat.displayName || chat.contact) ? 'checked' : ''}></td>
@@ -327,7 +352,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           </td>
           ${isGroupChat ? `<td>${participantCount}</td>` : ''}
           <td>${chat.messageCount}</td>
-          <td>${formatDate(chat.lastMessageDate)}</td>
+          <td>${dateRangeText}</td>
         </tr>
       `;
     }).join('');

@@ -24,6 +24,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveLastInputFolder: (folder) => ipcRenderer.invoke('save-last-input-folder', folder),
   saveLastOutputFolder: (folder) => ipcRenderer.invoke('save-last-output-folder', folder),
 
+  // Backup folder operations
+  getDefaultMessagesFolder: () => ipcRenderer.invoke('get-default-messages-folder'),
+  scanIphoneBackups: () => ipcRenderer.invoke('scan-iphone-backups'),
+
   // iMessage exporter operations
   listContacts: (inputFolder) => ipcRenderer.invoke('list-contacts', inputFolder),
   runExporter: (exportParams) => ipcRenderer.invoke('run-exporter', exportParams)

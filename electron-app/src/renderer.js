@@ -50,6 +50,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     filteredExportButton: document.getElementById('filtered-export-button'),
     dateRangeDisplay: document.getElementById('date-range-display'),
     filteredContactsDisplay: document.getElementById('filtered-contacts-display'),
+    useDefaultFolder: document.getElementById('use-default-folder'),
+    useIphoneBackup: document.getElementById('use-iphone-backup'),
+    macMessagesCheck: document.getElementById('mac-messages-check'),
+    iphoneBackupCheck: document.getElementById('iphone-backup-check'),
+    backupModal: document.getElementById('backup-modal'),
+    backupModalContent: document.getElementById('backup-modal-content'),
+    closeBackupModal: document.getElementById('close-backup-modal'),
+    backupList: document.getElementById('backup-list'),
+    noBackupsMessage: document.getElementById('no-backups-message'),
   };
 
   // State
@@ -58,11 +67,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   let expandedSections = { individual: true, group: true };
   let includeVideos = false;
   let debugMode = false;
+  let platform = null;
 
   // Initialization
+  platform = await window.electronAPI.getPlatform();
   await loadLastSelectedFolders();
   await setDefaultiMessageBackupFolder();
   updateFooter();
+  setupPlatformUI();
   setupEventListeners();
 
   // Helper Functions
@@ -72,6 +84,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (lastInputFolder) {
       elements.inputFolder.value = lastInputFolder;
+      updateBackupSourceIndicator(lastInputFolder);
     }
 
     if (lastOutputFolder) {
@@ -81,6 +94,32 @@ document.addEventListener('DOMContentLoaded', async () => {
       const documentsFolder = await window.electronAPI.getDocumentsFolder();
       elements.outputFolder.value = documentsFolder;
       await window.electronAPI.saveLastOutputFolder(documentsFolder);
+    }
+  }
+
+  function updateBackupSourceIndicator(folderPath) {
+    if (!folderPath) return;
+
+    // Check if elements exist
+    if (!elements.iphoneBackupCheck) {
+      console.log('Checkmark elements not found');
+      return;
+    }
+
+    const isBackup = folderPath.includes('MobileSync') && folderPath.includes('Backup');
+    const isDefaultMessages = platform === 'darwin' && folderPath.includes('/Library/Messages') && !isBackup;
+
+    // Hide all checkmarks first
+    elements.iphoneBackupCheck.classList.add('hidden');
+    if (elements.macMessagesCheck) {
+      elements.macMessagesCheck.classList.add('hidden');
+    }
+
+    // Show the appropriate checkmark
+    if (isDefaultMessages && elements.macMessagesCheck) {
+      elements.macMessagesCheck.classList.remove('hidden');
+    } else if (isBackup) {
+      elements.iphoneBackupCheck.classList.remove('hidden');
     }
   }
 
@@ -123,12 +162,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
           }
           elements.inputFolder.value = expandedPath;
+          updateBackupSourceIndicator(expandedPath);
           await window.electronAPI.saveLastInputFolder(expandedPath);
           break;
         }
       } catch (error) {
         console.error(`Error checking path ${location}:`, error);
       }
+    }
+  }
+
+  function setupPlatformUI() {
+    const macBackupOptions = document.getElementById('mac-backup-options');
+    const backupButtonText = document.getElementById('backup-button-text');
+
+    if (platform === 'darwin') {
+      // Mac: show Mac Messages option
+      if (macBackupOptions) macBackupOptions.style.display = 'flex';
+      if (backupButtonText) backupButtonText.textContent = 'Use iPhone Backup';
+    } else {
+      // Windows: hide Mac Messages option
+      if (macBackupOptions) macBackupOptions.style.display = 'none';
+      if (backupButtonText) backupButtonText.textContent = 'Use iTunes Backup';
     }
   }
 
@@ -206,6 +261,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   function setupFolderSelectionListeners() {
     elements.selectInputFolder.addEventListener('click', () => selectFolder('input'));
     elements.selectOutputFolder.addEventListener('click', () => selectFolder('output'));
+
+    // Quick access buttons for backup sources
+    if (elements.useDefaultFolder) {
+      elements.useDefaultFolder.addEventListener('click', async () => {
+        const defaultFolder = await window.electronAPI.getDefaultMessagesFolder();
+        if (defaultFolder) {
+          elements.inputFolder.value = defaultFolder;
+          elements.inputFolderError.classList.add('hidden');
+          updateBackupSourceIndicator(defaultFolder);
+          await window.electronAPI.saveLastInputFolder(defaultFolder);
+        }
+      });
+    }
+
+    elements.useIphoneBackup.addEventListener('click', async () => {
+      await openBackupModal();
+    });
+
+    // Backup modal listeners
+    elements.closeBackupModal.addEventListener('click', closeBackupModal);
+    elements.backupModal.addEventListener('click', (e) => {
+      if (!elements.backupModalContent.contains(e.target)) {
+        closeBackupModal();
+      }
+    });
   }
 
   async function selectFolder(type) {
@@ -215,11 +295,77 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (type === 'input') {
         elements.inputFolder.value = result;
         elements.inputFolderError.classList.add('hidden');
+        updateBackupSourceIndicator(result);
       } else {
         elements.outputFolder.value = result;
         elements.outputFolderError.classList.add('hidden');
       }
     }
+  }
+
+  async function openBackupModal() {
+    elements.backupModal.classList.remove('hidden');
+    elements.backupList.innerHTML = '<div class="text-center text-sm text-slate-600">Scanning for backups...</div>';
+    elements.noBackupsMessage.classList.add('hidden');
+
+    // Show appropriate instructions based on platform
+    const macInstructions = document.getElementById('mac-backup-instructions');
+    const windowsInstructions = document.getElementById('windows-backup-instructions');
+    const windowsItunesNote = document.getElementById('windows-itunes-note');
+    if (platform === 'darwin') {
+      if (macInstructions) macInstructions.classList.remove('hidden');
+      if (windowsInstructions) windowsInstructions.classList.add('hidden');
+      if (windowsItunesNote) windowsItunesNote.classList.add('hidden');
+    } else {
+      if (macInstructions) macInstructions.classList.add('hidden');
+      if (windowsInstructions) windowsInstructions.classList.remove('hidden');
+      if (windowsItunesNote) windowsItunesNote.classList.remove('hidden');
+    }
+
+    const result = await window.electronAPI.scanIphoneBackups();
+
+    // Clear the scanning message
+    elements.backupList.innerHTML = '';
+
+    if (result.success && result.backups && result.backups.length > 0) {
+      elements.noBackupsMessage.classList.add('hidden');
+      elements.backupList.innerHTML = result.backups.map(backup => {
+        const backupDate = new Date(backup.backupDate);
+        const dateStr = backupDate.toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+        return `
+          <div class="backup-item rounded-md border border-slate-200 px-4 py-3 hover:border-sky-500 hover:bg-sky-50" style="cursor: pointer;" data-path="${backup.path}">
+            <div class="font-semibold text-slate-800">${backup.folderName}</div>
+            <div class="text-sm text-slate-600 mt-1">Created: ${dateStr}</div>
+          </div>
+        `;
+      }).join('');
+
+      // Add click handlers to backup items
+      elements.backupList.querySelectorAll('.backup-item').forEach(item => {
+        item.addEventListener('click', async () => {
+          const backupPath = item.dataset.path;
+          elements.inputFolder.value = backupPath;
+          elements.inputFolderError.classList.add('hidden');
+          updateBackupSourceIndicator(backupPath);
+          await window.electronAPI.saveLastInputFolder(backupPath);
+          closeBackupModal();
+        });
+      });
+    } else {
+      // No backups found - show the message
+      elements.noBackupsMessage.classList.remove('hidden');
+    }
+  }
+
+  function closeBackupModal() {
+    elements.backupModal.classList.add('hidden');
   }
 
   function setupContactSelectionListeners() {

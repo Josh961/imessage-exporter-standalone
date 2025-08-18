@@ -45,8 +45,23 @@
               id="input-folder"
               class="focus:shadow-outline flex-grow appearance-none rounded border px-3 py-2 leading-tight text-slate-700 shadow focus:outline-none"
               readonly />
-            <button id="select-input-folder" class="focus:shadow-outline ml-2 rounded border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none">
+            <button
+              id="select-input-folder"
+              class="focus:shadow-outline ml-2 rounded border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none">
               Select
+            </button>
+          </div>
+          <div class="mt-2 flex gap-2">
+            <div id="mac-backup-options" class="flex gap-2">
+              <button id="use-default-folder" class="text-xs text-sky-600 hover:text-sky-700 hover:underline">
+                <span id="mac-messages-check" class="hidden text-sky-600">✓</span>
+                Use Mac Messages
+              </button>
+              <span class="text-xs text-slate-400">•</span>
+            </div>
+            <button id="use-iphone-backup" class="text-xs text-sky-600 hover:text-sky-700 hover:underline">
+              <span id="iphone-backup-check" class="hidden text-sky-600">✓</span>
+              <span id="backup-button-text">Use iPhone Backup</span>
             </button>
           </div>
           <span id="input-folder-error" class="mt-1 hidden text-xs text-red-500">Select an input folder.</span>
@@ -59,7 +74,9 @@
               id="output-folder"
               class="focus:shadow-outline flex-grow appearance-none rounded border px-3 py-2 leading-tight text-slate-700 shadow focus:outline-none"
               readonly />
-            <button id="select-output-folder" class="focus:shadow-outline ml-2 rounded border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none">
+            <button
+              id="select-output-folder"
+              class="focus:shadow-outline ml-2 rounded border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none">
               Select
             </button>
           </div>
@@ -337,6 +354,78 @@
               id="close-settings"
               type="button"
               class="-md mt-3 inline-flex w-full justify-center border border-slate-300 bg-white px-4 py-2 text-base font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none sm:ml-3 sm:mt-0 sm:w-auto sm:text-sm">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- iPhone Backup Selection Modal -->
+    <div id="backup-modal" class="fixed inset-0 z-10 hidden overflow-y-auto">
+      <div class="flex min-h-screen items-center justify-center p-4">
+        <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+          <div class="absolute inset-0 bg-slate-500 opacity-75"></div>
+        </div>
+        <span class="hidden sm:inline-block sm:h-screen sm:align-middle" aria-hidden="true">&#8203;</span>
+        <div
+          id="backup-modal-content"
+          class="inline-block transform overflow-hidden rounded-lg bg-white text-left align-middle shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl sm:align-middle">
+          <div class="bg-white px-4 pb-4 pt-5 sm:p-6">
+            <div class="sm:flex sm:items-start">
+              <div class="mt-3 w-full text-left">
+                <h3 class="mb-4 text-lg font-medium leading-6 text-slate-900">Select iPhone Backup</h3>
+                <div id="backup-list" class="space-y-3">
+                  <!-- Backup items will be populated here -->
+                </div>
+                <div id="no-backups-message" class="hidden">
+                  <div class="space-y-4">
+                    <p class="font-semibold text-slate-800">No iPhone backups found</p>
+                    <p class="text-sm text-slate-700">To create a backup:</p>
+                    <ol id="mac-backup-instructions" class="list-decimal space-y-2 pl-6 text-slate-700">
+                      <li>Connect your iPhone to your Mac with a cable</li>
+                      <li>In the Finder sidebar, select your iPhone</li>
+                      <li>At the top of the Finder window, click <span class="font-semibold">General</span></li>
+                      <li>
+                        <div>Select <span class="font-semibold">"Back up all of the data on your iPhone to this Mac"</span></div>
+                        <div class="ml-4 mt-2">
+                          •
+                          <span class="rounded-md bg-yellow-100 px-1.5 py-1 text-slate-700"
+                            >Ensure the "Encrypt local backup" option is <span class="font-semibold">unchecked</span></span
+                          >
+                        </div>
+                      </li>
+                      <li>Click <span class="font-semibold">Back Up Now</span></li>
+                    </ol>
+                    <ol id="windows-backup-instructions" class="hidden list-decimal space-y-2 pl-6 text-slate-700">
+                      <li>Connect your iPhone to your computer using a USB cable</li>
+                      <li>In the iTunes app, click the Device button near the top left of the iTunes window</li>
+                      <li>Click <span class="font-semibold">Summary</span></li>
+                      <li>
+                        <div>Click <span class="font-semibold">Back Up Now</span> (below Backups)</div>
+                        <div class="ml-4 mt-2">• Do not save the backup to iCloud. Save locally to your computer</div>
+                        <div class="ml-4 mt-1">
+                          •
+                          <span class="rounded-md bg-yellow-100 px-1.5 py-1 text-slate-700"
+                            >Ensure the "Encrypt local backup" option is <span class="font-semibold">unchecked</span></span
+                          >
+                        </div>
+                      </li>
+                      <li>Wait for the backup to complete</li>
+                    </ol>
+                    <p class="mt-3 text-sm italic text-slate-500">After the backup completes, close and reopen this dialog to see your backup.</p>
+                    <p id="windows-itunes-note" class="mt-2 hidden text-sm text-slate-600">
+                      Note: If you do not have iTunes installed, you can download it from
+                      <a href="https://www.apple.com/itunes/" target="_blank" class="text-sky-500 hover:text-sky-600">Apple's website</a>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="flex justify-end bg-white px-4 py-3 sm:px-6">
+            <button
+              id="close-backup-modal"
+              class="rounded-md border border-slate-300 bg-white px-4 py-2 text-base font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none">
               Close
             </button>
           </div>

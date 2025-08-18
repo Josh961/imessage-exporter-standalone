@@ -251,6 +251,57 @@ ipcMain.handle('get-last-output-folder', () => store.get('lastOutputFolder', app
 ipcMain.handle('save-last-input-folder', (event, folder) => store.set('lastInputFolder', folder));
 ipcMain.handle('save-last-output-folder', (event, folder) => store.set('lastOutputFolder', folder));
 
+// Backup folder operations
+ipcMain.handle('get-default-messages-folder', () => {
+  if (process.platform === 'darwin') {
+    return path.join(app.getPath('home'), 'Library', 'Messages');
+  }
+  return '';
+});
+
+ipcMain.handle('scan-iphone-backups', async () => {
+  let backupPath;
+
+  if (process.platform === 'darwin') {
+    backupPath = path.join(app.getPath('home'), 'Library', 'Application Support', 'MobileSync', 'Backup');
+  } else if (process.platform === 'win32') {
+    // Windows iTunes backup location
+    backupPath = path.join(app.getPath('home'), 'Apple', 'MobileSync', 'Backup');
+  } else {
+    return { success: false, backups: [] };
+  }
+
+  try {
+    // Check if backup directory exists
+    await fs.access(backupPath);
+
+    // Get all directories in the backup folder
+    const entries = await fs.readdir(backupPath, { withFileTypes: true });
+    const backupDirs = entries.filter(entry => entry.isDirectory());
+
+    // Simply list the folders with their creation dates
+    const backups = [];
+    for (const entry of backupDirs) {
+      const fullPath = path.join(backupPath, entry.name);
+      const stats = await fs.stat(fullPath);
+
+      backups.push({
+        id: entry.name,
+        path: fullPath,
+        folderName: entry.name,
+        backupDate: stats.birthtime  // Use birthtime for creation date
+      });
+    }
+
+    // Sort by creation date, newest first
+    backups.sort((a, b) => b.backupDate - a.backupDate);
+
+    return { success: true, backups };
+  } catch (error) {
+    return { success: false, backups: [], error: error.message };
+  }
+});
+
 // iMessage exporter operations
 ipcMain.handle('list-contacts', async (event, inputFolder) => {
   const executablePath = getResourcePath();

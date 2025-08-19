@@ -30,5 +30,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // iMessage exporter operations
   listContacts: (inputFolder) => ipcRenderer.invoke('list-contacts', inputFolder),
-  runExporter: (exportParams) => ipcRenderer.invoke('run-exporter', exportParams)
+  runExporter: (exportParams) => ipcRenderer.invoke('run-exporter', exportParams),
+
+  // Progress updates
+  onExportProgress: (callback) => {
+    ipcRenderer.on('export-progress', (event, data) => callback(data));
+    return () => ipcRenderer.removeAllListeners('export-progress');
+  }
 });

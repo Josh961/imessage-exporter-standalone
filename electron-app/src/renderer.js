@@ -735,7 +735,137 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.exportButton.addEventListener('click', exportContacts);
   }
 
-  let exportAnimationInterval;
+  let progressBarContainer = null;
+  let progressBar = null;
+  let progressText = null;
+  let progressPercentage = null;
+
+  function createProgressBar() {
+    // Create progress bar with explicit inline styles to ensure visibility
+    progressBarContainer = document.createElement('div');
+    progressBarContainer.style.marginTop = '0.5rem'; // Reduced from 1rem
+    progressBarContainer.style.width = '100%';
+
+    // Create header row
+    const headerRow = document.createElement('div');
+    headerRow.style.display = 'flex';
+    headerRow.style.justifyContent = 'space-between';
+    headerRow.style.alignItems = 'center';
+    headerRow.style.marginBottom = '0.5rem';
+
+    // Create progress text
+    progressText = document.createElement('div');
+    progressText.style.fontSize = '0.875rem';
+    progressText.style.color = '#475569';
+    progressText.textContent = 'Initializing...';
+
+    // Create percentage text
+    progressPercentage = document.createElement('div');
+    progressPercentage.style.fontSize = '0.875rem';
+    progressPercentage.style.fontWeight = '500';
+    progressPercentage.style.color = '#334155';
+    progressPercentage.textContent = '0%';
+
+    headerRow.appendChild(progressText);
+    headerRow.appendChild(progressPercentage);
+
+    // Create progress bar wrapper
+    const progressWrapper = document.createElement('div');
+    progressWrapper.style.width = '100%';
+    progressWrapper.style.height = '10px';
+    progressWrapper.style.borderRadius = '9999px';
+    progressWrapper.style.overflow = 'hidden';
+    progressWrapper.style.position = 'relative';
+    progressWrapper.style.backgroundColor = '#e5e7eb';
+
+    // Create animated candy cane stripes using a moving background
+    const candyCaneStripes = document.createElement('div');
+    candyCaneStripes.style.position = 'absolute';
+    candyCaneStripes.style.top = '0';
+    candyCaneStripes.style.left = '0';
+    candyCaneStripes.style.width = '100%';
+    candyCaneStripes.style.height = '100%';
+    candyCaneStripes.style.backgroundImage = 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(209, 213, 219, 0.5) 10px, rgba(209, 213, 219, 0.5) 20px)';
+    candyCaneStripes.style.backgroundSize = '28px 28px';
+
+    // Animate using JavaScript instead of CSS
+    let animationPosition = 0;
+    const animateStripes = () => {
+      animationPosition = (animationPosition + 0.5) % 28; // Reduced from 1 to 0.5 for slower animation
+      candyCaneStripes.style.backgroundPosition = `${animationPosition}px 0`;
+      if (progressBarContainer && progressBarContainer.parentNode) {
+        requestAnimationFrame(animateStripes);
+      }
+    };
+    requestAnimationFrame(animateStripes);
+
+    // Create progress bar fill
+    progressBar = document.createElement('div');
+    progressBar.style.height = '100%';
+    progressBar.style.backgroundColor = '#0ea5e9';
+    progressBar.style.borderRadius = '9999px';
+    progressBar.style.transition = 'width 0.3s ease-out';
+    progressBar.style.width = '0%';
+    progressBar.style.position = 'relative';
+    progressBar.style.zIndex = '2'; // Higher z-index to appear above stripes
+
+    // Add both elements to wrapper
+    progressWrapper.appendChild(candyCaneStripes);
+    progressWrapper.appendChild(progressBar);
+    progressBarContainer.appendChild(headerRow);
+    progressBarContainer.appendChild(progressWrapper);
+
+    return progressBarContainer;
+  }
+
+  function showProgressBar(initialText) {
+    // Always create a fresh progress bar
+    progressBarContainer = createProgressBar();
+
+    if (progressText) progressText.textContent = initialText;
+    if (progressBar) progressBar.style.width = '0%';
+    if (progressPercentage) progressPercentage.textContent = '0%';
+
+    // Clear status and append progress bar - ensure status element doesn't have conflicting styles
+    elements.status.innerHTML = '';
+    elements.status.className = ''; // Clear all classes that might interfere
+    elements.status.style.textAlign = 'left'; // Ensure proper alignment
+    elements.status.appendChild(progressBarContainer);
+  }
+
+  function updateProgressBar(percentage, text) {
+    // Ensure progress bar exists
+    if (!progressBarContainer || !progressBarContainer.parentNode) {
+      showProgressBar(text || 'Processing...');
+    }
+
+    if (progressBar && progressText && progressPercentage) {
+      const pct = Math.round(Math.min(100, Math.max(0, percentage || 0)));
+      progressBar.style.width = `${pct}%`;
+      progressPercentage.textContent = `${pct}%`;
+      if (text) {
+        progressText.textContent = text;
+      }
+    } else {
+      // Fallback to text only if progress bar elements don't exist
+      elements.status.textContent = `${text} - ${Math.round(percentage || 0)}%`;
+    }
+  }
+
+  function hideProgressBar() {
+    if (progressBarContainer && progressBarContainer.parentNode) {
+      progressBarContainer.parentNode.removeChild(progressBarContainer);
+    }
+    // Reset the progress bar elements
+    progressBarContainer = null;
+    progressBar = null;
+    progressText = null;
+    progressPercentage = null;
+
+    // Restore the original status classes for final messages
+    elements.status.className = 'text-center font-semibold';
+    elements.status.style.textAlign = '';
+  }
 
   async function exportContacts() {
     resetErrorMessages();
@@ -745,16 +875,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.exportButton.classList.remove('hover:bg-sky-600');
     elements.exportButton.classList.add('hover:bg-sky-500', 'opacity-60');
 
-    elements.status.innerHTML = 'Exporting<span id="animatedDots">...</span>';
-    const dotsElement = document.getElementById('animatedDots');
-
-    let dots = 1;
-    exportAnimationInterval = setInterval(() => {
-      dots = (dots % 3) + 1;
-      dotsElement.textContent = '.'.repeat(dots);
-    }, 500);
-
-    elements.status.className = 'text-center font-semibold text-sky-500';
+    // Show progress bar instead of dots animation
+    showProgressBar('Initializing export...');
 
     try {
       // Get all selected contacts first
@@ -779,13 +901,36 @@ document.addEventListener('DOMContentLoaded', async () => {
         isFullExport: false
       };
 
+      // Listen for progress updates
+      const unsubscribe = window.electronAPI.onExportProgress((progressData) => {
+        // Ensure progress bar is showing
+        if (!progressBarContainer || !progressBarContainer.parentNode) {
+          showProgressBar('Processing...');
+        }
+
+        if (progressData.phase === 'scanning') {
+          const message = progressData.message || `found ${progressData.total.toLocaleString()} messages`;
+          updateProgressBar(0, `Scanning messages database... ${message}`);
+        } else if (progressData.phase === 'exporting') {
+          const pct = Math.round(progressData.percentage || 0);
+          updateProgressBar(pct, `Exporting messages: ${progressData.current.toLocaleString()} / ${progressData.total.toLocaleString()}`);
+        } else if (progressData.phase === 'copying-attachments') {
+          const pct = Math.round(progressData.percentage || 0);
+          updateProgressBar(pct, `Copying attachments: ${progressData.current.toLocaleString()} / ${progressData.total.toLocaleString()}`);
+        } else if (progressData.phase === 'complete') {
+          updateProgressBar(100, 'Export complete!');
+        }
+      });
+
       const result = await window.electronAPI.runExporter(exportParams);
+      unsubscribe();
+      hideProgressBar();
       updateExportStatus(result);
     } catch (error) {
+      hideProgressBar();
       elements.status.textContent = `❌ An error occurred: ${error.message}`;
       elements.status.className = 'text-center font-semibold text-red-500';
     } finally {
-      clearInterval(exportAnimationInterval);
 
       elements.exportButton.disabled = false;
       elements.exportButton.classList.remove('hover:bg-sky-500', 'opacity-60');
@@ -794,7 +939,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function updateExportStatus(result) {
-    clearInterval(exportAnimationInterval);
+    // Ensure progress bar is removed before showing final status
+    hideProgressBar();
 
     if (result.success) {
       if (result.hasMessages === false) {
@@ -992,16 +1138,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       isFullExport: true // Add flag to skip contact validation
     };
 
-    elements.status.innerHTML = 'Exporting all messages, this may take some time<span id="animatedDots">.</span>';
-    const dotsElement = document.getElementById('animatedDots');
-
-    let dots = 1;
-    exportAnimationInterval = setInterval(() => {
-      dots = (dots % 3) + 1;
-      dotsElement.textContent = '.'.repeat(dots);
-    }, 500);
-
-    elements.status.className = 'text-center font-semibold text-sky-500';
+    // Show progress bar for full export
+    showProgressBar('Exporting all messages...');
 
     // Disable and style buttons
     elements.exportButton.disabled = true;
@@ -1016,13 +1154,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.selectContacts.classList.add('opacity-50', 'cursor-not-allowed');
 
     try {
+      // Listen for progress updates
+      const unsubscribe = window.electronAPI.onExportProgress((progressData) => {
+        // Ensure progress bar is showing
+        if (!progressBarContainer || !progressBarContainer.parentNode) {
+          showProgressBar('Processing...');
+        }
+
+        if (progressData.phase === 'scanning') {
+          const message = progressData.message || `found ${progressData.total.toLocaleString()} messages`;
+          updateProgressBar(0, `Scanning messages database... ${message}`);
+        } else if (progressData.phase === 'exporting') {
+          const pct = Math.round(progressData.percentage || 0);
+          updateProgressBar(pct, `Exporting messages: ${progressData.current.toLocaleString()} / ${progressData.total.toLocaleString()}`);
+        } else if (progressData.phase === 'copying-attachments') {
+          const pct = Math.round(progressData.percentage || 0);
+          updateProgressBar(pct, `Copying attachments: ${progressData.current.toLocaleString()} / ${progressData.total.toLocaleString()}`);
+        } else if (progressData.phase === 'complete') {
+          updateProgressBar(100, 'Export complete!');
+        }
+      });
+
       const result = await window.electronAPI.runExporter(exportParams);
+      unsubscribe();
+      hideProgressBar();
       updateExportStatus(result);
     } catch (error) {
+      hideProgressBar();
       elements.status.textContent = `❌ An error occurred: ${error.message}`;
       elements.status.className = 'text-center font-semibold text-red-500';
     } finally {
-      clearInterval(exportAnimationInterval);
 
       // Re-enable and restore button styles
       elements.exportButton.disabled = false;
@@ -1107,16 +1268,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       isFilteredExport: true // New flag for filtered export
     };
 
-    elements.status.innerHTML = 'Using slow export method, this may take some time<span id="animatedDots">.</span>';
-    const dotsElement = document.getElementById('animatedDots');
-
-    let dots = 1;
-    exportAnimationInterval = setInterval(() => {
-      dots = (dots % 3) + 1;
-      dotsElement.textContent = '.'.repeat(dots);
-    }, 500);
-
-    elements.status.className = 'text-center font-semibold text-sky-500';
+    // Show progress bar for filtered export
+    showProgressBar('Using slow export method...');
 
     // Disable and style buttons
     elements.exportButton.disabled = true;
@@ -1135,13 +1288,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.selectContacts.classList.add('opacity-50', 'cursor-not-allowed');
 
     try {
+      // Listen for progress updates
+      const unsubscribe = window.electronAPI.onExportProgress((progressData) => {
+        // Ensure progress bar is showing
+        if (!progressBarContainer || !progressBarContainer.parentNode) {
+          showProgressBar('Processing...');
+        }
+
+        // For slow export method, don't show message counts to avoid exposing implementation details
+        if (progressData.phase === 'scanning') {
+          updateProgressBar(0, 'Scanning messages database...');
+        } else if (progressData.phase === 'exporting') {
+          const pct = Math.round(progressData.percentage || 0);
+          updateProgressBar(pct, 'Exporting messages...');
+        } else if (progressData.phase === 'copying-attachments') {
+          const pct = Math.round(progressData.percentage || 0);
+          updateProgressBar(pct, 'Copying attachments...');
+        } else if (progressData.phase === 'complete') {
+          updateProgressBar(100, 'Export complete!');
+        }
+      });
+
       const result = await window.electronAPI.runExporter(exportParams);
+      unsubscribe();
+      hideProgressBar();
       updateExportStatus(result);
     } catch (error) {
+      hideProgressBar();
       elements.status.textContent = `❌ An error occurred: ${error.message}`;
       elements.status.className = 'text-center font-semibold text-red-500';
     } finally {
-      clearInterval(exportAnimationInterval);
 
       // Re-enable and restore button styles
       elements.exportButton.disabled = false;

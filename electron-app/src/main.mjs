@@ -1,5 +1,5 @@
 import archiver from 'archiver';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import Store from 'electron-store';
 import { createWriteStream } from 'fs';
@@ -358,21 +358,71 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
     const executablePath = getResourcePath();
     const chatDbPath = getChatDbPath(inputFolder);
 
-    let params = `-f txt -c basic -b${!includeVideos ? ' -v' : ''} -p "${chatDbPath}" -o "${uniqueTempFolder}"`;
-    if (startDate) params += ` -s ${startDate}`;
-    if (endDate) params += ` -e ${endDate}`;
+    let params = [];
+    params.push('-f', 'txt', '-c', 'basic', '-b');
+    if (!includeVideos) params.push('-v');
+    params.push('-p', chatDbPath, '-o', uniqueTempFolder);
+    if (startDate) params.push('-s', startDate);
+    if (endDate) params.push('-e', endDate);
 
     if (!isFullExport && !isFilteredExport && selectedContacts && selectedContacts.length > 0) {
       const contactsString = selectedContacts.map(contact =>
         contact.includes(',') ? `"${contact}"` : contact
       ).join(';');
-      params += ` -t "${contactsString}"`;
+      params.push('-t', contactsString);
     }
 
-    const command = `"${executablePath}" ${params}`;
-
     return new Promise((resolve) => {
-      exec(command, async (error, stdout, stderr) => {
+      const exportProcess = spawn(executablePath, params);
+      let stdout = '';
+      let stderr = '';
+
+      // Listen for progress updates from the Rust exporter
+      exportProcess.stdout.on('data', (data) => {
+        const output = data.toString();
+        stdout += output;
+
+        // Parse progress updates
+        const lines = output.split('\n');
+        for (const line of lines) {
+          if (line.startsWith('PROGRESS_JSON: ')) {
+            try {
+              const progressData = JSON.parse(line.substring('PROGRESS_JSON: '.length));
+              // Send progress update to renderer
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('export-progress', progressData);
+              }
+            } catch (e) {
+              // Ignore JSON parse errors
+            }
+          }
+        }
+      });
+
+      exportProcess.stderr.on('data', (data) => {
+        const output = data.toString();
+        stderr += output;
+
+        // Also check stderr for progress updates (Rust might write there)
+        const lines = output.split('\n');
+        for (const line of lines) {
+          if (line.startsWith('PROGRESS_JSON: ')) {
+            try {
+              const progressData = JSON.parse(line.substring('PROGRESS_JSON: '.length));
+              // Send progress update to renderer
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('export-progress', progressData);
+              }
+            } catch (e) {
+              // Ignore JSON parse errors
+            }
+          }
+        }
+      });
+
+      exportProcess.on('close', async (code) => {
+        const error = code !== 0 ? new Error(`Process exited with code ${code}`) : null;
+        const command = `"${executablePath}" ${params.join(' ')}`;
         const debugLogContent = debugMode ?
           `Command: ${command}\n\nOutput:\n${stdout}\n\nErrors:\n${stderr}${error ? '\n\nError:\n' + error.message : ''}` :
           null;

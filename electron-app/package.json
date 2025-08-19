@@ -18,18 +18,18 @@
     "build-exporter-mac": "node scripts/build-exporter-mac.js"
   },
   "dependencies": {
-    "archiver": "^5.3.1",
-    "archiver-utils": "^4.0.1",
-    "electron-store": "^10.0.0"
+    "archiver": "^7.0.1",
+    "archiver-utils": "^5.0.2",
+    "electron-store": "^10.1.0"
   },
   "devDependencies": {
-    "autoprefixer": "^10.4.20",
-    "concurrently": "^9.1.2",
-    "electron": "^33.2.1",
-    "electron-builder": "^25.1.8",
-    "postcss": "^8.4.49",
-    "prettier": "^3.4.2",
-    "prettier-plugin-tailwindcss": "^0.6.9",
+    "autoprefixer": "^10.4.21",
+    "concurrently": "^9.2.0",
+    "electron": "^37.3.1",
+    "electron-builder": "^26.0.12",
+    "postcss": "^8.5.6",
+    "prettier": "^3.6.2",
+    "prettier-plugin-tailwindcss": "^0.6.14",
     "tailwindcss": "^3.4.17"
   },
   "build": {

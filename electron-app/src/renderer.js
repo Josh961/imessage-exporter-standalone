@@ -486,6 +486,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       const searchTerm = e.target.value.toLowerCase().replace(/[()-\s]/g, '');
       const rows = [...elements.individualChatsBody.querySelectorAll('tr'), ...elements.groupChatsBody.querySelectorAll('tr')];
 
+      // Hide/show select all checkboxes based on search content
+      if (searchTerm) {
+        // Hide select all checkboxes when searching
+        elements.selectAllIndividual.style.display = 'none';
+        elements.selectAllGroup.style.display = 'none';
+      } else {
+        // Show select all checkboxes when not searching
+        elements.selectAllIndividual.style.display = '';
+        elements.selectAllGroup.style.display = '';
+      }
+
       rows.forEach(row => {
         const label = row.querySelector('label');
         if (label) {

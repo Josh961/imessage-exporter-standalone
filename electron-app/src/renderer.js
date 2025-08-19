@@ -59,6 +59,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     closeBackupModal: document.getElementById('close-backup-modal'),
     backupList: document.getElementById('backup-list'),
     noBackupsMessage: document.getElementById('no-backups-message'),
+    emptyExportModal: document.getElementById('empty-export-modal'),
+    emptyExportModalContent: document.getElementById('empty-export-modal-content'),
+    closeEmptyExportModal: document.getElementById('close-empty-export-modal'),
   };
 
   // State
@@ -215,6 +218,70 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupExportButtonListener();
     setupPermissionsModalListeners();
     setupSettingsListeners();
+    setupEmptyExportModalListeners();
+  }
+
+  function setupEmptyExportModalListeners() {
+    // Hide Mac-only elements on Windows
+    if (platform !== 'darwin') {
+      const macOnlyBackupTip = document.getElementById('mac-only-backup-tip');
+      const macOnlyBackupSection = document.getElementById('mac-only-backup-section');
+      const macOnlyBackupNote = document.getElementById('mac-only-backup-note');
+
+      if (macOnlyBackupTip) macOnlyBackupTip.style.display = 'none';
+      if (macOnlyBackupSection) macOnlyBackupSection.style.display = 'none';
+      if (macOnlyBackupNote) macOnlyBackupNote.style.display = 'none';
+    }
+
+    const resetAllSections = () => {
+      // Reset the expandable backup instructions section to collapsed state
+      const content = document.getElementById('backup-instructions-content');
+      const arrow = document.getElementById('backup-instructions-arrow');
+      if (content) content.classList.add('hidden');
+      if (arrow) arrow.style.transform = 'rotate(0deg)';
+    };
+
+    elements.closeEmptyExportModal.addEventListener('click', () => {
+      elements.emptyExportModal.classList.add('hidden');
+      resetAllSections();
+    });
+
+    elements.emptyExportModal.addEventListener('click', (e) => {
+      if (!elements.emptyExportModalContent.contains(e.target)) {
+        elements.emptyExportModal.classList.add('hidden');
+        resetAllSections();
+      }
+    });
+
+    // No sync tips section in current HTML, removed related code
+
+    // Handle expandable backup instructions
+    const backupToggle = document.getElementById('toggle-backup-instructions');
+    if (backupToggle) {
+      backupToggle.addEventListener('click', () => {
+        const content = document.getElementById('backup-instructions-content');
+        const arrow = document.getElementById('backup-instructions-arrow');
+
+        if (content.classList.contains('hidden')) {
+          content.classList.remove('hidden');
+          arrow.style.transform = 'rotate(90deg)';
+
+          // Show correct instructions based on platform
+          const macSteps = document.getElementById('mac-backup-steps');
+          const windowsSteps = document.getElementById('windows-backup-steps');
+          if (platform === 'darwin') {
+            if (macSteps) macSteps.classList.remove('hidden');
+            if (windowsSteps) windowsSteps.classList.add('hidden');
+          } else {
+            if (macSteps) macSteps.classList.add('hidden');
+            if (windowsSteps) windowsSteps.classList.remove('hidden');
+          }
+        } else {
+          content.classList.add('hidden');
+          arrow.style.transform = 'rotate(0deg)';
+        }
+      });
+    }
   }
 
   function setupPermissionsModalListeners() {
@@ -664,12 +731,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.status.className = 'text-center font-semibold text-sky-500';
 
     try {
-      // Helper function to get last 10 digits of a phone number
-      const getLast10Digits = (number) => {
-        const digits = number.replace(/\D/g, '');
-        return digits.slice(-10);
-      };
-
       // Get all selected contacts first
       const selectedContactsList = Array.from(selectedContacts).map(contact => {
         const contactData = contacts.find(c => (c.displayName || c.contact) === contact);
@@ -710,8 +771,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     clearInterval(exportAnimationInterval);
 
     if (result.success) {
-      elements.status.textContent = `✅ Export completed successfully! Output folder: ${result.zipPath}`;
-      elements.status.className = 'text-center font-semibold text-green-500';
+      if (result.hasMessages === false) {
+        // Show warning - entire message is clickable
+        elements.status.innerHTML = `<span class="cursor-pointer hover:text-amber-700 underline" id="show-empty-warning">⚠️ No messages found in the specified date range - click for details</span>`;
+        elements.status.className = 'text-center font-semibold text-amber-600';
+
+        // Add click handler for the entire warning message
+        const warningLink = document.getElementById('show-empty-warning');
+        if (warningLink) {
+          warningLink.addEventListener('click', () => {
+            elements.emptyExportModal.classList.remove('hidden');
+          });
+        }
+      } else {
+        elements.status.textContent = `✅ Export completed successfully! Output folder: ${result.zipPath}`;
+        elements.status.className = 'text-center font-semibold text-green-500';
+      }
     } else {
       elements.status.textContent = `❌ Export failed: ${result.error}`;
       elements.status.className = 'text-center font-semibold text-red-500';
@@ -982,11 +1057,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     closeSettingsModal();
 
     // Get all selected contacts first
-    const getLast10Digits = (number) => {
-      const digits = number.replace(/\D/g, '');
-      return digits.slice(-10);
-    };
-
     const selectedContactsList = Array.from(selectedContacts).map(contact => {
       const contactData = contacts.find(c => (c.displayName || c.contact) === contact);
       if (contactData && contactData.type === 'GROUP') {

@@ -408,8 +408,20 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
               await fs.writeFile(path.join(uniqueTempFolder, 'debug.log'), fullDebugContent);
             }
 
+            // Check if we actually exported any messages (excluding orphaned.txt)
+            const files = await fs.readdir(uniqueTempFolder);
+            const txtFiles = files.filter(file => file.endsWith('.txt') && file !== 'orphaned.txt');
+            const hasMessages = txtFiles.length > 0;
+
+            if (!hasMessages) {
+              // No messages found - don't create zip, just clean up and return
+              await deleteTempFolder(uniqueTempFolder);
+              resolve({ success: true, hasMessages: false });
+              return;
+            }
+
             const finalZipPath = await zipFolder(uniqueTempFolder, uniqueZipPath);
-            resolve({ success: true, zipPath: finalZipPath });
+            resolve({ success: true, zipPath: finalZipPath, hasMessages });
           } catch (err) {
             if (debugMode) {
               const { fullPath: debugLogPath } = await createUniqueName(outputFolder, 'debug', '.log');

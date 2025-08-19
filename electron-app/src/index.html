@@ -414,6 +414,111 @@
         </div>
       </div>
     </div>
+    <!-- Empty Export Warning Modal -->
+    <div id="empty-export-modal" class="fixed inset-0 z-10 hidden overflow-y-auto">
+      <div class="flex min-h-screen items-center justify-center p-4">
+        <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+          <div class="absolute inset-0 bg-slate-500 opacity-75"></div>
+        </div>
+        <span class="hidden sm:inline-block sm:h-screen sm:align-middle" aria-hidden="true">&#8203;</span>
+        <div
+          id="empty-export-modal-content"
+          class="inline-block transform overflow-hidden rounded-lg bg-white text-left align-middle shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl sm:align-middle">
+          <div class="bg-white px-4 pb-4 pt-5 sm:p-6">
+            <div class="sm:flex sm:items-start">
+              <div class="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 sm:mx-0 sm:h-10 sm:w-10">
+                <svg class="h-6 w-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div class="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left">
+                <h3 class="text-lg font-medium leading-6 text-slate-900">No messages found in date range</h3>
+                <div class="mt-2">
+                  <p class="text-sm text-slate-600">No messages were found within your specified date range, so no export file was created.</p>
+                  <div class="mt-3 space-y-2">
+                    <p class="text-sm font-semibold text-slate-700">What you can do:</p>
+                    <ul class="list-disc space-y-1 pl-5 text-sm text-slate-600">
+                      <li>
+                        Check the date range shown in the &quot;Select contacts&quot; popup for your selected contact - the date range you selected may be outside the range of
+                        messages we found
+                      </li>
+                      <li>
+                        If the date range lines up with what is shown in the &quot;Select contacts&quot; popup and the export finishes instantly, try exporting with the &quot;slow
+                        export method&quot; by closing this dialog, clicking the cog wheel in the top right, and clicking &quot;Export with slow method&quot;. This will take longer
+                        but will ensure your selected contact is exported.
+                      </li>
+                      <li id="mac-only-backup-tip">
+                        If the date range shown in the &quot;Select contacts&quot; popup doesn't go back far enough to the messages you expect, but you can see them in your iPhone,
+                        create a manual backup to reliably export them (see below).
+                      </li>
+                    </ul>
+                    <div class="mt-4" id="mac-only-backup-section">
+                      <button type="button" id="toggle-backup-instructions" class="flex items-center gap-2 text-sm font-semibold text-slate-700 hover:text-slate-900">
+                        <svg id="backup-instructions-arrow" class="h-4 w-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                        How to create an iPhone backup
+                      </button>
+                      <div id="backup-instructions-content" class="mt-3 hidden space-y-2 pl-6">
+                        <ol id="mac-backup-steps" class="list-decimal space-y-2 text-sm text-slate-600">
+                          <li>Connect your iPhone to your Mac with a cable</li>
+                          <li>In the Finder sidebar, select your iPhone</li>
+                          <li>At the top of the Finder window, click <span class="font-semibold">General</span></li>
+                          <li>
+                            <div>Select <span class="font-semibold">"Back up all of the data on your iPhone to this Mac"</span></div>
+                            <div class="ml-4 mt-1">
+                              •
+                              <span class="rounded-md bg-yellow-100 px-1.5 py-1 text-slate-700">
+                                Ensure the "Encrypt local backup" option is <span class="font-semibold">unchecked</span>
+                              </span>
+                            </div>
+                          </li>
+                          <li>Click <span class="font-semibold">Back Up Now</span></li>
+                          <li>After backup completes, close this dialog and change the iMessage Backup Folder to use your new backup</li>
+                        </ol>
+                        <ol id="windows-backup-steps" class="hidden list-decimal space-y-2 text-sm text-slate-600">
+                          <li>Connect your iPhone to your computer using a USB cable</li>
+                          <li>In the iTunes app, click the Device button near the top left of the iTunes window</li>
+                          <li>Click <span class="font-semibold">Summary</span></li>
+                          <li>
+                            <div>Click <span class="font-semibold">Back Up Now</span> (below Backups)</div>
+                            <div class="ml-4 mt-1">• Do not save the backup to iCloud. Save locally to your computer</div>
+                            <div class="ml-4 mt-1">
+                              •
+                              <span class="rounded-md bg-yellow-100 px-1.5 py-1 text-slate-700">
+                                Ensure the "Encrypt local backup" option is <span class="font-semibold">unchecked</span>
+                              </span>
+                            </div>
+                          </li>
+                          <li>Wait for the backup to complete</li>
+                          <li>After backup completes, close this dialog and change the iMessage Backup Folder to use your new backup</li>
+                        </ol>
+                      </div>
+                    </div>
+                    <p class="mt-3 text-sm italic text-slate-500" id="mac-only-backup-note">
+                      If you can see your messages on your iPhone, then creating a backup will reliably export them. The Messages app on your Mac may not always be fully synced
+                      with your iPhone.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
+            <button
+              id="close-empty-export-modal"
+              type="button"
+              class="mt-3 inline-flex w-full justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-base font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none sm:ml-3 sm:mt-0 sm:w-auto sm:text-sm">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
     <!-- div to generate class names for use in renderer.js -->
     <div class="text-green-500 opacity-60"></div>
     <script src="utils.js"></script>

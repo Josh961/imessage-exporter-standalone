@@ -81,6 +81,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupEventListeners();
 
   // Helper Functions
+  function lockBodyScroll() {
+    document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.width = '100%';
+  }
+
+  function unlockBodyScroll() {
+    document.body.style.overflow = '';
+    document.body.style.position = '';
+    document.body.style.width = '';
+  }
+
   async function loadLastSelectedFolders() {
     const lastInputFolder = await window.electronAPI.getLastInputFolder();
     const lastOutputFolder = await window.electronAPI.getLastOutputFolder();
@@ -243,12 +255,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     elements.closeEmptyExportModal.addEventListener('click', () => {
       elements.emptyExportModal.classList.add('hidden');
+      unlockBodyScroll();
       resetAllSections();
     });
 
     elements.emptyExportModal.addEventListener('click', (e) => {
       if (!elements.emptyExportModalContent.contains(e.target)) {
         elements.emptyExportModal.classList.add('hidden');
+        unlockBodyScroll();
         resetAllSections();
       }
     });
@@ -312,14 +326,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function showPermissionsModal() {
     elements.permissionsModal.classList.remove('hidden');
+    lockBodyScroll();
   }
 
   function setupModalListeners() {
-    elements.infoButton.addEventListener('click', () => elements.infoModal.classList.remove('hidden'));
-    elements.closeModal.addEventListener('click', () => elements.infoModal.classList.add('hidden'));
+    elements.infoButton.addEventListener('click', () => {
+      elements.infoModal.classList.remove('hidden');
+      lockBodyScroll();
+    });
+    elements.closeModal.addEventListener('click', () => {
+      elements.infoModal.classList.add('hidden');
+      unlockBodyScroll();
+    });
     elements.infoModal.addEventListener('click', (e) => {
       if (!elements.infoModalContent.contains(e.target)) {
         elements.infoModal.classList.add('hidden');
+        unlockBodyScroll();
       }
     });
     elements.infoModalContent.addEventListener('click', (e) => e.stopPropagation());
@@ -372,6 +394,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function openBackupModal() {
     elements.backupModal.classList.remove('hidden');
+    lockBodyScroll();
     elements.backupList.innerHTML = '<div class="text-center text-sm text-slate-600">Scanning for backups...</div>';
     elements.noBackupsMessage.classList.add('hidden');
 
@@ -433,6 +456,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function closeBackupModal() {
     elements.backupModal.classList.add('hidden');
+    unlockBodyScroll();
   }
 
   function setupContactSelectionListeners() {
@@ -481,6 +505,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function closeContactsModal() {
     elements.contactsModal.classList.add('hidden');
+    unlockBodyScroll();
   }
 
   async function loadContacts() {
@@ -499,6 +524,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderContacts();
       updateSelectedContactsCount();
       elements.contactsModal.classList.remove('hidden');
+      lockBodyScroll();
 
       // Reapply search filter if there's a search term
       const searchTerm = elements.contactSearch.value;
@@ -781,6 +807,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (warningLink) {
           warningLink.addEventListener('click', () => {
             elements.emptyExportModal.classList.remove('hidden');
+            lockBodyScroll();
           });
         }
       } else {
@@ -906,10 +933,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function openSettingsModal() {
     elements.settingsModal.classList.remove('hidden');
+    lockBodyScroll();
   }
 
   function closeSettingsModal() {
     elements.settingsModal.classList.add('hidden');
+    unlockBodyScroll();
   }
 
   async function fullExport() {

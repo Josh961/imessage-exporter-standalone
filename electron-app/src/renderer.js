@@ -1205,6 +1205,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const startDate = elements.startDate.value;
     const endDate = elements.endDate.value;
 
+    if (selectedContacts.size === 0) {
+      closeSettingsModal();
+      elements.status.textContent = 'Select at least one contact for slow export';
+      elements.status.className = 'text-center font-semibold text-red-500';
+      return;
+    }
+
     if (!inputFolder || !outputFolder || !startDate) {
       closeSettingsModal();
       if (!inputFolder) elements.inputFolderError.classList.remove('hidden');
@@ -1233,13 +1240,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (endDate && new Date(startDate) > new Date(endDate)) {
       closeSettingsModal();
       elements.status.textContent = 'Start date cannot be after end date';
-      elements.status.className = 'text-center font-semibold text-red-500';
-      return;
-    }
-
-    if (selectedContacts.size === 0) {
-      closeSettingsModal();
-      elements.status.textContent = 'Select at least one contact for slow export';
       elements.status.className = 'text-center font-semibold text-red-500';
       return;
     }

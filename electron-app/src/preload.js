@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getNestedFolders: (folderPath) => ipcRenderer.invoke('get-nested-folders', folderPath),
   getDocumentsFolder: () => ipcRenderer.invoke('get-documents-folder'),
   selectFolder: (currentPath, type) => ipcRenderer.invoke('select-folder', currentPath, type),
+  showItemInFolder: (filePath) => ipcRenderer.invoke('show-item-in-folder', filePath),
 
   // Store operations
   getLastInputFolder: () => ipcRenderer.invoke('get-last-input-folder'),

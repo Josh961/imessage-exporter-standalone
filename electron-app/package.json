@@ -6,10 +6,10 @@
   "type": "module",
   "main": "src/main.mjs",
   "scripts": {
-    "start": "npm run build && electron .",
-    "build": "tailwindcss -i ./src/styles.css -o ./src/styles.output.css",
-    "watch": "tailwindcss -i ./src/styles.css -o ./src/styles.output.css --watch",
-    "dev": "concurrently \"npm run watch\" \"electron .\"",
+    "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
+    "dev:vite": "vite",
+    "dev:electron": "sleep 2 && VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "build": "vite build",
     "package": "npm run build && electron-builder build",
     "package:mac": "npm run build && electron-builder build --mac",
     "package:win": "npm run build && electron-builder build --win",
@@ -20,9 +20,14 @@
   "dependencies": {
     "archiver": "^7.0.1",
     "archiver-utils": "^5.0.2",
-    "electron-store": "^10.1.0"
+    "electron-store": "^10.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.21",
     "concurrently": "^9.2.0",
     "electron": "^37.3.1",
@@ -30,13 +35,17 @@
     "postcss": "^8.5.6",
     "prettier": "^3.6.2",
     "prettier-plugin-tailwindcss": "^0.6.14",
-    "tailwindcss": "^3.4.17"
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3"
   },
   "build": {
     "appId": "com.imessageexporter.standalone",
     "productName": "iMessage Exporter",
     "files": [
-      "src/**/*",
+      "dist/**/*",
+      "src/main.mjs",
+      "src/preload.js",
       "package.json"
     ],
     "extraResources": [
@@ -46,7 +55,7 @@
       }
     ],
     "directories": {
-      "output": "dist"
+      "output": "dist-build"
     },
     "mac": {
       "category": "public.app-category.utilities",

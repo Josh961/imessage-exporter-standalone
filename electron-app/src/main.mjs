@@ -109,7 +109,7 @@ app.on('window-all-closed', () => {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1400,
+    width: 1000,
     height: 900,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -118,7 +118,17 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'index.html'));
+  // In development, load from Vite dev server
+  if (process.env.VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+    mainWindow.webContents.openDevTools();
+  } else {
+    // In production, load from dist folder (relative to app root)
+    const indexPath = app.isPackaged
+      ? path.join(process.resourcesPath, '..', 'dist', 'index.html')
+      : path.join(__dirname, '..', 'dist', 'index.html');
+    mainWindow.loadFile(indexPath);
+  }
 
   mainWindow.webContents.on('did-finish-load', () => {
     checkFullDiskAccess();
@@ -179,6 +189,7 @@ ipcMain.handle('restart-app', () => {
 
 // File and folder operations
 ipcMain.handle('open-external-link', (event, url) => shell.openExternal(url));
+ipcMain.handle('show-item-in-folder', (event, filePath) => shell.showItemInFolder(filePath));
 
 ipcMain.handle('expand-path', async (event, inputPath) => {
   if (process.platform === 'win32') {
@@ -350,7 +361,7 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
 });
 
 ipcMain.handle('run-exporter', async (event, exportParams) => {
-  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, includeVideos, debugMode, isFullExport, isFilteredExport } = exportParams;
+  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, includeVideos = true, debugMode, isFullExport, isFilteredExport } = exportParams;
 
   try {
     const uniqueTempFolder = await createUniqueFolder(outputFolder);

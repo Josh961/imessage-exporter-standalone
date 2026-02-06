@@ -124,9 +124,7 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   } else {
     // In production, load from dist folder (relative to app root)
-    const indexPath = app.isPackaged
-      ? path.join(process.resourcesPath, '..', 'dist', 'index.html')
-      : path.join(__dirname, '..', 'dist', 'index.html');
+    const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
     mainWindow.loadFile(indexPath);
   }
 

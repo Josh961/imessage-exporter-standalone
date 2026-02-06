@@ -7,9 +7,11 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({ onClose }: SettingsModalProps) {
-  const { state, setOutputFolder, setInputFolder } = useWizard();
+  const { state, setOutputFolder, setInputFolder, setContacts, setBackupSource, resetToContactSelect } = useWizard();
   const [debugMode, setDebugMode] = useLocalStorage('debugMode', false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [loadingContacts, setLoadingContacts] = useState(false);
+  const [contactsError, setContactsError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -32,6 +34,30 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
     if (result) {
       setInputFolder(result);
       await window.electronAPI.saveLastInputFolder(result);
+
+      setLoadingContacts(true);
+      setContactsError(null);
+      try {
+        const contactsResult = await window.electronAPI.listContacts(result);
+        if (contactsResult.success) {
+          const filteredContacts = contactsResult.contacts.filter((c) => c.contact && c.messageCount >= 20);
+          if (filteredContacts.length === 0) {
+            setContactsError('No contacts found with enough messages. Please check your backup folder.');
+            setLoadingContacts(false);
+            return;
+          }
+          setBackupSource('iphone-backup');
+          setContacts(filteredContacts);
+          resetToContactSelect();
+          onClose();
+        } else {
+          setContactsError(contactsResult.error || 'Failed to load contacts from this folder');
+        }
+      } catch {
+        setContactsError('Failed to load contacts from this folder');
+      } finally {
+        setLoadingContacts(false);
+      }
     }
   };
 
@@ -87,10 +113,12 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                     />
                     <button
                       onClick={handleSelectInputFolder}
-                      className="shrink-0 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                      Change
+                      disabled={loadingContacts}
+                      className="shrink-0 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                      {loadingContacts ? 'Loading...' : 'Change'}
                     </button>
                   </div>
+                  {contactsError && <p className="mt-2 text-xs text-red-600">{contactsError}</p>}
                 </div>
               </div>
             )}

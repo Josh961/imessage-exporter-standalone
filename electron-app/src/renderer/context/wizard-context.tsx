@@ -14,7 +14,7 @@ type WizardAction =
   | { type: 'SET_EXPORT_PROGRESS'; progress: ExportProgress | null }
   | { type: 'SET_EXPORT_ERROR'; error: string | null }
   | { type: 'SET_EXPORT_ZIP_PATH'; path: string | null }
-  | { type: 'RESET' };
+  | { type: 'RESET_TO_CONTACT_SELECT' };
 
 const initialState: WizardState = {
   currentStep: 1,
@@ -57,8 +57,18 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
       return { ...state, exportError: action.error };
     case 'SET_EXPORT_ZIP_PATH':
       return { ...state, exportZipPath: action.path };
-    case 'RESET':
-      return { ...initialState, outputFolder: state.outputFolder };
+    case 'RESET_TO_CONTACT_SELECT':
+      return {
+        ...state,
+        currentStep: 2 as WizardStep,
+        selectedContact: null,
+        startDate: '',
+        endDate: '',
+        exportStatus: 'idle',
+        exportProgress: null,
+        exportError: null,
+        exportZipPath: null,
+      };
     default:
       return state;
   }
@@ -79,7 +89,7 @@ interface WizardContextValue {
   setExportProgress: (progress: ExportProgress | null) => void;
   setExportError: (error: string | null) => void;
   setExportZipPath: (path: string | null) => void;
-  reset: () => void;
+  resetToContactSelect: () => void;
 }
 
 const WizardContext = createContext<WizardContextValue | null>(null);
@@ -143,8 +153,8 @@ export function WizardProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'SET_EXPORT_ZIP_PATH', path });
   }, []);
 
-  const reset = useCallback(() => {
-    dispatch({ type: 'RESET' });
+  const resetToContactSelect = useCallback(() => {
+    dispatch({ type: 'RESET_TO_CONTACT_SELECT' });
   }, []);
 
   // Initialize output folder from electron store
@@ -178,7 +188,7 @@ export function WizardProvider({ children }: { children: ReactNode }) {
         setExportProgress,
         setExportError,
         setExportZipPath,
-        reset,
+        resetToContactSelect,
       }}>
       {children}
     </WizardContext.Provider>

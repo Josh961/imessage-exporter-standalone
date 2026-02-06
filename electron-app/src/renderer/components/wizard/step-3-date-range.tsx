@@ -69,7 +69,7 @@ export function Step3DateRange() {
   };
 
   return (
-    <div className="rounded-3xl bg-white p-8 shadow-md">
+    <div className="rounded-3xl bg-white p-8 shadow-md ring-1 ring-slate-950/5">
       <h2 className="mb-2 text-center text-2xl font-semibold text-slate-800">Select date range</h2>
       <p className="mb-6 text-center text-slate-600">
         Choose the time period for messages with <span className="font-medium text-slate-800">{getContactName()}</span>.

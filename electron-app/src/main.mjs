@@ -109,8 +109,8 @@ app.on('window-all-closed', () => {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 900,
+    width: 1200,
+    height: 950,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -353,7 +353,12 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
               return null;
             }
           })
-          .filter(contact => contact !== null);
+          .filter(contact => contact !== null)
+          .sort((a, b) => {
+            const dateA = new Date(a.lastMessageDate).getTime() || 0;
+            const dateB = new Date(b.lastMessageDate).getTime() || 0;
+            return dateB - dateA;
+          });
         resolve({ success: true, contacts });
       }
     });
@@ -447,6 +452,11 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
           resolve({ success: false, error: error.message + (debugMode ? ' Debug log has been written to the export folder.' : '') });
         } else {
           try {
+            // Keep progress bar at 100% during post-processing (zipping, filtering)
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('export-progress', { phase: 'complete', current: 0, total: 0, percentage: 100, message: 'Finalizing...' });
+            }
+
             if (stdout.includes('No chatrooms were found with the supplied contacts.')) {
               if (debugMode) {
                 const { fullPath: debugLogPath } = await createUniqueName(outputFolder, 'debug', '.log');
@@ -517,7 +527,7 @@ function getExecutableName() {
 }
 
 async function createUniqueFolder(basePath) {
-  const { uniqueName, fullPath } = await createUniqueName(basePath, 'imessage-export-temp');
+  const { fullPath } = await createUniqueName(basePath, 'imessage-export-temp');
   await fs.mkdir(fullPath, { recursive: true });
   return fullPath;
 }

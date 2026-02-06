@@ -4,7 +4,7 @@ interface PermissionsModalProps {
   onClose: () => void;
 }
 
-export function PermissionsModal({ onClose: _onClose }: PermissionsModalProps) {
+export function PermissionsModal({}: PermissionsModalProps) {
   const [permissionsGranted, setPermissionsGranted] = useState(false);
   const [checking, setChecking] = useState(false);
 

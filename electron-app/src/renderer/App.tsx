@@ -26,9 +26,9 @@ export default function App() {
 
   return (
     <WizardProvider>
-      <div className="min-h-screen">
+      <div className="flex min-h-screen flex-col">
         <Header onSettingsClick={() => setShowSettings(true)} onInfoClick={() => setShowInfo(true)} />
-        <main>
+        <main className="flex-1">
           <Wizard platform={platform} />
         </main>
         <footer className="py-6 text-center text-sm text-slate-500">&copy; {new Date().getFullYear()} My Forever Books. All rights reserved.</footer>

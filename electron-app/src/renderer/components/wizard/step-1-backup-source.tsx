@@ -131,7 +131,7 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
 
   return (
     <>
-      <div className="rounded-3xl bg-white p-8 shadow-md">
+      <div className="rounded-3xl bg-white p-8 shadow-md ring-1 ring-slate-950/5">
         <h2 className="mb-4 text-center text-2xl font-semibold text-slate-800">Choose backup source</h2>
         <p className="mb-8 text-center text-slate-600">Select where to export your messages from.</p>
 
@@ -185,10 +185,7 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
               ) : backups.length === 0 ? (
                 <span className="mt-2 text-sm text-slate-500">No backups found</span>
               ) : backups.length === 1 ? (
-                <div className="mt-2 text-center">
-                  <div className="text-sm font-medium text-slate-700">{backups[0].folderName}</div>
-                  <div className="text-xs text-slate-500">{formatDate(backups[0].backupDate)}</div>
-                </div>
+                <span className="mt-2 text-sm text-slate-500">{formatDate(backups[0].backupDate)}</span>
               ) : (
                 <span className="mt-2 text-sm text-sky-600">{backups.length} backups found</span>
               )}
@@ -202,19 +199,16 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowBackupModal(false)}>
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h2 className="mb-6 text-xl font-semibold text-slate-800">Select iPhone backup</h2>
-            <div className="max-h-80 space-y-3 overflow-y-auto">
+            <div className="max-h-80 space-y-3 overflow-y-auto p-1">
               {backups.map((backup, index) => (
                 <button
                   key={backup.id}
                   onClick={() => selectBackup(backup)}
-                  className={`w-full rounded-xl border px-5 py-4 text-left transition-all hover:border-sky-500 hover:bg-sky-50 ${
+                  className={`flex w-full items-center justify-between rounded-xl border px-5 py-4 text-left transition-all hover:border-sky-500 hover:bg-sky-50 ${
                     index === 0 ? 'border-sky-300 bg-sky-50/50 ring-1 ring-sky-200' : 'border-slate-200'
                   }`}>
-                  <div className="flex items-center justify-between">
-                    <div className="font-semibold text-slate-800">{backup.folderName}</div>
-                    {index === 0 && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700">Latest</span>}
-                  </div>
-                  <div className="mt-1 text-sm text-slate-600">Created: {formatDate(backup.backupDate)}</div>
+                  <div className="text-sm text-slate-700">{formatDate(backup.backupDate)}</div>
+                  {index === 0 && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700">Latest</span>}
                 </button>
               ))}
             </div>

@@ -4,7 +4,7 @@ import { useLocalStorage } from '../../hooks/use-local-storage';
 import { ProgressBar } from '../progress-bar';
 
 export function Step4Export() {
-  const { state, setExportStatus, setExportProgress, setExportError, setExportZipPath, prevStep, reset } = useWizard();
+  const { state, setExportStatus, setExportProgress, setExportError, setExportZipPath, prevStep, resetToContactSelect } = useWizard();
 
   const [debugMode] = useLocalStorage('debugMode', false);
 
@@ -46,8 +46,12 @@ export function Step4Export() {
       selectedContacts = [state.selectedContact.contact];
     }
 
+    let maxPercentage = 0;
     const unsubscribe = window.electronAPI.onExportProgress((progressData) => {
-      setExportProgress(progressData);
+      if (progressData.percentage >= maxPercentage) {
+        maxPercentage = progressData.percentage;
+        setExportProgress(progressData);
+      }
     });
 
     try {
@@ -63,6 +67,10 @@ export function Step4Export() {
       });
 
       unsubscribe();
+      setExportProgress({ phase: 'complete', current: 0, total: 0, percentage: 100 });
+
+      // Let the 100% progress bar render before transitioning
+      await new Promise((r) => setTimeout(r, 500));
 
       if (result.success) {
         if (result.hasMessages === false) {
@@ -94,12 +102,6 @@ export function Step4Export() {
     setExportZipPath,
   ]);
 
-  // Auto-start is disabled; user must click Export
-
-  const handleExportAnother = () => {
-    reset();
-  };
-
   const getProgressText = (): string => {
     if (!state.exportProgress) return 'Initializing...';
 
@@ -119,10 +121,9 @@ export function Step4Export() {
 
   if (state.exportStatus === 'exporting') {
     return (
-      <div className="rounded-3xl bg-white p-8 shadow-md">
+      <div className="rounded-3xl bg-white p-8 shadow-md ring-1 ring-slate-950/5">
         <h2 className="mb-6 text-center text-2xl font-semibold text-slate-800">Exporting messages</h2>
         <ProgressBar percentage={state.exportProgress?.percentage || 0} text={getProgressText()} />
-        <p className="mt-4 text-center text-sm text-slate-500">Please don't close the app while exporting.</p>
       </div>
     );
   }
@@ -135,7 +136,7 @@ export function Step4Export() {
 
   if (state.exportStatus === 'success') {
     return (
-      <div className="rounded-3xl bg-white p-8 shadow-md">
+      <div className="rounded-3xl bg-white p-8 shadow-md ring-1 ring-slate-950/5">
         <div className="mb-6 flex justify-center">
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
             <svg className="h-8 w-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -157,8 +158,8 @@ export function Step4Export() {
           <button onClick={handleOpenFolder} className="flex-1 rounded-xl border border-slate-300 px-6 py-3 font-semibold text-slate-700 transition-all hover:bg-slate-50">
             Open folder
           </button>
-          <button onClick={handleExportAnother} className="flex-1 rounded-xl bg-sky-500 px-6 py-3 font-semibold text-white transition-all hover:bg-sky-600">
-            Export another
+          <button onClick={resetToContactSelect} className="flex-1 rounded-xl bg-sky-500 px-6 py-3 font-semibold text-white transition-all hover:bg-sky-600">
+            Export another contact
           </button>
         </div>
       </div>
@@ -167,7 +168,7 @@ export function Step4Export() {
 
   if (state.exportStatus === 'error') {
     return (
-      <div className="rounded-3xl bg-white p-8 shadow-md">
+      <div className="rounded-3xl bg-white p-8 shadow-md ring-1 ring-slate-950/5">
         <div className="mb-6 flex justify-center">
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-red-100">
             <svg className="h-8 w-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -191,7 +192,7 @@ export function Step4Export() {
 
   // Default: idle state - show summary and export button
   return (
-    <div className="rounded-3xl bg-white p-8 shadow-md">
+    <div className="rounded-3xl bg-white p-8 shadow-md ring-1 ring-slate-950/5">
       <h2 className="mb-6 text-center text-2xl font-semibold text-slate-800">Ready to export</h2>
 
       <div className="mb-6 space-y-4 rounded-xl bg-slate-50 p-4">

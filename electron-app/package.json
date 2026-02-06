@@ -11,7 +11,7 @@
     "dev:electron": "wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "build": "vite build",
     "package": "npm run build && electron-builder build",
-    "package:mac": "npm run build && electron-builder build --mac",
+    "package:mac": "npm run build && electron-builder build --mac --arm64 && node -e \"const p=require('./package.json'),f='dist-build/imessage-exporter-v'+p.version;require('fs').renameSync(f+'.dmg',f+'-arm64.tmp.dmg')\" && electron-builder build --mac --x64 && node -e \"const fs=require('fs'),p=require('./package.json'),f='dist-build/imessage-exporter-v'+p.version;fs.renameSync(f+'.dmg',f+'-x86.dmg');fs.renameSync(f+'-arm64.tmp.dmg',f+'.dmg')\"",
     "package:win": "npm run build && electron-builder build --win",
     "postinstall": "electron-builder install-app-deps",
     "build-exporter-win": "node scripts/build-exporter-win.js",
@@ -61,22 +61,7 @@
     },
     "mac": {
       "category": "public.app-category.utilities",
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
+      "target": "dmg",
       "icon": "assets/icon.icns",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -84,6 +69,7 @@
       "entitlementsInherit": "entitlements.mac.plist"
     },
     "dmg": {
+      "artifactName": "imessage-exporter-v${version}.${ext}",
       "contents": [
         {
           "x": 130,
@@ -108,6 +94,7 @@
       ]
     },
     "nsis": {
+      "artifactName": "imessage-exporter-v${version}.${ext}",
       "include": "installer.nsh",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,

@@ -269,37 +269,48 @@ ipcMain.handle('get-default-messages-folder', () => {
 });
 
 ipcMain.handle('scan-iphone-backups', async () => {
-  let backupPath;
+  const backupPaths = [];
 
   if (process.platform === 'darwin') {
-    backupPath = path.join(app.getPath('home'), 'Library', 'Application Support', 'MobileSync', 'Backup');
+    backupPaths.push(path.join(app.getPath('home'), 'Library', 'Application Support', 'MobileSync', 'Backup'));
   } else if (process.platform === 'win32') {
-    // Windows iTunes backup location
-    backupPath = path.join(app.getPath('home'), 'Apple', 'MobileSync', 'Backup');
+    // Apple Devices app / iTunes from Microsoft Store
+    backupPaths.push(path.join(app.getPath('home'), 'Apple', 'MobileSync', 'Backup'));
+    // Classic iTunes desktop installer (from apple.com)
+    backupPaths.push(path.join(app.getPath('appData'), 'Apple Computer', 'MobileSync', 'Backup'));
   } else {
     return { success: false, backups: [] };
   }
 
   try {
-    // Check if backup directory exists
-    await fs.access(backupPath);
-
-    // Get all directories in the backup folder
-    const entries = await fs.readdir(backupPath, { withFileTypes: true });
-    const backupDirs = entries.filter(entry => entry.isDirectory());
-
-    // Simply list the folders with their creation dates
     const backups = [];
-    for (const entry of backupDirs) {
-      const fullPath = path.join(backupPath, entry.name);
-      const stats = await fs.stat(fullPath);
+    const seenIds = new Set();
 
-      backups.push({
-        id: entry.name,
-        path: fullPath,
-        folderName: entry.name,
-        backupDate: stats.birthtime  // Use birthtime for creation date
-      });
+    for (const backupPath of backupPaths) {
+      try {
+        await fs.access(backupPath);
+
+        const entries = await fs.readdir(backupPath, { withFileTypes: true });
+        const backupDirs = entries.filter(entry => entry.isDirectory());
+
+        for (const entry of backupDirs) {
+          // Deduplicate by folder name in case both paths point to the same backup
+          if (seenIds.has(entry.name)) continue;
+          seenIds.add(entry.name);
+
+          const fullPath = path.join(backupPath, entry.name);
+          const stats = await fs.stat(fullPath);
+
+          backups.push({
+            id: entry.name,
+            path: fullPath,
+            folderName: entry.name,
+            backupDate: stats.birthtime
+          });
+        }
+      } catch {
+        // This backup path doesn't exist, skip it
+      }
     }
 
     // Sort by creation date, newest first

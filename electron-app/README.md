@@ -19,6 +19,14 @@
    npm run dev
    ```
 
+To build an unsigned macOS app directory for manual testing:
+
+```bash
+npm run package:mac:dir
+```
+
+Packaging scripts rebuild the bundled exporter binary first and verify that it exposes the Electron app contract flags before Electron Builder runs.
+
 ## Release
 
 From the repository root on macOS/Linux:

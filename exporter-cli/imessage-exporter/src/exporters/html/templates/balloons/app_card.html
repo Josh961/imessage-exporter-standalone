@@ -1,0 +1,23 @@
+{%- if let Some(url) = url.get() -%}<a href="{{ url }}">{%- endif -%}
+    <div class="app_header">
+        {%- if let Some(image) = image.get() -%}<img src="{{ image }}">
+        {%- else if let Some(attachment_html) = attachment_html -%}{{ attachment_html|safe }}
+        {%- endif -%}
+        <div class="name">{{ name }}</div>
+        {%- if let Some(title) = title.get() -%}<div class="image_title">{{ title }}</div>{%- endif -%}
+        {%- if let Some(subtitle) = subtitle.get() -%}<div class="image_subtitle">{{ subtitle }}</div>{%- endif -%}
+        {%- if let Some(ldtext) = ldtext.get() -%}<div class="ldtext">{{ ldtext }}</div>{%- endif -%}
+    </div>
+    {%- if self.has_footer() -%}
+    <div class="app_footer">
+        {%- if let Some(caption) = caption.get() -%}<div class="caption">{{ caption }}</div>{%- endif -%}
+        {%- if let Some(subcaption) = subcaption.get() -%}<div class="subcaption">{{ subcaption }}</div>{%- endif -%}
+        {%- if let Some(trailing_caption) = trailing_caption.get() -%}<div class="trailing_caption">
+            {{- trailing_caption }}
+        </div>{%- endif -%}
+        {%- if let Some(trailing_subcaption) = trailing_subcaption.get() -%}<div class="trailing_subcaption">{{
+            trailing_subcaption }}</div>{%- endif -%}
+    </div>
+    {%- endif -%}
+    {%- if url.get().is_some() -%}
+</a>{%- endif -%}

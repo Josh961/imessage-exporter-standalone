@@ -94,7 +94,8 @@ impl<'a> CollaborationMessage<'a> {
             .as_string()
     }
 
-    /// Get the redirected URL from a URL message, falling back to the original URL, if it exists
+    /// Get the collaboration URL, falling back to the original URL, if it exists
+    #[must_use]
     pub fn get_url(&self) -> Option<&str> {
         self.url.or(self.original_url)
     }

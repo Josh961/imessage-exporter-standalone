@@ -1,0 +1,6 @@
+[general]
+dirs = ["src/exporters/html/templates", "src/exporters/txt/templates"]
+
+[[escaper]]
+path = "crate::app::escaping::ChatEscaper"
+extensions = ["html"]

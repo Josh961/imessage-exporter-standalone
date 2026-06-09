@@ -1,0 +1,3 @@
+{% for option in options %}- {{ option.text }} ({{ option.vote_count }})
+{% for voter in option.voters %}  - {{ voter }}
+{% endfor %}{% endfor %}

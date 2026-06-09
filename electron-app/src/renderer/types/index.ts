@@ -7,6 +7,7 @@ export interface Contact {
   firstMessageDate: string;
   lastMessageDate: string;
   participants?: string;
+  chatIds?: string;
   displayName?: string;
 }
 
@@ -38,6 +39,7 @@ export interface ExportParams {
   startDate: string;
   endDate?: string;
   selectedContacts: (string | string[])[];
+  selectedChatIds?: string[];
   includeVideos: boolean;
   debugMode: boolean;
   isFullExport?: boolean;

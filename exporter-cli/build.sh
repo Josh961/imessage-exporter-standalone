@@ -49,6 +49,13 @@ if [ -n "$VERSION" ]; then
     tar -czf ../../../output/imessage-exporter-x86_64-apple-darwin.tar.gz imessage-exporter
     cd ../../..
 
+    # Build for 64-bit Intel Windows (requires `brew install mingw-w64`)
+    cargo build --target x86_64-pc-windows-gnu --release
+    cp target/x86_64-pc-windows-gnu/release/imessage-exporter.exe output/imessage-exporter-x86_64-pc-windows-gnu.exe
+    cd target/x86_64-pc-windows-gnu/release/
+    tar -czf ../../../output/imessage-exporter-x86_64-pc-windows-gnu.tar.gz imessage-exporter.exe
+    cd ../../..
+
     # Put the version number back
     sed -i '' "s/version = \"$VERSION\"/version = \"0.0.0\"/g" imessage-database/Cargo.toml
     sed -i '' "s/version = \"$VERSION\"/version = \"0.0.0\"/g" imessage-exporter/Cargo.toml

@@ -2,32 +2,32 @@
  Defines routines for converting audio files.
 */
 
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 use imessage_database::tables::attachment::MediaType;
 
 use crate::app::compatibility::{
-    converters::common::{copy_raw, ensure_paths, run_command},
+    converters::common::{copy_raw, ensure_output_dir, run_command},
     models::{AudioConverter, AudioType, Converter},
 };
 
 /// Copy an audio file, converting if possible
 ///
 /// - Attachment `CAF` files convert to `MP4`
+/// - Attachment `AMR` files convert to `MP4`
 /// - Fallback to the original format
 pub(crate) fn audio_copy_convert(
     from: &Path,
     to: &mut PathBuf,
     converter: &AudioConverter,
-    mime_type: MediaType,
+    mime_type: &MediaType,
 ) -> Option<MediaType<'static>> {
     if matches!(
         mime_type,
-        MediaType::Audio("caf")
-            | MediaType::Audio("CAF")
-            | MediaType::Audio("x-caf; codecs=opus")
-            | MediaType::Audio("amr")
-            | MediaType::Audio("AMR")
+        MediaType::Audio("caf" | "CAF" | "x-caf; codecs=opus" | "amr" | "AMR")
     ) {
         let output_type = AudioType::Mp4;
 
@@ -39,9 +39,8 @@ pub(crate) fn audio_copy_convert(
             // If the conversion was successful, update the path
             *to = converted_path;
             return Some(MediaType::Audio(output_type.to_str()));
-        } else {
-            eprintln!("Unable to convert {from:?}");
         }
+        eprintln!("Unable to convert {}", from.display());
     }
 
     // Fallback
@@ -50,11 +49,19 @@ pub(crate) fn audio_copy_convert(
 }
 
 fn convert_caf(from: &Path, to: &Path, converter: &AudioConverter) -> Option<()> {
-    let (from_path, to_path) = ensure_paths(from, to)?;
+    ensure_output_dir(to)?;
 
-    let args = match converter {
-        AudioConverter::AfConvert => vec!["-f", "mp4f", "-d", "aac", "-v", from_path, to_path],
-        AudioConverter::Ffmpeg => vec!["-i", from_path, to_path],
+    let args: Vec<&OsStr> = match converter {
+        AudioConverter::AfConvert => vec![
+            OsStr::new("-f"),
+            OsStr::new("mp4f"),
+            OsStr::new("-d"),
+            OsStr::new("aac"),
+            OsStr::new("-v"),
+            from.as_os_str(),
+            to.as_os_str(),
+        ],
+        AudioConverter::Ffmpeg => vec![OsStr::new("-i"), from.as_os_str(), to.as_os_str()],
     };
 
     run_command(converter.name(), args)

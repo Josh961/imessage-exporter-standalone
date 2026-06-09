@@ -3,31 +3,45 @@
 
  # Iterating over Message Data
 
- Generally, use [`Message::get()`] or [`Message::stream_rows()`] to iterate over message rows.
+ Generally, use [`Message::stream()`] to iterate over message rows.
 
  ## Example
- ```rust
+ ```no_run
  use imessage_database::{
+     error::table::TableError,
      tables::{
          messages::Message,
-         table::{get_connection, Diagnostic, Table},
+         table::{get_connection, Table},
      },
      util::dirs::default_db_path,
  };
 
+ // Your custom error type
+ #[derive(Debug)]
+ struct ProgramError(TableError);
+
+ impl From<TableError> for ProgramError {
+     fn from(err: TableError) -> Self {
+         Self(err)
+     }
+ }
+
+ // Get the default database path and connect to it
  let db_path = default_db_path();
  let conn = get_connection(&db_path).unwrap();
 
- let mut statement = Message::get(&conn).unwrap();
-
- let messages = statement.query_map([], |row| Ok(Message::from_row(row))).unwrap();
-
- messages.map(|msg| println!("{:#?}", Message::extract(msg)));
+ Message::stream(&conn, |message_result| {
+    match message_result {
+        Ok(message) => println!("Message: {:#?}", message),
+        Err(e) => eprintln!("Error: {:?}", e),
+    }
+    Ok::<(), ProgramError>(())
+ }).unwrap();
  ```
 
  # Making Custom Message Queries
 
- In addition columns from the `messages` table, there are several additional fields represented
+ In addition to columns from the `message` table, there are several additional fields represented
  by [`Message`]  that are not present in the database:
 
  - [`Message::chat_id`]
@@ -75,11 +89,11 @@
  The following will return an iterator over messages that have an associated emoji:
 
 
- ```rust
+ ```no_run
  use imessage_database::{
      tables::{
          messages::Message,
-         table::{get_connection, Diagnostic, Table},
+         table::{get_connection, Table},
      },
      util::dirs::default_db_path
  };
@@ -87,7 +101,7 @@
  let db_path = default_db_path();
  let db = get_connection(&db_path).unwrap();
 
- let mut statement = db.prepare("
+ let mut statement = db.prepare_cached("
  SELECT
      *,
      c.chat_id,
@@ -103,47 +117,54 @@
      m.date;
  ").unwrap();
 
- let messages = statement.query_map([], |row| Ok(Message::from_row(row))).unwrap();
-
- messages.map(|msg| println!("{:#?}", Message::extract(msg)));
+ for message in Message::rows(&mut statement, []).unwrap() {
+     println!("{:#?}", message);
+ }
  ```
 */
 
-use std::{collections::HashMap, io::Read};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Write,
+    io::Read,
+};
 
 use chrono::{DateTime, offset::Local};
+use crabstep::TypedStreamDeserializer;
 use plist::Value;
-use rusqlite::{Connection, Error, Result, Row, Statement, blob::Blob};
+use rusqlite::{CachedStatement, Connection, Result, Row};
 
 use crate::{
     error::{message::MessageError, table::TableError},
     message_types::{
         edited::{EditStatus, EditedMessage},
         expressives::{BubbleEffect, Expressive, ScreenEffect},
+        polls::Poll,
+        text_effects::TextEffect,
+        translation::Translation,
         variants::{Announcement, BalloonProvider, CustomBalloon, Tapback, TapbackAction, Variant},
     },
     tables::{
+        diagnostic::MessageDiagnostic,
         messages::{
             body::{parse_body_legacy, parse_body_typedstream},
-            models::{BubbleComponent, GroupAction, Service},
+            models::{BubbleComponent, GroupAction, Service, SharedLocation, TextAttributes},
             query_parts::{ios_13_older_query, ios_14_15_query, ios_16_newer_query},
         },
         table::{
-            ATTRIBUTED_BODY, AttributedBody, CHAT_MESSAGE_JOIN, Cacheable, Diagnostic, GetBlob,
-            MESSAGE, MESSAGE_ATTACHMENT_JOIN, MESSAGE_PAYLOAD, MESSAGE_SUMMARY_INFO,
-            RECENTLY_DELETED, Table,
+            ATTRIBUTED_BODY, CHAT_MESSAGE_JOIN, Cacheable, MESSAGE, MESSAGE_ATTACHMENT_JOIN,
+            MESSAGE_PAYLOAD, MESSAGE_SUMMARY_INFO, RECENTLY_DELETED, Table,
         },
     },
     util::{
         bundle_id::parse_balloon_bundle_id,
         dates::{get_local_time, readable_diff},
-        output::{done_processing, processing},
         query_context::QueryContext,
         streamtyped,
-        typedstream::{models::Archivable, parser::TypedStreamReader},
     },
 };
 
+// MARK: Columns
 /// The required columns, interpolated into the most recent schema due to performance considerations
 pub(crate) const COLS: &str = "rowid, guid, text, service, handle_id, destination_caller_id, subject, date, date_read, date_delivered, is_from_me, is_read, item_type, other_handle, share_status, share_direction, group_title, group_action_type, associated_message_guid, associated_message_type, balloon_bundle_id, expressive_send_style_id, thread_originator_guid, thread_originator_part, date_edited, associated_message_emoji";
 
@@ -153,9 +174,11 @@ pub(crate) const COLS: &str = "rowid, guid, text, service, handle_id, destinatio
 #[derive(Debug)]
 #[allow(non_snake_case)]
 pub struct Message {
+    /// The unique identifier for the message in the database
     pub rowid: i32,
+    /// The globally unique identifier for the message
     pub guid: String,
-    /// The text of the message, which may require calling [`Self::generate_text()`] to populate
+    /// The text of the message, which may require calling [`Self::parse_body()`] and [`Self::apply_body()`] to populate
     pub text: Option<String>,
     /// The service the message was sent from
     pub service: Option<String>,
@@ -189,7 +212,7 @@ pub struct Message {
     pub group_action_type: i32,
     /// The message GUID of a message associated with this one
     pub associated_message_guid: Option<String>,
-    /// Intermediate data for determining the [`Variant`] of a message
+    /// The numeric type code for the associated message, used to determine message variant
     pub associated_message_type: Option<i32>,
     /// The [bundle ID](https://developer.apple.com/help/app-store-connect/reference/app-bundle-information) of the app that generated the [`AppMessage`](crate::message_types::app::AppMessage)
     pub balloon_bundle_id: Option<String>,
@@ -203,94 +226,80 @@ pub struct Message {
     pub date_edited: i64,
     /// If present, this is the emoji associated with a custom emoji tapback
     pub associated_message_emoji: Option<String>,
-    /// The [`identifier`](crate::tables::chat::Chat::chat_identifier) of the chat the message belongs to
+    /// The [`rowid`](crate::tables::chat::Chat::rowid) of the chat the message belongs to
     pub chat_id: Option<i32>,
     /// The number of attached files included in the message
     pub num_attachments: i32,
-    /// The [`identifier`](crate::tables::chat::Chat::chat_identifier) of the chat the message was deleted from
+    /// The [`rowid`](crate::tables::chat::Chat::rowid) of the chat the message was deleted from
     pub deleted_from: Option<i32>,
     /// The number of replies to the message
     pub num_replies: i32,
-    /// The components of the message body, parsed by [`TypedStreamReader`]
-    pub components: Option<Vec<Archivable>>,
+    /// The components of the message body, parsed by a [`TypedStreamDeserializer`] or [`streamtyped::parse()`]
+    pub components: Vec<BubbleComponent>,
     /// The components of the message that may or may not have been edited or unsent
     pub edited_parts: Option<EditedMessage>,
 }
 
+/// The result of parsing a message body via [`Message::parse_body()`].
+///
+/// Use [`Message::apply_body()`] to apply the parsed body back to the message:
+///
+/// ```no_run
+/// # use imessage_database::tables::{messages::Message, table::get_connection};
+/// # use imessage_database::util::dirs::default_db_path;
+/// # let conn = get_connection(&default_db_path()).unwrap();
+/// # let mut message = Message::from_guid("example", &conn).unwrap();
+/// if let Ok(body) = message.parse_body(&conn) {
+///     message.apply_body(body);
+/// }
+/// ```
+#[derive(Debug)]
+#[must_use]
+pub struct ParsedBody {
+    /// The text content of the message
+    pub text: Option<String>,
+    /// The components that make up the message body
+    pub components: Vec<BubbleComponent>,
+    /// The components of the message that may have been edited or unsent
+    pub edited_parts: Option<EditedMessage>,
+    /// The resolved balloon bundle ID, which may differ from the original
+    pub balloon_bundle_id: Option<String>,
+}
+
+// MARK: Table
 impl Table for Message {
     fn from_row(row: &Row) -> Result<Message> {
-        Ok(Message {
-            rowid: row.get("rowid")?,
-            guid: row.get("guid")?,
-            text: row.get("text").unwrap_or(None),
-            service: row.get("service").unwrap_or(None),
-            handle_id: row.get("handle_id").unwrap_or(None),
-            destination_caller_id: row.get("destination_caller_id").unwrap_or(None),
-            subject: row.get("subject").unwrap_or(None),
-            date: row.get("date")?,
-            date_read: row.get("date_read").unwrap_or(0),
-            date_delivered: row.get("date_delivered").unwrap_or(0),
-            is_from_me: row.get("is_from_me")?,
-            is_read: row.get("is_read").unwrap_or(false),
-            item_type: row.get("item_type").unwrap_or_default(),
-            other_handle: row.get("other_handle").unwrap_or(None),
-            share_status: row.get("share_status").unwrap_or(false),
-            share_direction: row.get("share_direction").unwrap_or(None),
-            group_title: row.get("group_title").unwrap_or(None),
-            group_action_type: row.get("group_action_type").unwrap_or(0),
-            associated_message_guid: row.get("associated_message_guid").unwrap_or(None),
-            associated_message_type: row.get("associated_message_type").unwrap_or(None),
-            balloon_bundle_id: row.get("balloon_bundle_id").unwrap_or(None),
-            expressive_send_style_id: row.get("expressive_send_style_id").unwrap_or(None),
-            thread_originator_guid: row.get("thread_originator_guid").unwrap_or(None),
-            thread_originator_part: row.get("thread_originator_part").unwrap_or(None),
-            date_edited: row.get("date_edited").unwrap_or(0),
-            associated_message_emoji: row.get("associated_message_emoji").unwrap_or(None),
-            chat_id: row.get("chat_id").unwrap_or(None),
-            num_attachments: row.get("num_attachments")?,
-            deleted_from: row.get("deleted_from").unwrap_or(None),
-            num_replies: row.get("num_replies")?,
-            components: None,
-            edited_parts: None,
-        })
+        Self::from_row_idx(row).or_else(|_| Self::from_row_named(row))
     }
 
     /// Convert data from the messages table to native Rust data structures, falling back to
     /// more compatible queries to ensure compatibility with older database schemas
-    fn get(db: &Connection) -> Result<Statement, TableError> {
-        db.prepare(&ios_16_newer_query(None))
-            .or_else(|_| db.prepare(&ios_14_15_query(None)))
-            .or_else(|_| db.prepare(&ios_13_older_query(None)))
-            .map_err(TableError::Messages)
-    }
-
-    fn extract(message: Result<Result<Self, Error>, Error>) -> Result<Self, TableError> {
-        match message {
-            Ok(Ok(message)) => Ok(message),
-            Err(why) | Ok(Err(why)) => Err(TableError::Messages(why)),
-        }
+    fn get(db: &'_ Connection) -> Result<CachedStatement<'_>, TableError> {
+        Ok(db
+            .prepare_cached(&ios_16_newer_query(None))
+            .or_else(|_| db.prepare_cached(&ios_14_15_query(None)))
+            .or_else(|_| db.prepare_cached(&ios_13_older_query(None)))?)
     }
 }
 
-impl Diagnostic for Message {
-    /// Emit diagnostic data for the Messages table
+// MARK: Diagnostic
+impl Message {
+    /// Compute diagnostic data for the Messages table
     ///
-    /// # Example:
+    /// # Example
     ///
-    /// ```
+    /// ```no_run
     /// use imessage_database::util::dirs::default_db_path;
-    /// use imessage_database::tables::table::{Diagnostic, get_connection};
+    /// use imessage_database::tables::table::get_connection;
     /// use imessage_database::tables::messages::Message;
     ///
     /// let db_path = default_db_path();
     /// let conn = get_connection(&db_path).unwrap();
     /// Message::run_diagnostic(&conn);
     /// ```
-    fn run_diagnostic(db: &Connection) -> Result<(), TableError> {
-        processing();
-        let mut messages_without_chat = db
-            .prepare(&format!(
-                "
+    pub fn run_diagnostic(db: &Connection) -> Result<MessageDiagnostic, TableError> {
+        let mut messages_without_chat = db.prepare(&format!(
+            "
             SELECT
                 COUNT(m.rowid)
             FROM
@@ -301,16 +310,16 @@ impl Diagnostic for Message {
             ORDER BY
                 m.date
             "
-            ))
-            .map_err(TableError::Messages)?;
+        ))?;
 
-        let num_dangling: i32 = messages_without_chat
-            .query_row([], |r| r.get(0))
+        let messages_without_chat = messages_without_chat
+            .query_row([], |r| r.get::<_, i64>(0))
+            .ok()
+            .and_then(|count| usize::try_from(count).ok())
             .unwrap_or(0);
 
-        let mut messages_in_more_than_one_chat_q = db
-            .prepare(&format!(
-                "
+        let mut messages_in_more_than_one_chat_q = db.prepare(&format!(
+            "
             SELECT
                 COUNT(*)
             FROM (
@@ -322,42 +331,55 @@ impl Diagnostic for Message {
                 message_id
             HAVING c > 1);
             "
-            ))
-            .map_err(TableError::Messages)?;
+        ))?;
 
-        let messages_in_more_than_one_chat: i32 = messages_in_more_than_one_chat_q
-            .query_row([], |r| r.get(0))
+        let messages_in_multiple_chats = messages_in_more_than_one_chat_q
+            .query_row([], |r| r.get::<_, i64>(0))
+            .ok()
+            .and_then(|count| usize::try_from(count).ok())
             .unwrap_or(0);
 
-        let mut messages_count = db
-            .prepare(&format!(
-                "
+        let mut messages_count = db.prepare(&format!(
+            "
             SELECT
                 COUNT(rowid)
             FROM
                 {MESSAGE}
             "
-            ))
-            .map_err(TableError::Messages)?;
+        ))?;
 
-        let total_messages: i64 = messages_count.query_row([], |r| r.get(0)).unwrap_or(0);
+        let total_messages = messages_count
+            .query_row([], |r| r.get::<_, i64>(0))
+            .ok()
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or(0);
 
-        done_processing();
+        // Count recoverable (recently deleted) messages
+        let recoverable_messages = db
+            .prepare(&format!("SELECT COUNT(*) FROM {RECENTLY_DELETED}"))
+            .and_then(|mut s| s.query_row([], |r| r.get::<_, i64>(0)))
+            .ok()
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or(0);
 
-        println!("Message diagnostic data:");
-        println!("    Total messages: {total_messages}");
-        if num_dangling > 0 {
-            println!("    Messages not associated with a chat: {num_dangling}");
-        }
-        if messages_in_more_than_one_chat > 0 {
-            println!(
-                "    Messages belonging to more than one chat: {messages_in_more_than_one_chat}"
-            );
-        }
-        Ok(())
+        // Get the date range of messages in the database
+        let mut date_range = db.prepare(&format!("SELECT MIN(date), MAX(date) FROM {MESSAGE}"))?;
+        let (first_message_date, last_message_date): (Option<i64>, Option<i64>) = date_range
+            .query_row([], |r| Ok((r.get(0).ok(), r.get(1).ok())))
+            .unwrap_or((None, None));
+
+        Ok(MessageDiagnostic {
+            total_messages,
+            messages_without_chat,
+            messages_in_multiple_chats,
+            recoverable_messages,
+            first_message_date,
+            last_message_date,
+        })
     }
 }
 
+// MARK: Cache
 impl Cacheable for Message {
     type K = String;
     type V = HashMap<usize, Vec<Self>>;
@@ -407,22 +429,17 @@ impl Cacheable for Message {
         )));
 
         if let Ok(mut statement) = statement {
-            // Execute query to build the message tapback map
-            let messages = statement
-                .query_map([], |row| Ok(Message::from_row(row)))
-                .map_err(TableError::Messages)?;
-
             // Iterate over the messages and update the map
-            for message in messages {
-                let message = Self::extract(message)?;
-                if message.is_tapback() {
-                    if let Some((idx, tapback_target_guid)) = message.clean_associated_guid() {
-                        map.entry(tapback_target_guid.to_string())
-                            .or_insert_with(HashMap::new)
-                            .entry(idx)
-                            .or_insert_with(Vec::new)
-                            .push(message);
-                    }
+            for message in Self::rows(&mut statement, [])? {
+                let message = message?;
+                if message.is_tapback()
+                    && let Some((idx, tapback_target_guid)) = message.clean_associated_guid()
+                {
+                    map.entry(tapback_target_guid.to_string())
+                        .or_insert_with(HashMap::new)
+                        .entry(idx)
+                        .or_insert_with(Vec::new)
+                        .push(message);
                 }
             }
         }
@@ -431,89 +448,232 @@ impl Cacheable for Message {
     }
 }
 
-impl GetBlob for Message {
-    /// Extract a blob of data that belongs to a single message from a given column
-    fn get_blob<'a>(&self, db: &'a Connection, column: &str) -> Option<Blob<'a>> {
-        db.blob_open(
-            rusqlite::DatabaseName::Main,
-            MESSAGE,
-            column,
-            self.rowid as i64,
-            true,
-        )
-        .ok()
-    }
-}
-
-impl AttributedBody for Message {
-    /// Get a vector of a message body's components. If the text has not been captured with [`Self::generate_text()`], the vector will be empty.
-    ///
-    /// For more detail see the trait documentation [here](crate::tables::table::AttributedBody).
-    fn body(&self) -> Vec<BubbleComponent> {
-        // If the message is an app, it will be rendered differently, so just escape there
-        if self.balloon_bundle_id.is_some() {
-            return vec![BubbleComponent::App];
-        }
-
-        if let Some(body) = parse_body_typedstream(
-            self.components.as_ref(),
-            self.text.as_deref(),
-            self.edited_parts.as_ref(),
-        ) {
-            return body;
-        }
-
-        // Naive logic for when `typedstream` component parsing fails
-        parse_body_legacy(&self.text)
-    }
-}
-
+// MARK: Impl
 impl Message {
-    /// Generate the text of a message, deserializing it as [`typedstream`](crate::util::typedstream) (and falling back to [`streamtyped`]) data if necessary.
-    pub fn generate_text<'a>(&'a mut self, db: &'a Connection) -> Result<&'a str, MessageError> {
-        // Grab the body data from the table
-        if let Some(body) = self.attributed_body(db) {
-            // Attempt to deserialize the typedstream data
-            let mut typedstream = TypedStreamReader::from(&body);
-            self.components = typedstream.parse().ok();
+    /// Create a new [`Message`] from a [`Row`], using the fast indexed access method.
+    fn from_row_idx(row: &Row) -> Result<Message> {
+        Ok(Message {
+            rowid: row.get(0)?,
+            guid: row.get(1)?,
+            text: row.get(2).unwrap_or(None),
+            service: row.get(3).unwrap_or(None),
+            handle_id: row.get(4).unwrap_or(None),
+            destination_caller_id: row.get(5).unwrap_or(None),
+            subject: row.get(6).unwrap_or(None),
+            date: row.get(7)?,
+            date_read: row.get(8).unwrap_or(0),
+            date_delivered: row.get(9).unwrap_or(0),
+            is_from_me: row.get(10)?,
+            is_read: row.get(11).unwrap_or(false),
+            item_type: row.get(12).unwrap_or_default(),
+            other_handle: row.get(13).unwrap_or(None),
+            share_status: row.get(14).unwrap_or(false),
+            share_direction: row.get(15).unwrap_or(None),
+            group_title: row.get(16).unwrap_or(None),
+            group_action_type: row.get(17).unwrap_or(0),
+            associated_message_guid: row.get(18).unwrap_or(None),
+            associated_message_type: row.get(19).unwrap_or(None),
+            balloon_bundle_id: row.get(20).unwrap_or(None),
+            expressive_send_style_id: row.get(21).unwrap_or(None),
+            thread_originator_guid: row.get(22).unwrap_or(None),
+            thread_originator_part: row.get(23).unwrap_or(None),
+            date_edited: row.get(24).unwrap_or(0),
+            associated_message_emoji: row.get(25).unwrap_or(None),
+            chat_id: row.get(26).unwrap_or(None),
+            num_attachments: row.get(27)?,
+            deleted_from: row.get(28).unwrap_or(None),
+            num_replies: row.get(29)?,
+            components: vec![],
+            edited_parts: None,
+        })
+    }
 
-            // If we deserialize the typedstream, use that data
-            self.text = self
-                .components
-                .as_ref()
-                .and_then(|items| items.first())
-                .and_then(|item| item.as_nsstring())
-                .map(String::from);
+    /// Create a new [`Message`] from a [`Row`], using the slower, but more compatible, named access method.
+    fn from_row_named(row: &Row) -> Result<Message> {
+        Ok(Message {
+            rowid: row.get("rowid")?,
+            guid: row.get("guid")?,
+            text: row.get("text").unwrap_or(None),
+            service: row.get("service").unwrap_or(None),
+            handle_id: row.get("handle_id").unwrap_or(None),
+            destination_caller_id: row.get("destination_caller_id").unwrap_or(None),
+            subject: row.get("subject").unwrap_or(None),
+            date: row.get("date")?,
+            date_read: row.get("date_read").unwrap_or(0),
+            date_delivered: row.get("date_delivered").unwrap_or(0),
+            is_from_me: row.get("is_from_me")?,
+            is_read: row.get("is_read").unwrap_or(false),
+            item_type: row.get("item_type").unwrap_or_default(),
+            other_handle: row.get("other_handle").unwrap_or(None),
+            share_status: row.get("share_status").unwrap_or(false),
+            share_direction: row.get("share_direction").unwrap_or(None),
+            group_title: row.get("group_title").unwrap_or(None),
+            group_action_type: row.get("group_action_type").unwrap_or(0),
+            associated_message_guid: row.get("associated_message_guid").unwrap_or(None),
+            associated_message_type: row.get("associated_message_type").unwrap_or(None),
+            balloon_bundle_id: row.get("balloon_bundle_id").unwrap_or(None),
+            expressive_send_style_id: row.get("expressive_send_style_id").unwrap_or(None),
+            thread_originator_guid: row.get("thread_originator_guid").unwrap_or(None),
+            thread_originator_part: row.get("thread_originator_part").unwrap_or(None),
+            date_edited: row.get("date_edited").unwrap_or(0),
+            associated_message_emoji: row.get("associated_message_emoji").unwrap_or(None),
+            chat_id: row.get("chat_id").unwrap_or(None),
+            num_attachments: row.get("num_attachments")?,
+            deleted_from: row.get("deleted_from").unwrap_or(None),
+            num_replies: row.get("num_replies")?,
+            components: vec![],
+            edited_parts: None,
+        })
+    }
 
-            // If the above parsing failed, fall back to the legacy parser instead
-            if self.text.is_none() {
-                self.text =
-                    Some(streamtyped::parse(body).map_err(MessageError::StreamTypedParseError)?);
-            }
-        }
-
-        // Generate the edited message data
-        self.edited_parts = self
+    // MARK: Text Gen
+    /// Parse the body of a message, deserializing it as [`typedstream`](crate::util::typedstream)
+    /// (and falling back to [`streamtyped`]) data if necessary.
+    ///
+    /// This method performs pure parsing without mutating the message. Use [`Self::apply_body()`]
+    /// to apply the result back to the message.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use imessage_database::tables::{messages::Message, table::get_connection};
+    /// # use imessage_database::util::dirs::default_db_path;
+    /// # let conn = get_connection(&default_db_path()).unwrap();
+    /// # let mut message = Message::from_guid("example", &conn).unwrap();
+    /// if let Ok(body) = message.parse_body(&conn) {
+    ///     message.apply_body(body);
+    /// }
+    /// ```
+    pub fn parse_body(&self, db: &Connection) -> Result<ParsedBody, MessageError> {
+        // Parse the edited message data
+        let edited_parts = self
             .is_edited()
             .then(|| self.message_summary_info(db))
             .flatten()
             .as_ref()
             .and_then(|payload| EditedMessage::from_map(payload).ok());
 
-        if let Some(t) = &self.text {
-            Ok(t)
+        // Initialize variables for the text, components, and balloon bundle ID that will be parsed from the body
+        let mut text = None;
+        let mut components = vec![];
+        let mut balloon_bundle_id = None;
+
+        // Grab the body data from the table
+        if let Some(body) = self.attributed_body(db) {
+            // Attempt to deserialize the typedstream data
+            let mut typedstream = TypedStreamDeserializer::new(&body);
+            match parse_body_typedstream(typedstream.iter_root().ok(), edited_parts.as_ref()) {
+                Some(parsed) => {
+                    text = parsed.text;
+
+                    // Determine if the message is a single URL
+                    let is_single_url = match &parsed.components[..] {
+                        [BubbleComponent::Text(text_attrs)] => match &text_attrs[..] {
+                            [TextAttributes { effects, .. }] => {
+                                matches!(&effects[..], [TextEffect::Link(_)])
+                            }
+                            _ => false,
+                        },
+                        _ => false,
+                    };
+
+                    // If the message has a balloon bundle ID or is a single URL,
+                    // set the components to just the app component
+                    if self.balloon_bundle_id.is_some() {
+                        components = vec![BubbleComponent::App];
+                    } else if is_single_url
+                        && self.has_blob(db, MESSAGE, MESSAGE_PAYLOAD, self.rowid.into())
+                    {
+                        // This patch is to handle the case where a message is a single URL
+                        // but the `balloon_bundle_id` is not set.
+                        // This case can only hit if there was payload data provided for the preview,
+                        // but no `balloon_bundle_id` was set.
+                        balloon_bundle_id =
+                            Some("com.apple.messages.URLBalloonProvider".to_string());
+                        components = vec![BubbleComponent::App];
+                    } else {
+                        components = parsed.components;
+                    }
+                }
+                None => {
+                    // Typedstream failed entirely; try self.text before legacy parser
+                    text = self.text.clone();
+                }
+            }
+
+            // If neither typedstream nor self.text produced text, fall back to legacy streamtyped
+            if text.is_none() {
+                text = Some(streamtyped::parse(body)?);
+            }
+        }
+
+        // If there is still no text, try and use the existing text field on the message,
+        // which may be populated for older messages or those that failed to parse as typedstream
+        let text = text.or_else(|| self.text.clone());
+
+        // The balloon bundle ID can be set in the single URL case, otherwise it should fall back to the existing balloon bundle ID on the message
+        let balloon_bundle_id = balloon_bundle_id.or_else(|| self.balloon_bundle_id.clone());
+
+        // If we got here, it means typedstream parsing failed, but we may be
+        // able to get components from the legacy parser
+        if components.is_empty() && text.is_some() {
+            components = parse_body_legacy(&text);
+        }
+
+        // Return Ok if we have text or any meaningful non-text body data
+        // (e.g., Retracted components from fully-unsent messages, or edited_parts metadata)
+        if text.is_some() || !components.is_empty() || edited_parts.is_some() {
+            Ok(ParsedBody {
+                text,
+                components,
+                edited_parts,
+                balloon_bundle_id,
+            })
         } else {
             Err(MessageError::NoText)
         }
     }
 
+    /// Apply a [`ParsedBody`] to this message, setting its text, components,
+    /// edited parts, and balloon bundle ID.
+    pub fn apply_body(&mut self, body: ParsedBody) {
+        self.text = body.text;
+        self.components = body.components;
+        self.edited_parts = body.edited_parts;
+        self.balloon_bundle_id = body.balloon_bundle_id;
+    }
+
+    /// Generates the text using the legacy parser only, ignoring any typedstream data.
+    /// This is useful for messages that do not have typedstream data, such as those from older iOS versions.
+    ///
+    /// Warning: This method does not handle typedstream data and will not parse all message types correctly.
+    pub fn generate_text_legacy<'a>(
+        &'a mut self,
+        db: &'a Connection,
+    ) -> Result<&'a str, MessageError> {
+        // If the text is missing, try and query for it
+        if self.text.is_none()
+            && let Some(body) = self.attributed_body(db)
+        {
+            self.text = Some(streamtyped::parse(body)?);
+        }
+
+        // Fallback component parser as well
+        if self.components.is_empty() {
+            self.components = parse_body_legacy(&self.text);
+        }
+
+        self.text.as_deref().ok_or(MessageError::NoText)
+    }
+
+    // MARK: Dates
     /// Calculates the date a message was written to the database.
     ///
     /// This field is stored as a unix timestamp with an epoch of `2001-01-01 00:00:00` in the local time zone
     ///
     /// `offset` can be provided by [`get_offset`](crate::util::dates::get_offset) or manually.
-    pub fn date(&self, offset: &i64) -> Result<DateTime<Local>, MessageError> {
-        get_local_time(&self.date, offset)
+    pub fn date(&self, offset: i64) -> Result<DateTime<Local>, MessageError> {
+        get_local_time(self.date, offset)
     }
 
     /// Calculates the date a message was marked as delivered.
@@ -521,8 +681,8 @@ impl Message {
     /// This field is stored as a unix timestamp with an epoch of `2001-01-01 00:00:00` in the local time zone
     ///
     /// `offset` can be provided by [`get_offset`](crate::util::dates::get_offset) or manually.
-    pub fn date_delivered(&self, offset: &i64) -> Result<DateTime<Local>, MessageError> {
-        get_local_time(&self.date_delivered, offset)
+    pub fn date_delivered(&self, offset: i64) -> Result<DateTime<Local>, MessageError> {
+        get_local_time(self.date_delivered, offset)
     }
 
     /// Calculates the date a message was marked as read.
@@ -530,8 +690,8 @@ impl Message {
     /// This field is stored as a unix timestamp with an epoch of `2001-01-01 00:00:00` in the local time zone
     ///
     /// `offset` can be provided by [`get_offset`](crate::util::dates::get_offset) or manually.
-    pub fn date_read(&self, offset: &i64) -> Result<DateTime<Local>, MessageError> {
-        get_local_time(&self.date_read, offset)
+    pub fn date_read(&self, offset: i64) -> Result<DateTime<Local>, MessageError> {
+        get_local_time(self.date_read, offset)
     }
 
     /// Calculates the date a message was most recently edited.
@@ -539,8 +699,8 @@ impl Message {
     /// This field is stored as a unix timestamp with an epoch of `2001-01-01 00:00:00` in the local time zone
     ///
     /// `offset` can be provided by [`get_offset`](crate::util::dates::get_offset) or manually.
-    pub fn date_edited(&self, offset: &i64) -> Result<DateTime<Local>, MessageError> {
-        get_local_time(&self.date_edited, offset)
+    pub fn date_edited(&self, offset: i64) -> Result<DateTime<Local>, MessageError> {
+        get_local_time(self.date_edited, offset)
     }
 
     /// Gets the time until the message was read. This can happen in two ways:
@@ -548,77 +708,107 @@ impl Message {
     /// - You received a message, then waited to read it
     /// - You sent a message, and the recipient waited to read it
     ///
-    /// In the former case, this subtracts the date read column (`date_read`) from the date received column (`date`).
-    /// In the latter case, this subtracts the date delivered column (`date_delivered`) from the date received column (`date`).
+    /// In the former case, this computes the difference from the date received (`date`) to the date read (`date_read`).
+    /// In the latter case, this computes the difference from the date sent (`date`) to the date delivered (`date_delivered`).
     ///
     /// Not all messages get tagged with the read properties.
     /// If more than one message has been sent in a thread before getting read,
     /// only the most recent message will get the tag.
     ///
     /// `offset` can be provided by [`get_offset`](crate::util::dates::get_offset) or manually.
-    pub fn time_until_read(&self, offset: &i64) -> Option<String> {
+    #[must_use]
+    pub fn time_until_read(&self, offset: i64) -> Option<String> {
         // Message we received
         if !self.is_from_me && self.date_read != 0 && self.date != 0 {
-            return readable_diff(self.date(offset), self.date_read(offset));
+            return readable_diff(&self.date(offset).ok()?, &self.date_read(offset).ok()?);
         }
         // Message we sent
         else if self.is_from_me && self.date_delivered != 0 && self.date != 0 {
-            return readable_diff(self.date(offset), self.date_delivered(offset));
+            return readable_diff(&self.date(offset).ok()?, &self.date_delivered(offset).ok()?);
         }
         None
     }
 
+    // MARK: Bools
     /// `true` if the message is a response to a thread, else `false`
+    #[must_use]
     pub fn is_reply(&self) -> bool {
         self.thread_originator_guid.is_some()
     }
 
     /// `true` if the message is an [`Announcement`], else `false`
+    #[must_use]
     pub fn is_announcement(&self) -> bool {
         self.get_announcement().is_some()
     }
 
     /// `true` if the message is a [`Tapback`] to another message, else `false`
+    #[must_use]
     pub fn is_tapback(&self) -> bool {
         matches!(self.variant(), Variant::Tapback(..))
     }
 
     /// `true` if the message has an [`Expressive`], else `false`
+    #[must_use]
     pub fn is_expressive(&self) -> bool {
         self.expressive_send_style_id.is_some()
     }
 
     /// `true` if the message has a [URL preview](crate::message_types::url), else `false`
+    #[must_use]
     pub fn is_url(&self) -> bool {
         matches!(self.variant(), Variant::App(CustomBalloon::URL))
     }
 
     /// `true` if the message is a [`HandwrittenMessage`](crate::message_types::handwriting::models::HandwrittenMessage), else `false`
+    #[must_use]
     pub fn is_handwriting(&self) -> bool {
         matches!(self.variant(), Variant::App(CustomBalloon::Handwriting))
     }
 
     /// `true` if the message is a [`Digital Touch`](crate::message_types::digital_touch::models), else `false`
+    #[must_use]
     pub fn is_digital_touch(&self) -> bool {
         matches!(self.variant(), Variant::App(CustomBalloon::DigitalTouch))
     }
 
+    /// `true` if the message is a Poll, else `false`
+    #[must_use]
+    pub fn is_poll(&self) -> bool {
+        matches!(self.variant(), Variant::App(CustomBalloon::Polls))
+    }
+
+    /// `true` if the message is a [`Poll`] vote, else `false`
+    #[must_use]
+    pub fn is_poll_vote(&self) -> bool {
+        self.associated_message_type == Some(4000)
+    }
+
+    /// `true` if the message adds a new option to a [`Poll`], else `false`
+    #[must_use]
+    pub fn is_poll_update(&self) -> bool {
+        matches!(self.variant(), Variant::PollUpdate)
+    }
+
     /// `true` if the message was [`Edited`](crate::message_types::edited), else `false`
+    #[must_use]
     pub fn is_edited(&self) -> bool {
         self.date_edited != 0
     }
 
     /// `true` if the specified message component was [edited](crate::message_types::edited::EditStatus::Edited), else `false`
+    #[must_use]
     pub fn is_part_edited(&self, index: usize) -> bool {
-        if let Some(edited_parts) = &self.edited_parts {
-            if let Some(part) = edited_parts.part(index) {
-                return matches!(part.status, EditStatus::Edited);
-            }
+        if let Some(edited_parts) = &self.edited_parts
+            && let Some(part) = edited_parts.part(index)
+        {
+            return matches!(part.status, EditStatus::Edited);
         }
         false
     }
 
     /// `true` if all message components were [unsent](crate::message_types::edited::EditStatus::Unsent), else `false`
+    #[must_use]
     pub fn is_fully_unsent(&self) -> bool {
         self.edited_parts.as_ref().is_some_and(|ep| {
             ep.parts
@@ -630,29 +820,37 @@ impl Message {
     /// `true` if the message contains [`Attachment`](crate::tables::attachment::Attachment)s, else `false`
     ///
     /// Attachments can be queried with [`Attachment::from_message()`](crate::tables::attachment::Attachment::from_message).
+    #[must_use]
     pub fn has_attachments(&self) -> bool {
         self.num_attachments > 0
     }
 
     /// `true` if the message begins a thread, else `false`
+    #[must_use]
     pub fn has_replies(&self) -> bool {
         self.num_replies > 0
     }
 
     /// `true` if the message indicates a sent audio message was kept, else `false`
+    #[must_use]
     pub fn is_kept_audio_message(&self) -> bool {
         self.item_type == 5
     }
 
     /// `true` if the message is a [SharePlay/FaceTime](crate::message_types::variants::Variant::SharePlay) message, else `false`
+    #[must_use]
     pub fn is_shareplay(&self) -> bool {
         self.item_type == 6
     }
 
     /// `true` if the message was sent by the database owner, else `false`
+    #[must_use]
     pub fn is_from_me(&self) -> bool {
-        if let (Some(other_handle), Some(share_direction)) =
-            (self.other_handle, self.share_direction)
+        // Share direction and other handle are only populated for shared location messages,
+        // so this check is only necessary for those
+        if self.item_type == 4
+            && let (Some(other_handle), Some(share_direction)) =
+                (self.other_handle, self.share_direction)
         {
             self.is_from_me || other_handle != 0 && !share_direction
         } else {
@@ -660,19 +858,19 @@ impl Message {
         }
     }
 
-    /// Get the group action for the current message
-    pub fn group_action(&self) -> Option<GroupAction> {
-        GroupAction::from_message(self)
-    }
-
-    /// `true` if the message indicates a sender started sharing their location, else `false`
-    pub fn started_sharing_location(&self) -> bool {
-        self.item_type == 4 && self.group_action_type == 0 && !self.share_status
-    }
-
-    /// `true` if the message indicates a sender stopped sharing their location, else `false`
-    pub fn stopped_sharing_location(&self) -> bool {
-        self.item_type == 4 && self.group_action_type == 0 && self.share_status
+    /// Returns the [`SharedLocation`] when the message is a legacy
+    /// shared-location event.
+    #[must_use]
+    pub fn shared_location_kind(&self) -> Option<SharedLocation> {
+        if self.item_type == 4 && self.group_action_type == 0 {
+            Some(if self.share_status {
+                SharedLocation::Stopped
+            } else {
+                SharedLocation::Started
+            })
+        } else {
+            None
+        }
     }
 
     /// `true` if the message was deleted and is recoverable, else `false`
@@ -686,8 +884,66 @@ impl Message {
     /// cannot be recovered.
     ///
     /// Note: This is not the same as an [`Unsent`](crate::message_types::edited::EditStatus::Unsent) message.
+    #[must_use]
     pub fn is_deleted(&self) -> bool {
         self.deleted_from.is_some()
+    }
+
+    /// `true` if the message was translated, else `false`. Only works on iOS 16+ databases.
+    pub fn has_translation(&self, db: &Connection) -> bool {
+        // `7472616E736C6174696F6E4C616E6775616765` -> "translationLanguage"
+        // `7472616E736C6174656454657874` -> "translatedText"
+        let query = format!(
+            "SELECT ROWID FROM {MESSAGE} 
+                WHERE message_summary_info IS NOT NULL 
+                AND length(message_summary_info) > 61 
+                AND instr(message_summary_info, X'7472616E736C6174696F6E4C616E6775616765') > 0 
+                AND instr(message_summary_info, X'7472616E736C6174656454657874') > 0 
+                AND ROWID = ?"
+        );
+        if let Ok(mut statement) = db.prepare_cached(&query) {
+            let result: Result<i32, _> = statement.query_row([self.rowid], |row| row.get(0));
+            result.is_ok()
+        } else {
+            false
+        }
+    }
+
+    /// Generates the [`Translation`] for the current message
+    pub fn get_translation(&self, db: &Connection) -> Result<Option<Translation>, MessageError> {
+        if let Some(payload) = self.message_summary_info(db) {
+            return Ok(Some(Translation::from_payload(&payload)?));
+        }
+        Ok(None)
+    }
+
+    /// Cache all message GUIDs that contain translation data. Only works on iOS 16+ databases.
+    pub fn cache_translations(db: &Connection) -> Result<HashSet<String>, TableError> {
+        // `7472616E736C6174696F6E4C616E6775616765` -> "translationLanguage"
+        // `7472616E736C6174656454657874` -> "translatedText"
+        let query = format!(
+            "SELECT guid FROM {MESSAGE} 
+                WHERE message_summary_info IS NOT NULL 
+                AND length(message_summary_info) > 61 
+                AND instr(message_summary_info, X'7472616E736C6174696F6E4C616E6775616765') > 0 
+                AND instr(message_summary_info, X'7472616E736C6174656454657874') > 0"
+        );
+
+        let mut statement = db.prepare(&query)?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+
+        let mut guids = HashSet::new();
+        for guid_result in rows {
+            guids.insert(guid_result?);
+        }
+
+        Ok(guids)
+    }
+
+    /// Get the group action for the current message
+    #[must_use]
+    pub fn group_action(&'_ self) -> Option<GroupAction<'_>> {
+        GroupAction::from_message(self)
     }
 
     /// Get the index of the part of a message a reply is pointing to
@@ -701,6 +957,7 @@ impl Message {
         0
     }
 
+    // MARK: SQL
     /// Generate the SQL `WHERE` clause described by a [`QueryContext`].
     ///
     /// If `include_recoverable` is `true`, the filter includes messages from the recently deleted messages
@@ -710,11 +967,11 @@ impl Message {
         context: &QueryContext,
         include_recoverable: bool,
     ) -> String {
-        let mut filters = String::new();
+        let mut filters = String::with_capacity(128);
 
         // Start date filter
         if let Some(start) = context.start {
-            filters.push_str(&format!(" m.date >= {start}"));
+            let _ = write!(filters, " m.date >= {start}");
         }
 
         // End date filter
@@ -722,7 +979,7 @@ impl Message {
             if !filters.is_empty() {
                 filters.push_str(" AND ");
             }
-            filters.push_str(&format!(" m.date <= {end}"));
+            let _ = write!(filters, " m.date <= {end}");
         }
 
         // Chat ID filter, optionally including recoverable messages
@@ -734,14 +991,14 @@ impl Message {
             // Allocate the filter string for interpolation
             let ids = chat_ids
                 .iter()
-                .map(|x| x.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<String>>()
                 .join(", ");
 
             if include_recoverable {
-                filters.push_str(&format!(" (c.chat_id IN ({ids}) OR d.chat_id IN ({ids}))"));
+                let _ = write!(filters, " (c.chat_id IN ({ids}) OR d.chat_id IN ({ids}))");
             } else {
-                filters.push_str(&format!(" c.chat_id IN ({ids})"));
+                let _ = write!(filters, " c.chat_id IN ({ids})");
             }
         }
 
@@ -753,11 +1010,11 @@ impl Message {
 
     /// Get the number of messages in the database
     ///
-    /// # Example:
+    /// # Example
     ///
-    /// ```
+    /// ```no_run
     /// use imessage_database::util::dirs::default_db_path;
-    /// use imessage_database::tables::table::{Diagnostic, get_connection};
+    /// use imessage_database::tables::table::get_connection;
     /// use imessage_database::tables::messages::Message;
     /// use imessage_database::util::query_context::QueryContext;
     ///
@@ -766,9 +1023,9 @@ impl Message {
     /// let context = QueryContext::default();
     /// Message::get_count(&conn, &context);
     /// ```
-    pub fn get_count(db: &Connection, context: &QueryContext) -> Result<u64, TableError> {
+    pub fn get_count(db: &Connection, context: &QueryContext) -> Result<i64, TableError> {
         let mut statement = if context.has_filters() {
-            db.prepare(&format!(
+            db.prepare_cached(&format!(
                 "SELECT
                      COUNT(*)
                  FROM {MESSAGE} as m
@@ -778,7 +1035,7 @@ impl Message {
                 Self::generate_filter_statement(context, true)
             ))
             .or_else(|_| {
-                db.prepare(&format!(
+                db.prepare_cached(&format!(
                     "SELECT
                          COUNT(*)
                      FROM {MESSAGE} as m
@@ -786,25 +1043,23 @@ impl Message {
                     {}",
                     Self::generate_filter_statement(context, false)
                 ))
-            })
-            .map_err(TableError::Messages)?
+            })?
         } else {
-            db.prepare(&format!("SELECT COUNT(*) FROM {MESSAGE}"))
-                .map_err(TableError::Messages)?
+            db.prepare_cached(&format!("SELECT COUNT(*) FROM {MESSAGE}"))?
         };
         // Execute query, defaulting to zero if it fails
-        let count: u64 = statement.query_row([], |r| r.get(0)).unwrap_or(0);
+        let count: i64 = statement.query_row([], |r| r.get(0)).unwrap_or(0);
 
         Ok(count)
     }
 
     /// Stream messages from the database with optional filters.
     ///
-    /// # Example:
+    /// # Example
     ///
-    /// ```
+    /// ```no_run
     /// use imessage_database::util::dirs::default_db_path;
-    /// use imessage_database::tables::table::{Diagnostic, get_connection};
+    /// use imessage_database::tables::table::get_connection;
     /// use imessage_database::tables::{messages::Message, table::Table};
     /// use imessage_database::util::query_context::QueryContext;
     ///
@@ -814,34 +1069,37 @@ impl Message {
     ///
     /// let mut statement = Message::stream_rows(&conn, &context).unwrap();
     ///
-    /// let messages = statement.query_map([], |row| Ok(Message::from_row(row))).unwrap();
-    ///
-    /// messages.map(|msg| println!("{:#?}", Message::extract(msg)));
+    /// for message in Message::rows(&mut statement, []).unwrap() {
+    ///     println!("{:#?}", message);
+    /// }
     /// ```
     pub fn stream_rows<'a>(
         db: &'a Connection,
         context: &'a QueryContext,
-    ) -> Result<Statement<'a>, TableError> {
+    ) -> Result<CachedStatement<'a>, TableError> {
         if !context.has_filters() {
             return Self::get(db);
         }
-        db.prepare(&ios_16_newer_query(Some(&Self::generate_filter_statement(
-            context, true,
-        ))))
-        .or_else(|_| {
-            db.prepare(&ios_14_15_query(Some(&Self::generate_filter_statement(
-                context, false,
+        Ok(db
+            .prepare_cached(&ios_16_newer_query(Some(&Self::generate_filter_statement(
+                context, true,
             ))))
-        })
-        .or_else(|_| {
-            db.prepare(&ios_13_older_query(Some(&Self::generate_filter_statement(
-                context, false,
-            ))))
-        })
-        .map_err(TableError::Messages)
+            .or_else(|_| {
+                db.prepare_cached(&ios_14_15_query(Some(&Self::generate_filter_statement(
+                    context, false,
+                ))))
+            })
+            .or_else(|_| {
+                db.prepare_cached(&ios_13_older_query(Some(&Self::generate_filter_statement(
+                    context, false,
+                ))))
+            })?)
     }
 
-    /// See [`Tapback`] for details on this data.
+    /// Clean and parse the associated message GUID for tapbacks and replies.
+    ///
+    /// Returns a tuple of (component index, message GUID) if present.
+    #[must_use]
     pub fn clean_associated_guid(&self) -> Option<(usize, &str)> {
         if let Some(guid) = &self.associated_message_guid {
             if guid.starts_with("p:") {
@@ -873,20 +1131,16 @@ impl Message {
 
         // No need to hit the DB if we know we don't have replies
         if self.has_replies() {
-            let filters = format!("WHERE m.thread_originator_guid = \"{}\"", self.guid);
+            // Use a parameterized filter so the prepared statement can be cached/reused
+            let filters = "WHERE m.thread_originator_guid = ?1";
 
             // No iOS 13 and prior used here because `thread_originator_guid` is not present in that schema
             let mut statement = db
-                .prepare(&ios_16_newer_query(Some(&filters)))
-                .or_else(|_| db.prepare(&ios_14_15_query(Some(&filters))))
-                .map_err(TableError::Messages)?;
+                .prepare_cached(&ios_16_newer_query(Some(filters)))
+                .or_else(|_| db.prepare_cached(&ios_14_15_query(Some(filters))))?;
 
-            let iter = statement
-                .query_map([], |row| Ok(Message::from_row(row)))
-                .map_err(TableError::Messages)?;
-
-            for message in iter {
-                let m = Message::extract(message)?;
+            for message in Message::rows(&mut statement, [self.guid.as_str()])? {
+                let m = message?;
                 let idx = m.get_reply_index();
                 match out_h.get_mut(&idx) {
                     Some(body_part) => body_part.push(m),
@@ -900,123 +1154,94 @@ impl Message {
         Ok(out_h)
     }
 
+    // MARK: Polls
+    /// Build a `Vec` of messages that vote on the parent poll
+    pub fn get_votes(&self, db: &Connection) -> Result<Vec<Self>, TableError> {
+        let mut out_v: Vec<Self> = Vec::new();
+
+        // No need to hit the DB if we know we don't have a poll
+        if self.is_poll() {
+            // Use a parameterized filter so the prepared statement can be cached/reused
+            let filters = "WHERE m.associated_message_guid = ?1";
+
+            // No iOS 13 and prior used here because `associated_message_guid` is not present in that schema
+            let mut statement = db
+                .prepare_cached(&ios_16_newer_query(Some(filters)))
+                .or_else(|_| db.prepare_cached(&ios_14_15_query(Some(filters))))?;
+
+            for message in Message::rows(&mut statement, [self.guid.as_str()])? {
+                out_v.push(message?);
+            }
+        }
+
+        Ok(out_v)
+    }
+
+    /// If the message is a poll, attempt to parse and return it
+    pub fn as_poll(&self, db: &Connection) -> Result<Option<Poll>, MessageError> {
+        if self.is_poll()
+            && let Some(payload) = self.payload_data(db)
+        {
+            let mut poll = Poll::from_payload(&payload)?;
+
+            // Get all votes associated with this poll
+            let votes = self.get_votes(db).unwrap_or_default();
+
+            // Subsequent updates to the poll are stored as messages that reference the original poll message
+            // so we need to find the latest message in the vector of votes and determine if it is an update
+            for vote in votes.iter().rev() {
+                // The most recent non-vote message is the latest poll update
+                // and contains all of the possible options
+                if !vote.is_poll_vote()
+                    && let Some(vote_payload) = vote.payload_data(db)
+                    && let Ok(update) = Poll::from_payload(&vote_payload)
+                {
+                    poll = update;
+                    break;
+                }
+            }
+
+            // Count all votes associated with this poll, ignoring any poll update messages in the process
+            for vote in &votes {
+                if vote.is_poll_vote()
+                    && let Some(vote_payload) = vote.payload_data(db)
+                {
+                    poll.count_votes(&vote_payload)?;
+                }
+            }
+
+            // Return the final poll object
+            return Ok(Some(poll));
+        }
+
+        Ok(None)
+    }
+
+    // MARK: Variant
     /// Get the variant of a message, see [`variants`](crate::message_types::variants) for detail.
-    pub fn variant(&self) -> Variant {
+    #[must_use]
+    pub fn variant(&'_ self) -> Variant<'_> {
         // Check if a message was edited first as those have special properties
         if self.is_edited() {
             return Variant::Edited;
         }
 
-        // Handle different types of bundle IDs next, as those are most common
+        // Handle different types of associated message types
         if let Some(associated_message_type) = self.associated_message_type {
-            return match associated_message_type {
+            match associated_message_type {
                 // Standard iMessages with either text or a message payload
-                0 | 2 | 3 => match parse_balloon_bundle_id(self.balloon_bundle_id.as_deref()) {
-                    Some(bundle_id) => match bundle_id {
-                        "com.apple.messages.URLBalloonProvider" => Variant::App(CustomBalloon::URL),
-                        "com.apple.Handwriting.HandwritingProvider" => {
-                            Variant::App(CustomBalloon::Handwriting)
-                        }
-                        "com.apple.DigitalTouchBalloonProvider" => {
-                            Variant::App(CustomBalloon::DigitalTouch)
-                        }
-                        "com.apple.PassbookUIService.PeerPaymentMessagesExtension" => {
-                            Variant::App(CustomBalloon::ApplePay)
-                        }
-                        "com.apple.ActivityMessagesApp.MessagesExtension" => {
-                            Variant::App(CustomBalloon::Fitness)
-                        }
-                        "com.apple.mobileslideshow.PhotosMessagesApp" => {
-                            Variant::App(CustomBalloon::Slideshow)
-                        }
-                        "com.apple.SafetyMonitorApp.SafetyMonitorMessages" => {
-                            Variant::App(CustomBalloon::CheckIn)
-                        }
-                        "com.apple.findmy.FindMyMessagesApp" => Variant::App(CustomBalloon::FindMy),
-                        _ => Variant::App(CustomBalloon::Application(bundle_id)),
-                    },
-                    // This is the most common case
-                    None => Variant::Normal,
-                },
-
-                // Stickers overlaid on messages
-                1000 => {
-                    Variant::Tapback(self.tapback_index(), TapbackAction::Added, Tapback::Sticker)
+                0 | 2 | 3 => return self.get_app_variant().unwrap_or(Variant::Normal),
+                // Tapbacks (added or removed)
+                1000 | 2000..=2007 | 3000..=3007 => {
+                    if let Some((action, tapback)) = self.get_tapback() {
+                        return Variant::Tapback(self.tapback_index(), action, tapback);
+                    }
                 }
-
-                // Tapbacks
-                2000 => {
-                    Variant::Tapback(self.tapback_index(), TapbackAction::Added, Tapback::Loved)
-                }
-                2001 => {
-                    Variant::Tapback(self.tapback_index(), TapbackAction::Added, Tapback::Liked)
-                }
-                2002 => Variant::Tapback(
-                    self.tapback_index(),
-                    TapbackAction::Added,
-                    Tapback::Disliked,
-                ),
-                2003 => {
-                    Variant::Tapback(self.tapback_index(), TapbackAction::Added, Tapback::Laughed)
-                }
-                2004 => Variant::Tapback(
-                    self.tapback_index(),
-                    TapbackAction::Added,
-                    Tapback::Emphasized,
-                ),
-                2005 => Variant::Tapback(
-                    self.tapback_index(),
-                    TapbackAction::Added,
-                    Tapback::Questioned,
-                ),
-                2006 => Variant::Tapback(
-                    self.tapback_index(),
-                    TapbackAction::Added,
-                    Tapback::Emoji(self.associated_message_emoji.as_deref()),
-                ),
-                2007 => {
-                    Variant::Tapback(self.tapback_index(), TapbackAction::Added, Tapback::Sticker)
-                }
-                3000 => {
-                    Variant::Tapback(self.tapback_index(), TapbackAction::Removed, Tapback::Loved)
-                }
-                3001 => {
-                    Variant::Tapback(self.tapback_index(), TapbackAction::Removed, Tapback::Liked)
-                }
-                3002 => Variant::Tapback(
-                    self.tapback_index(),
-                    TapbackAction::Removed,
-                    Tapback::Disliked,
-                ),
-                3003 => Variant::Tapback(
-                    self.tapback_index(),
-                    TapbackAction::Removed,
-                    Tapback::Laughed,
-                ),
-                3004 => Variant::Tapback(
-                    self.tapback_index(),
-                    TapbackAction::Removed,
-                    Tapback::Emphasized,
-                ),
-                3005 => Variant::Tapback(
-                    self.tapback_index(),
-                    TapbackAction::Removed,
-                    Tapback::Questioned,
-                ),
-                3006 => Variant::Tapback(
-                    self.tapback_index(),
-                    TapbackAction::Removed,
-                    Tapback::Emoji(self.associated_message_emoji.as_deref()),
-                ),
-                3007 => Variant::Tapback(
-                    self.tapback_index(),
-                    TapbackAction::Removed,
-                    Tapback::Sticker,
-                ),
-
+                // A vote was cast on a poll
+                4000 => return Variant::Vote,
                 // Unknown
-                x => Variant::Unknown(x),
-            };
+                x => return Variant::Unknown(x),
+            }
         }
 
         // Any other rarer cases belong here
@@ -1027,8 +1252,70 @@ impl Message {
         Variant::Normal
     }
 
+    /// Helper to determine app variants based on balloon bundle ID.
+    #[must_use]
+    fn get_app_variant(&self) -> Option<Variant<'_>> {
+        let bundle_id = parse_balloon_bundle_id(self.balloon_bundle_id.as_deref())?;
+        let custom = match bundle_id {
+            "com.apple.messages.URLBalloonProvider" => CustomBalloon::URL,
+            "com.apple.Handwriting.HandwritingProvider" => CustomBalloon::Handwriting,
+            "com.apple.DigitalTouchBalloonProvider" => CustomBalloon::DigitalTouch,
+            "com.apple.PassbookUIService.PeerPaymentMessagesExtension" => CustomBalloon::ApplePay,
+            "com.apple.ActivityMessagesApp.MessagesExtension" => CustomBalloon::Fitness,
+            "com.apple.mobileslideshow.PhotosMessagesApp" => CustomBalloon::Slideshow,
+            "com.apple.SafetyMonitorApp.SafetyMonitorMessages" => CustomBalloon::CheckIn,
+            "com.apple.findmy.FindMyMessagesApp" => CustomBalloon::FindMy,
+            "com.apple.messages.Polls" => {
+                // Special case: Check if this is the original poll or an update
+                if self
+                    .associated_message_guid
+                    .as_ref()
+                    .is_none_or(|id| id == &self.guid)
+                {
+                    CustomBalloon::Polls
+                } else {
+                    return Some(Variant::PollUpdate);
+                }
+            }
+            _ => CustomBalloon::Application(bundle_id),
+        };
+        Some(Variant::App(custom))
+    }
+
+    /// Helper to determine tapback variants based on associated message type.
+    #[must_use]
+    fn get_tapback(&self) -> Option<(TapbackAction, Tapback<'_>)> {
+        match self.associated_message_type? {
+            1000 => Some((TapbackAction::Added, Tapback::Sticker)),
+            2000 => Some((TapbackAction::Added, Tapback::Loved)),
+            2001 => Some((TapbackAction::Added, Tapback::Liked)),
+            2002 => Some((TapbackAction::Added, Tapback::Disliked)),
+            2003 => Some((TapbackAction::Added, Tapback::Laughed)),
+            2004 => Some((TapbackAction::Added, Tapback::Emphasized)),
+            2005 => Some((TapbackAction::Added, Tapback::Questioned)),
+            2006 => Some((
+                TapbackAction::Added,
+                Tapback::Emoji(self.associated_message_emoji.as_deref()),
+            )),
+            2007 => Some((TapbackAction::Added, Tapback::Sticker)),
+            3000 => Some((TapbackAction::Removed, Tapback::Loved)),
+            3001 => Some((TapbackAction::Removed, Tapback::Liked)),
+            3002 => Some((TapbackAction::Removed, Tapback::Disliked)),
+            3003 => Some((TapbackAction::Removed, Tapback::Laughed)),
+            3004 => Some((TapbackAction::Removed, Tapback::Emphasized)),
+            3005 => Some((TapbackAction::Removed, Tapback::Questioned)),
+            3006 => Some((
+                TapbackAction::Removed,
+                Tapback::Emoji(self.associated_message_emoji.as_deref()),
+            )),
+            3007 => Some((TapbackAction::Removed, Tapback::Sticker)),
+            _ => None,
+        }
+    }
+
     /// Determine the type of announcement a message contains, if it contains one
-    pub fn get_announcement(&self) -> Option<Announcement> {
+    #[must_use]
+    pub fn get_announcement(&'_ self) -> Option<Announcement<'_>> {
         if let Some(action) = self.group_action() {
             return Some(Announcement::GroupAction(action));
         }
@@ -1045,10 +1332,12 @@ impl Message {
     }
 
     /// Determine the service the message was sent from, i.e. iMessage, SMS, IRC, etc.
-    pub fn service(&self) -> Service {
-        Service::from(self.service.as_deref())
+    #[must_use]
+    pub fn service(&'_ self) -> Service<'_> {
+        Service::from_name(self.service.as_deref())
     }
 
+    // MARK: BLOBs
     /// Get a message's plist from the [`MESSAGE_PAYLOAD`] BLOB column
     ///
     /// Calling this hits the database, so it is expensive and should
@@ -1057,7 +1346,7 @@ impl Message {
     /// This column contains data used by iMessage app balloons and can be parsed with
     /// [`parse_ns_keyed_archiver()`](crate::util::plist::parse_ns_keyed_archiver).
     pub fn payload_data(&self, db: &Connection) -> Option<Value> {
-        Value::from_reader(self.get_blob(db, MESSAGE_PAYLOAD)?).ok()
+        Value::from_reader(self.get_blob(db, MESSAGE, MESSAGE_PAYLOAD, self.rowid.into())?).ok()
     }
 
     /// Get a message's raw data from the [`MESSAGE_PAYLOAD`] BLOB column
@@ -1068,7 +1357,7 @@ impl Message {
     /// This column contains data used by [`HandwrittenMessage`](crate::message_types::handwriting::HandwrittenMessage)s.
     pub fn raw_payload_data(&self, db: &Connection) -> Option<Vec<u8>> {
         let mut buf = Vec::new();
-        self.get_blob(db, MESSAGE_PAYLOAD)?
+        self.get_blob(db, MESSAGE, MESSAGE_PAYLOAD, self.rowid.into())?
             .read_to_end(&mut buf)
             .ok()?;
         Some(buf)
@@ -1081,7 +1370,8 @@ impl Message {
     ///
     /// This column contains data used by [`edited`](crate::message_types::edited) iMessages.
     pub fn message_summary_info(&self, db: &Connection) -> Option<Value> {
-        Value::from_reader(self.get_blob(db, MESSAGE_SUMMARY_INFO)?).ok()
+        Value::from_reader(self.get_blob(db, MESSAGE, MESSAGE_SUMMARY_INFO, self.rowid.into())?)
+            .ok()
     }
 
     /// Get a message's [typedstream](crate::util::typedstream) from the [`ATTRIBUTED_BODY`] BLOB column
@@ -1092,14 +1382,16 @@ impl Message {
     /// This column contains the message's body text with any other attributes.
     pub fn attributed_body(&self, db: &Connection) -> Option<Vec<u8>> {
         let mut body = vec![];
-        self.get_blob(db, ATTRIBUTED_BODY)?
+        self.get_blob(db, MESSAGE, ATTRIBUTED_BODY, self.rowid.into())?
             .read_to_end(&mut body)
             .ok();
         Some(body)
     }
 
+    // MARK: Expressive
     /// Determine which [`Expressive`] the message was sent with
-    pub fn get_expressive(&self) -> Expressive {
+    #[must_use]
+    pub fn get_expressive(&'_ self) -> Expressive<'_> {
         match &self.expressive_send_style_id {
             Some(content) => match content.as_str() {
                 "com.apple.MobileSMS.expressivesend.gentle" => {
@@ -1146,7 +1438,7 @@ impl Message {
     /// Create a message from a given GUID; useful for debugging
     ///
     /// # Example
-    /// ```rust
+    /// ```no_run
     /// use imessage_database::{
     ///     tables::{
     ///         messages::Message,
@@ -1159,28 +1451,30 @@ impl Message {
     /// let conn = get_connection(&db_path).unwrap();
     ///
     /// if let Ok(mut message) = Message::from_guid("example-guid", &conn) {
-    ///     let _ = message.generate_text(&conn);
+    ///     if let Ok(body) = message.parse_body(&conn) {
+    ///         message.apply_body(body);
+    ///     }
     ///     println!("{:#?}", message)
     /// }
     ///```
     pub fn from_guid(guid: &str, db: &Connection) -> Result<Self, TableError> {
-        // If the database has `chat_recoverable_message_join`, we can restore some deleted messages.
-        // If database has `thread_originator_guid`, we can parse replies, otherwise default to 0
-        let filters = format!("WHERE m.guid = \"{guid}\"");
-
         let mut statement = db
-            .prepare(&ios_16_newer_query(Some(&filters)))
-            .or_else(|_| db.prepare(&ios_14_15_query(Some(&filters))))
-            .or_else(|_| db.prepare(&ios_13_older_query(Some(&filters))))
-            .map_err(TableError::Messages)?;
+            .prepare_cached(&ios_16_newer_query(Some("WHERE m.guid = ?1")))
+            .or_else(|_| db.prepare_cached(&ios_14_15_query(Some("WHERE m.guid = ?1"))))
+            .or_else(|_| db.prepare_cached(&ios_13_older_query(Some("WHERE m.guid = ?1"))))?;
 
-        Message::extract(statement.query_row([], |row| Ok(Message::from_row(row))))
+        Message::row(&mut statement, [guid])
     }
 }
 
+// MARK: Fixture
 #[cfg(test)]
 impl Message {
+    #[must_use]
+    /// Create a blank test message with default values
     pub fn blank() -> Message {
+        use std::vec;
+
         Message {
             rowid: i32::default(),
             guid: String::default(),
@@ -1212,7 +1506,7 @@ impl Message {
             num_attachments: 0,
             deleted_from: None,
             num_replies: 0,
-            components: None,
+            components: vec![],
             edited_parts: None,
         }
     }

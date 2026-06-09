@@ -4,32 +4,35 @@
 
 use std::fmt::{Display, Formatter, Result};
 
+use crabstep::{PropertyIterator, deserializer::iter::Property};
+
 use crate::{
-    message_types::text_effects::TextEffect, tables::messages::message::Message,
-    util::typedstream::models::Archivable,
+    message_types::text_effects::TextEffect,
+    tables::messages::message::Message,
+    util::typedstream::{as_float, as_nsstring},
 };
 
+// MARK: BubbleComponent
 /// Defines the parts of a message bubble, i.e. the content that can exist in a single message.
 ///
 /// # Component Types
 ///
 /// A single iMessage contains data that may be represented across multiple bubbles.
-///
-/// iMessage bubbles can only contain data of one variant of this enum at a time.
-#[derive(Debug, PartialEq)]
-pub enum BubbleComponent<'a> {
+#[derive(Debug, PartialEq, Clone)]
+pub enum BubbleComponent {
     /// A text message with associated formatting, generally representing ranges present in a `NSAttributedString`
-    Text(Vec<TextAttributes<'a>>),
+    Text(Vec<TextAttributes>),
     /// An attachment
-    Attachment(AttachmentMeta<'a>),
+    Attachment(AttachmentMeta),
     /// An [app integration](crate::message_types::app)
     App,
     /// A component that was retracted, found by parsing the [`EditedMessage`](crate::message_types::edited::EditedMessage)
     Retracted,
 }
 
+// MARK: Service
 /// Defines different types of [services](https://support.apple.com/en-us/104972) we can receive messages from.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Service<'a> {
     /// An iMessage
     #[allow(non_camel_case_types)]
@@ -47,7 +50,9 @@ pub enum Service<'a> {
 }
 
 impl<'a> Service<'a> {
-    pub fn from(service: Option<&'a str>) -> Self {
+    /// Creates a [`Service`] enum variant based on the provided service name string.
+    #[must_use]
+    pub fn from_name(service: Option<&'a str>) -> Self {
         if let Some(service_name) = service {
             return match service_name.trim() {
                 "iMessage" => Service::iMessage,
@@ -74,6 +79,7 @@ impl Display for Service<'_> {
     }
 }
 
+// MARK: TextAttributes
 /// Defines ranges of text and associated attributes parsed from [`typedstream`](crate::util::typedstream) `attributedBody` data.
 ///
 /// Ranges specify locations where attributes are applied to specific portions of a [`Message`]'s [`text`](crate::tables::messages::Message::text). For example, given message text with a [`Mention`](TextEffect::Mention) like:
@@ -89,113 +95,102 @@ impl Display for Service<'_> {
 /// use imessage_database::tables::messages::models::{TextAttributes, BubbleComponent};
 ///  
 /// let result = vec![BubbleComponent::Text(vec![
-///     TextAttributes::new(0, 11, TextEffect::Default),  // `What's up, `
-///     TextAttributes::new(11, 22, TextEffect::Mention("+5558675309")), // `Christopher`
-///     TextAttributes::new(22, 23, TextEffect::Default)  // `?`
+///     TextAttributes::new(0, 11, vec![TextEffect::Default]),  // `What's up, `
+///     TextAttributes::new(11, 22, vec![TextEffect::Mention("+5558675309".to_string())]), // `Christopher`
+///     TextAttributes::new(22, 23, vec![TextEffect::Default])  // `?`
 /// ])];
 /// ```
-#[derive(Debug, PartialEq, Eq)]
-pub struct TextAttributes<'a> {
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct TextAttributes {
     /// The start index of the affected range of message text
     pub start: usize,
     /// The end index of the affected range of message text
     pub end: usize,
     /// The effects applied to the specified range
-    pub effect: TextEffect<'a>,
+    pub effects: Vec<TextEffect>,
 }
 
-impl<'a> TextAttributes<'a> {
-    pub fn new(start: usize, end: usize, effect: TextEffect<'a>) -> Self {
-        Self { start, end, effect }
+impl TextAttributes {
+    /// Creates a new [`TextAttributes`] with the specified start index, end index, and text effects.
+    #[must_use]
+    pub fn new(start: usize, end: usize, effects: Vec<TextEffect>) -> Self {
+        Self {
+            start,
+            end,
+            effects,
+        }
     }
 }
 
+// MARK: AttachmentMeta
 /// Representation of attachment metadata used for rendering message body in a conversation feed.
-#[derive(Debug, PartialEq, Default)]
-pub struct AttachmentMeta<'a> {
+#[derive(Debug, PartialEq, Default, Clone)]
+pub struct AttachmentMeta {
     /// GUID of the attachment in the `attachment` table
-    pub guid: Option<&'a str>,
+    pub guid: Option<String>,
     /// The transcription, if the attachment was an [audio message](https://support.apple.com/guide/iphone/send-and-receive-audio-messages-iph2e42d3117/ios) sent from or received on a [supported platform](https://www.apple.com/ios/feature-availability/#messages-audio-message-transcription).
-    pub transcription: Option<&'a str>,
+    pub transcription: Option<String>,
     /// The height of the attachment in points
-    pub height: Option<&'a f64>,
+    pub height: Option<f64>,
     /// The width of the attachment in points
-    pub width: Option<&'a f64>,
+    pub width: Option<f64>,
     /// The attachment's original filename
-    pub name: Option<&'a str>,
+    pub name: Option<String>,
 }
 
-impl<'a> AttachmentMeta<'a> {
-    /// Given a slice of parsed [`typedstream`](crate::util::typedstream) data, populate the attachment's metadata fields.
-    ///
-    /// # Example
-    /// ```
-    /// use imessage_database::util::typedstream::models::{Archivable, Class, OutputData};
-    /// use imessage_database::tables::messages::models::AttachmentMeta;
-    ///
-    /// // Sample components
-    /// let components = vec![
-    ///    Archivable::Object(
-    ///        Class {
-    ///            name: "NSString".to_string(),
-    ///            version: 1,
-    ///        },
-    ///        vec![OutputData::String(
-    ///            "__kIMFileTransferGUIDAttributeName".to_string(),
-    ///        )],
-    ///    ),
-    ///    Archivable::Object(
-    ///        Class {
-    ///            name: "NSString".to_string(),
-    ///            version: 1,
-    ///        },
-    ///        vec![OutputData::String(
-    ///            "4C339597-EBBB-4978-9B87-521C0471A848".to_string(),
-    ///        )],
-    ///    ),
-    /// ];
-    /// let meta = AttachmentMeta::from_components(&components);
-    /// ```
-    pub fn from_components(components: &'a [Archivable]) -> Option<Self> {
-        let mut guid = None;
-        let mut transcription = None;
-        let mut height = None;
-        let mut width = None;
-        let mut name = None;
+impl AttachmentMeta {
+    /// Populates the attachment metadata fields from a typedstream property iterator.
+    #[must_use]
+    pub(crate) fn from_components<'a>(
+        first_key: &str,
+        components: &'a mut PropertyIterator<'a, 'a>,
+    ) -> Self {
+        let mut meta = Self::default();
 
-        for (idx, key) in components.iter().enumerate() {
-            if let Some(key_name) = key.as_nsstring() {
-                match key_name {
-                    "__kIMFileTransferGUIDAttributeName" => {
-                        guid = components.get(idx + 1)?.as_nsstring()
-                    }
-                    "IMAudioTranscription" => {
-                        transcription = components.get(idx + 1)?.as_nsstring()
-                    }
-                    "__kIMInlineMediaHeightAttributeName" => {
-                        height = components.get(idx + 1)?.as_nsnumber_float()
-                    }
-                    "__kIMInlineMediaWidthAttributeName" => {
-                        width = components.get(idx + 1)?.as_nsnumber_float()
-                    }
-                    "__kIMFilenameAttributeName" => name = components.get(idx + 1)?.as_nsstring(),
-                    _ => {}
-                }
+        if let Some(mut prop) = components.next() {
+            meta.set_from_key_value(first_key, &mut prop);
+        }
+
+        while let Some(mut key) = components.next() {
+            if let Some(key_name) = as_nsstring(&mut key)
+                && let Some(mut value) = components.next()
+            {
+                meta.set_from_key_value(key_name, &mut value);
             }
         }
 
-        Some(Self {
-            guid,
-            transcription,
-            height,
-            width,
-            name,
-        })
+        meta
+    }
+
+    fn set_from_key_value<'a>(&'a mut self, key: &'a str, value: &'a mut Property<'a, 'a>) {
+        match key {
+            "__kIMFileTransferGUIDAttributeName" => {
+                self.guid = as_nsstring(value).map(String::from);
+            }
+            "IMAudioTranscription" => self.transcription = as_nsstring(value).map(String::from),
+            "__kIMInlineMediaHeightAttributeName" => self.height = as_float(value),
+            "__kIMInlineMediaWidthAttributeName" => self.width = as_float(value),
+            "__kIMFilenameAttributeName" => self.name = as_nsstring(value).map(String::from),
+            _ => {}
+        }
     }
 }
 
+// MARK: SharedLocation
+/// Direction of a legacy shared-location event (`item_type == 4` with
+/// `group_action_type == 0`). The two cases are mutually exclusive: the
+/// underlying `share_status` bool distinguishes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharedLocation {
+    /// The sender began sharing their location.
+    Started,
+    /// The sender stopped sharing their location.
+    Stopped,
+}
+
+// MARK: GroupAction
 /// Represents different types of group message actions that can occur in a chat system
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum GroupAction<'a> {
     /// A new participant has been added to the group
     ParticipantAdded(i32),
@@ -209,23 +204,36 @@ pub enum GroupAction<'a> {
     GroupIconChanged,
     /// The group icon/avatar has been removed, reverting to default
     GroupIconRemoved,
+    /// The chat background was changed
+    ChatBackgroundChanged,
+    /// The chat background was removed
+    ChatBackgroundRemoved,
+    /// A participant changed their phone number
+    PhoneNumberChanged(i32),
 }
 
 impl<'a> GroupAction<'a> {
-    /// Creates a new EventType based on the provided `item_type` and `group_action_type`
-    pub fn from_message(message: &'a Message) -> Option<Self> {
+    /// Creates a new `GroupAction` event type based on the provided message's item and group action data.
+    #[must_use]
+    pub(crate) fn from_message(message: &'a Message) -> Option<Self> {
         match (
             message.item_type,
             message.group_action_type,
             message.other_handle,
             &message.group_title,
         ) {
+            // If the handle_id of the message matches the other_handle, the sender changed their own phone number
+            (1, 0, Some(who), _) if message.handle_id == Some(who) => {
+                Some(Self::PhoneNumberChanged(who))
+            }
             (1, 0, Some(who), _) => Some(Self::ParticipantAdded(who)),
             (1, 1, Some(who), _) => Some(Self::ParticipantRemoved(who)),
             (2, _, _, Some(name)) => Some(Self::NameChange(name)),
             (3, 0, _, _) => Some(Self::ParticipantLeft),
             (3, 1, _, _) => Some(Self::GroupIconChanged),
             (3, 2, _, _) => Some(Self::GroupIconRemoved),
+            (3, 4, _, _) => Some(Self::ChatBackgroundChanged),
+            (3, 6, _, _) => Some(Self::ChatBackgroundRemoved),
             _ => None,
         }
     }

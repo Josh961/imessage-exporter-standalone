@@ -1,0 +1,29 @@
+{%- match variant -%}
+{%- when AttachmentVariant::Image -%}
+<img src="{{ embed_path }}" {%- if lazy %} loading="lazy" {%- endif %}>
+{%- when AttachmentVariant::Video { media_type } -%}
+<video controls>
+    <source src="{{ embed_path }}" type="{{ media_type }}">
+    <source src="{{ embed_path }}">
+</video>
+{%- when AttachmentVariant::Audio { media_type } -%}
+<audio controls src="{{ embed_path }}" type="{{ media_type }}"> </audio>
+{%- when AttachmentVariant::AudioTranscription { media_type, transcription } -%}
+<div>
+    <audio controls src="{{ embed_path }}" type="{{ media_type }}"> </audio>
+</div>
+<hr>
+<span class="transcription">Transcription: {{ transcription }}</span>
+{%- when AttachmentVariant::Download { filename, file_size } -%}
+<a href="{{ embed_path }}">Click to download {{ filename }} ({{ file_size }})</a>
+{%- when AttachmentVariant::UnknownFolder { filename, file_size } -%}
+<p>
+    Folder: <i>{{ filename }}</i> ({{ file_size }})
+    <a href="{{ embed_path }}">Click to open</a>
+</p>
+{%- when AttachmentVariant::UnknownOther { file_size } -%}
+<p>Unknown attachment type: {{ embed_path }}</p>
+<a href="{{ embed_path }}">Download ({{ file_size }})</a>
+{%- when AttachmentVariant::Other { media_type } -%}
+<p>Unable to embed {{ media_type }} attachments: {{ embed_path }}</p>
+{%- endmatch -%}

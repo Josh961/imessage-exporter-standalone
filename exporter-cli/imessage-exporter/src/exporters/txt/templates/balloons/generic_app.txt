@@ -1,0 +1,8 @@
+{% if !name.is_empty() %}{{ name }} message:
+{% endif %}{% if let Some(title) = title.get() %}{{ title }}
+{% endif %}{% if let Some(subtitle) = subtitle.get() %}{{ subtitle }}
+{% endif %}{% if let Some(caption) = caption.get() %}{{ caption }}
+{% endif %}{% if let Some(subcaption) = subcaption.get() %}{{ subcaption }}
+{% endif %}{% if let Some(trailing_caption) = trailing_caption.get() %}{{ trailing_caption }}
+{% endif %}{% if let Some(trailing_subcaption) = trailing_subcaption.get() %}{{ trailing_subcaption }}
+{% endif %}

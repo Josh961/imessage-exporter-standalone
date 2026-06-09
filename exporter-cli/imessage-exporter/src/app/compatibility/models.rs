@@ -158,6 +158,48 @@ impl Display for VideoConverter {
     }
 }
 
+/// Define supported hardware-based H.264 encoders
+#[derive(Debug, PartialEq, Eq)]
+pub enum HardwareEncoder {
+    /// NVIDIA GPU-accelerated H.264 encoder (`NVENC`)
+    Nvenc,
+    /// Intel Quick Sync Video H.264 encoder (`QSV`)
+    Qsv,
+    /// Apple `VideoToolbox` H.264 encoder on macOS
+    VideoToolbox,
+}
+
+impl HardwareEncoder {
+    /// Detect best available hardware encoder in priority order
+    pub fn detect() -> Option<Self> {
+        if let Ok(output) = Command::new("ffmpeg")
+            .args(["-hide_banner", "-encoders"])
+            .output()
+        {
+            let out = String::from_utf8_lossy(&output.stdout);
+            if out.contains("h264_nvenc") {
+                return Some(Self::Nvenc);
+            }
+            if out.contains("h264_qsv") {
+                return Some(Self::Qsv);
+            }
+            if out.contains("h264_videotoolbox") {
+                return Some(Self::VideoToolbox);
+            }
+        }
+        None
+    }
+
+    /// The name used by ffmpeg for this encoder
+    pub fn codec_name(&self) -> &'static str {
+        match self {
+            HardwareEncoder::Nvenc => "h264_nvenc",
+            HardwareEncoder::Qsv => "h264_qsv",
+            HardwareEncoder::VideoToolbox => "h264_videotoolbox",
+        }
+    }
+}
+
 /// Determine if a shell program exists on the system
 #[cfg(not(target_family = "windows"))]
 fn exists(name: &str) -> bool {

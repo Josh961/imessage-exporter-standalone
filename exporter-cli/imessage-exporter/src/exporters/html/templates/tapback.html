@@ -1,0 +1,6 @@
+{%- match kind -%}
+{%- when TapbackKind::Reaction { tapback, who } -%}<span class="tapback"><b>{{ tapback }}</b> by {{ who }}</span>
+{%- when TapbackKind::Sticker { payload, who } -%}{{ payload|safe }}<div class="sticker_tapback">&nbsp;by {{ who -}}
+</div>
+{%- when TapbackKind::StickerMissing { who } -%}<span class="tapback">Sticker from {{ who }} not found!</span>
+{%- endmatch -%}

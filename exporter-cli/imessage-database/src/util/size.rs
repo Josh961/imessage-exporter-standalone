@@ -1,6 +1,6 @@
 /*!
- Contains logic for creating human-readable file size strings.
- */
+Contains logic for creating human-readable file size strings.
+*/
 
 const DIVISOR: f64 = 1024.;
 const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
@@ -15,6 +15,7 @@ const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
 /// let size: String = format_file_size(5612000);
 /// println!("{size}"); // 5.35 MB
 /// ```
+#[must_use]
 pub fn format_file_size(total_bytes: u64) -> String {
     let mut index: usize = 0;
     let mut bytes = total_bytes as f64;
@@ -37,25 +38,25 @@ mod tests {
 
     #[test]
     fn can_get_file_size_kb() {
-        let expected = format_file_size(2300);
-        assert_eq!(expected, String::from("2.25 KB"));
+        let actual = format_file_size(2300);
+        assert_eq!(actual, String::from("2.25 KB"));
     }
 
     #[test]
     fn can_get_file_size_mb() {
-        let expected = format_file_size(5612000);
-        assert_eq!(expected, String::from("5.35 MB"));
+        let actual = format_file_size(5612000);
+        assert_eq!(actual, String::from("5.35 MB"));
     }
 
     #[test]
     fn can_get_file_size_gb() {
-        let expected = format_file_size(9234712394);
-        assert_eq!(expected, String::from("8.60 GB"));
+        let actual = format_file_size(9234712394);
+        assert_eq!(actual, String::from("8.60 GB"));
     }
 
     #[test]
     fn can_get_file_size_cap() {
-        let expected = format_file_size(u64::MAX);
-        assert_eq!(expected, String::from("16777216.00 TB"));
+        let actual = format_file_size(u64::MAX);
+        assert_eq!(actual, String::from("16777216.00 TB"));
     }
 }

@@ -16,6 +16,30 @@ export async function withCargoPackageVersions(scriptDir, version, callback) {
   const snapshots = new Map(
     cargoFiles.filter(fs.existsSync).map((file) => [file, fs.readFileSync(file, 'utf8')])
   );
+  let restored = false;
+
+  const restoreSnapshots = () => {
+    if (restored) {
+      return;
+    }
+    restored = true;
+    for (const [file, content] of snapshots.entries()) {
+      fs.writeFileSync(file, content);
+    }
+  };
+
+  const signalHandlers = new Map();
+  for (const [signal, exitCode] of [
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ]) {
+    const handler = () => {
+      restoreSnapshots();
+      process.exit(exitCode);
+    };
+    process.once(signal, handler);
+    signalHandlers.set(signal, handler);
+  }
 
   try {
     for (const file of cargoFiles.filter((file) => file.endsWith('Cargo.toml'))) {
@@ -31,8 +55,9 @@ export async function withCargoPackageVersions(scriptDir, version, callback) {
     }
     await callback();
   } finally {
-    for (const [file, content] of snapshots.entries()) {
-      fs.writeFileSync(file, content);
+    for (const [signal, handler] of signalHandlers.entries()) {
+      process.off(signal, handler);
     }
+    restoreSnapshots();
   }
 }

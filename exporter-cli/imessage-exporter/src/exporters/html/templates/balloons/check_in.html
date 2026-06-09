@@ -1,0 +1,7 @@
+<div class="app_header">
+    <div class="name">{{ name }}</div>
+    {%- if let Some(ldtext) = ldtext.get() -%}<div class="ldtext">{{ ldtext }}</div>{%- endif -%}
+</div>
+{%- if let Some(footer) = footer -%}<div class="app_footer">
+    <div class="caption">{{ footer }}</div>
+</div>{%- endif -%}

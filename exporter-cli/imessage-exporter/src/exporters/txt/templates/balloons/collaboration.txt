@@ -1,0 +1,4 @@
+{% if let Some(name) = name.get() %}{{ name }}{% endif %}{% if has_label %} message:
+{% endif %}{% if let Some(title) = title.get() %}{{ title }}
+{% endif %}{% if let Some(url) = url.get() %}{{ url }}
+{% endif %}

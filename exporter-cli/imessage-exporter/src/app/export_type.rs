@@ -15,8 +15,8 @@ pub enum ExportType {
 
 impl ExportType {
     /// Given user's input, return a variant if the input matches one
-    pub fn from_cli(platform: &str) -> Option<Self> {
-        match platform.to_lowercase().as_str() {
+    pub fn from_cli(format: &str) -> Option<Self> {
+        match format.to_lowercase().as_str() {
             "txt" => Some(Self::Txt),
             "html" => Some(Self::Html),
             _ => None,

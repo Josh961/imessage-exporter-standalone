@@ -15,6 +15,7 @@
 /// let bundle_id = "com.apple.messages.MSMessageExtensionBalloonPlugin:0000000000:com.apple.SafetyMonitorApp.SafetyMonitorMessages";
 /// let parsed = parse_balloon_bundle_id(Some(bundle_id)); // Some("com.apple.SafetyMonitorApp.SafetyMonitorMessages")
 /// ```
+#[must_use]
 pub fn parse_balloon_bundle_id(bundle_id: Option<&str>) -> Option<&str> {
     bundle_id.and_then(|id| {
         let mut parts = id.split(':');
@@ -57,7 +58,9 @@ mod tests {
     #[test]
     fn can_get_balloon_bundle_id_apple() {
         assert_eq!(
-            parse_balloon_bundle_id(Some("com.apple.messages.MSMessageExtensionBalloonPlugin:0000000000:com.apple.PassbookUIService.PeerPaymentMessagesExtension")),
+            parse_balloon_bundle_id(Some(
+                "com.apple.messages.MSMessageExtensionBalloonPlugin:0000000000:com.apple.PassbookUIService.PeerPaymentMessagesExtension"
+            )),
             Some("com.apple.PassbookUIService.PeerPaymentMessagesExtension")
         );
     }
@@ -65,7 +68,9 @@ mod tests {
     #[test]
     fn can_get_balloon_bundle_id_third_party() {
         assert_eq!(
-            parse_balloon_bundle_id(Some("com.apple.messages.MSMessageExtensionBalloonPlugin:QPU8QS3E62:com.contextoptional.OpenTable.Messages")),
+            parse_balloon_bundle_id(Some(
+                "com.apple.messages.MSMessageExtensionBalloonPlugin:QPU8QS3E62:com.contextoptional.OpenTable.Messages"
+            )),
             Some("com.contextoptional.OpenTable.Messages")
         );
     }

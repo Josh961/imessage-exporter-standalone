@@ -45,6 +45,10 @@ export function Step4Export() {
     } else {
       selectedContacts = [state.selectedContact.contact];
     }
+    const selectedChatIds = state.selectedContact.chatIds
+      ?.split(',')
+      .map((chatId) => chatId.trim())
+      .filter(Boolean);
 
     let maxPercentage = 0;
     const unsubscribe = window.electronAPI.onExportProgress((progressData) => {
@@ -61,6 +65,7 @@ export function Step4Export() {
         startDate: state.startDate,
         endDate: state.endDate || '',
         selectedContacts,
+        selectedChatIds,
         includeVideos: true, // Always include videos in simplified version
         debugMode,
         isFullExport: false,

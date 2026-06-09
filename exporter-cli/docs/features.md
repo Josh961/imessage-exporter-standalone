@@ -4,7 +4,17 @@ The library and binary crates aim to provide the most comprehensive and accurate
 
 ## Targeted Versions
 
-This tool targets the current latest public release for macOS and iMessage. It may work with older databases, but all features may not be available.
+This tool targets the current latest public release for Messages.app. It may work with older databases, but all features may not be available.
+
+## Supported data sources
+
+- Local macOS messages
+- Encrypted or unencrypted local iOS backups
+  - Unencrypted backups are resolved normally
+  - Encrypted backups are resolved with [crabapple](https://github.com/ReagentX/crabapple)
+- Jailbroken iOS filesystem data
+  - Uses `sms.db`, which follows the same schema as macOS `chat.db`
+  - Resolved as a macOS database with an alternate attachment root
 
 ## Supported Message Features
 
@@ -12,10 +22,12 @@ This tool targets the current latest public release for macOS and iMessage. It m
   - Correctly extracts time-zone corrected timestamps
   - Detects when a message was read and calculates the time until read for both parties
     - Humanizes display of time-until-read duration
-  - Parses `typedstream` message body data
+  - Parses `typedstream` message body data using [`crabstep`](https://github.com/ReagentX/crabstep)
   - Detects the service a message was sent from
     - In HTML exports, balloons are colored correctly for the service they were sent with
-    - Supports iMessage, SMS, MMS, and RCS
+    - Supports iMessage, SMS, MMS, RCS, and Satellite (iMessage Lite)
+  - Displays translated message content alongside the original text
+  - Resolves contact names from the Contacts database when available
 - Formatted Text
   - Parses formatted text ranges from `typedstream` message body data
   - Supports all iMessage text format ranges:
@@ -33,6 +45,7 @@ This tool targets the current latest public release for macOS and iMessage. It m
       - Edited messages received before Ventura display as normal messages without history
     - Unsent messages
       - No content, but are noted in context
+  - Recently deleted messages are recovered when available
 - Multi-part messages
   - iMessages can have multiple parts, denoted by ranges in `typedstream` message body data
   - Parts are displayed as
@@ -54,6 +67,7 @@ This tool targets the current latest public release for macOS and iMessage. It m
     - Animated Sticker `HEICS` (HEIC sequence) files convert to `GIF`
     - Video `MOV` files convert to `mp4`
     - Audio `CAF` files convert to `mp4`
+    - Audio `AMR` files convert to `mp4`
   - Attachments are displayed as
     - File paths in TXT exports
     - Embeds in HTML exports (including `<img>`, `<video>`, and `<audio>`)
@@ -74,8 +88,9 @@ This tool targets the current latest public release for macOS and iMessage. It m
   - For multi-part messages, stickers are placed under the correct message part
   - Sticker effects are annotated in all exports
   - Sticker tapbacks are also supported
+  - Genmoji are displayed with their prompt descriptions
 - Apple Pay
-  - Detects the transaction source, amount, and type
+  - Displays Apple Pay transaction (source, amount, type) messages
 - URL previews
   - Parses the `NSKeyedArchiver` payload to extract preview data
     - Extracts cached metadata for each URL
@@ -94,6 +109,7 @@ This tool targets the current latest public release for macOS and iMessage. It m
     - SharePlay/Facetime messages
     - Check In messages
     - Find My messages
+    - Polls and Votes
 - Handwritten Messages
   - Parses the protobuf payload to extract [handwritten](https://support.apple.com/en-my/guide/iphone/iph3d4cb79c9/ios) message data
     - Displayed as embedded `svg` in HTML exports
@@ -108,3 +124,10 @@ This tool targets the current latest public release for macOS and iMessage. It m
   - On startup:
     - Different handles that belong to the same person are combined
     - Chatrooms that contain identical contacts (i.e., duplicated handles) are combined
+    - Divergent chatrooms that map to the same conversation in the `chat_lookup` table are combined
+- Announcements
+  - Handles all types of chatroom announcements
+    - Group photo changes
+    - Chat participant modifications
+    - Phone number changes
+    - Chat background settings

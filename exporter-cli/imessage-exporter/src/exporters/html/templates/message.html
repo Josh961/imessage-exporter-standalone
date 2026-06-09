@@ -1,0 +1,38 @@
+<div class="message" {%- if anchor_id %} id="r-{{ guid }}" {%- endif %}>
+    <div class="{% if is_from_me %}sent {{ service }}{% else %}received{% endif %}">
+        <p>
+            <span class="timestamp">
+                <a title="Reveal in Messages app" href="sms://open?message-guid={{ guid }}">{{ date }}</a>
+                {{ read_after }}
+            </span>
+            {% if let Some(reply_anchor) = reply_anchor %}
+            {% match reply_anchor %}
+            {% when ReplyAnchorKind::InThread %}
+            <span class="reply_anchor"><a title="View in context" href="#r-{{ guid }}">⇲</a></span>
+            {% when ReplyAnchorKind::TopLevel %}
+            <span class="reply_anchor"><a title="View in thread" href="#{{ guid }}">⇱</a></span>
+            {% endmatch %}
+            {% endif %}
+            <span class="sender">{{ sender }}</span>
+        </p>
+        {% if is_deleted %}
+        <span class="deleted">This message was deleted from the conversation!</span>
+        {% endif %}
+        {% if let Some(subject) = subject %}
+        <p>Subject: <span class="subject">{{ subject }}</span></p>
+        {% endif %}
+        {% if let Some(shareplay) = shareplay %}
+        <span class="shareplay">{{ shareplay|safe }}</span>
+        {% endif %}
+        {% if let Some(shared_location) = shared_location %}
+        <span class="shared_location">{{ shared_location|safe }}</span>
+        {% endif %}
+        {% for part in parts %}
+        {{ part|safe }}
+        {% endfor %}
+        {% if trailing_reply_context %}
+        <span class="reply_context">This message responded to an earlier message.</span>
+        {% endif %}
+    </div>
+</div>
+{# trailing newline; askama strips one #}

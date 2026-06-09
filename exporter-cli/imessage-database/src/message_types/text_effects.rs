@@ -7,18 +7,18 @@
 /// Message text may contain any number of traditional styles or one animation.
 ///
 /// Read more about text styles [here](https://www.apple.com/newsroom/2024/06/ios-18-makes-iphone-more-personal-capable-and-intelligent-than-ever/).
-#[derive(Debug, PartialEq, Eq)]
-pub enum TextEffect<'a> {
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum TextEffect {
     /// Default, unstyled text
     Default,
     /// A [mentioned](https://support.apple.com/guide/messages/mention-a-person-icht306ee34b/mac) contact in the conversation
     ///
     /// The embedded data contains information about the mentioned contact.
-    Mention(&'a str),
+    Mention(String),
     /// A clickable link, i.e. `https://`, `tel:`, `mailto:`, and others
     ///
     /// The embedded data contains the url.
-    Link(&'a str),
+    Link(String),
     /// A one-time code, i.e. from a 2FA message
     OTP,
     /// Traditional formatting styles
@@ -38,20 +38,26 @@ pub enum TextEffect<'a> {
 /// Unit conversion text effect container
 ///
 /// Read more about unit conversions [here](https://www.macrumors.com/how-to/convert-currencies-temperatures-more-ios-16/).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Unit {
+    /// Currency conversion
     Currency,
+    /// Distance conversion
     Distance,
+    /// Temperature conversion
     Temperature,
+    /// Timezone conversion
     Timezone,
+    /// Volume conversion
     Volume,
+    /// Weight conversion
     Weight,
 }
 
 /// Traditional text effect container
 ///
 /// Read more about text styles [here](https://www.apple.com/newsroom/2024/06/ios-18-makes-iphone-more-personal-capable-and-intelligent-than-ever/).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Style {
     /// **Bold** styled text
     Bold,
@@ -64,11 +70,11 @@ pub enum Style {
 }
 
 /// Animated text effect container
-/// 
+///
 /// A message's [`typedstream`](crate::util::typedstream) contains an [`i64`] identifier under the key `__kIMTextEffectAttributeName`.
 ///
 /// Read more about text styles [here](https://www.apple.com/newsroom/2024/06/ios-18-makes-iphone-more-personal-capable-and-intelligent-than-ever/).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Animation {
     /// Denoted by an ID of `5`
     Big,
@@ -92,7 +98,7 @@ pub enum Animation {
 
 impl Animation {
     /// Get the animation from its ID given in a message's [`typedstream`](crate::util::typedstream) data, under the `__kIMTextEffectAttributeName` key.
-    /// 
+    ///
     /// # Example:
     ///
     /// ```
@@ -100,6 +106,7 @@ impl Animation {
     ///
     /// let animation = Animation::from_id(5); // Animation::Big
     /// ```
+    #[must_use]
     pub fn from_id(value: i64) -> Self {
         match value {
             // In order of appearance in the text effects menu

@@ -2,18 +2,22 @@
  This module represents common (but not all) columns in the `handle` table.
 */
 
-use rusqlite::{Connection, Error, Result, Row, Statement};
-use std::collections::{BTreeSet, HashMap};
+use rusqlite::{CachedStatement, Connection, Result, Row};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::{
     error::table::TableError,
-    tables::table::{Cacheable, Deduplicate, Diagnostic, Table, HANDLE, ME},
-    util::output::{done_processing, processing},
+    tables::{
+        diagnostic::HandleDiagnostic,
+        table::{Cacheable, HANDLE, ME, Table},
+    },
 };
 
+// MARK: Handle
 /// Represents a single row in the `handle` table.
 #[derive(Debug)]
 pub struct Handle {
+    /// The unique identifier for the handle in the database
     pub rowid: i32,
     /// Identifier for a contact, i.e. a phone number or email address
     pub id: String,
@@ -21,6 +25,7 @@ pub struct Handle {
     pub person_centric_id: Option<String>,
 }
 
+// MARK: Table
 impl Table for Handle {
     fn from_row(row: &Row) -> Result<Handle> {
         Ok(Handle {
@@ -30,19 +35,12 @@ impl Table for Handle {
         })
     }
 
-    fn get(db: &Connection) -> Result<Statement, TableError> {
-        db.prepare(&format!("SELECT * from {HANDLE}"))
-            .map_err(TableError::Handle)
-    }
-
-    fn extract(handle: Result<Result<Self, Error>, Error>) -> Result<Self, TableError> {
-        match handle {
-            Ok(Ok(handle)) => Ok(handle),
-            Err(why) | Ok(Err(why)) => Err(TableError::Handle(why)),
-        }
+    fn get(db: &'_ Connection) -> Result<CachedStatement<'_>, TableError> {
+        Ok(db.prepare_cached(&format!("SELECT * from {HANDLE}"))?)
     }
 }
 
+// MARK: Cache
 impl Cacheable for Handle {
     type K = i32;
     type V = String;
@@ -51,7 +49,7 @@ impl Cacheable for Handle {
     ///
     /// # Example:
     ///
-    /// ```
+    /// ```no_run
     /// use imessage_database::util::dirs::default_db_path;
     /// use imessage_database::tables::table::{Cacheable, get_connection};
     /// use imessage_database::tables::handle::Handle;
@@ -69,14 +67,9 @@ impl Cacheable for Handle {
         // Create query
         let mut statement = Handle::get(db)?;
 
-        // Execute query to build the Handles
-        let handles = statement
-            .query_map([], |row| Ok(Handle::from_row(row)))
-            .map_err(TableError::Handle)?;
-
         // Iterate over the handles and update the map
-        for handle in handles {
-            let contact = Handle::extract(handle)?;
+        for handle in Handle::rows(&mut statement, [])? {
+            let contact = handle?;
             map.insert(contact.rowid, contact.id);
         }
 
@@ -92,47 +85,45 @@ impl Cacheable for Handle {
     }
 }
 
-impl Deduplicate for Handle {
-    type T = String;
-
+// MARK: Dedupe
+impl Handle {
     /// Given the initial set of duplicated handles, deduplicate them
     ///
     /// This returns a new hashmap that maps the real handle ID to a new deduplicated unique handle ID
     /// that represents a single handle for all of the deduplicate handles.
     ///
     /// Assuming no new handles have been written to the database, deduplicated data is deterministic across runs.
-    /// 
+    ///
     /// # Example:
     ///
-    /// ```
+    /// ```no_run
     /// use imessage_database::util::dirs::default_db_path;
-    /// use imessage_database::tables::table::{Cacheable, Deduplicate, get_connection};
+    /// use imessage_database::tables::table::{Cacheable, get_connection};
     /// use imessage_database::tables::handle::Handle;
     ///
     /// let db_path = default_db_path();
     /// let conn = get_connection(&db_path).unwrap();
-    /// let chatrooms = Handle::cache(&conn).unwrap();
-    /// let deduped_chatrooms = Handle::dedupe(&chatrooms);
+    /// let handles = Handle::cache(&conn).unwrap();
+    /// let deduped_handles = Handle::dedupe(&handles);
     /// ```
-    fn dedupe(duplicated_data: &HashMap<i32, Self::T>) -> HashMap<i32, i32> {
+    pub fn dedupe(duplicated_data: &HashMap<i32, String>) -> HashMap<i32, i32> {
         let mut deduplicated_participants: HashMap<i32, i32> = HashMap::new();
-        let mut participant_to_unique_participant_id: HashMap<Self::T, i32> = HashMap::new();
+        let mut participant_to_unique_participant_id: HashMap<String, i32> = HashMap::new();
 
         // Build cache of each unique set of participants to a new identifier:
         let mut unique_participant_identifier = 0;
 
         // Iterate over the values in a deterministic order
-        let mut sorted_dupes: Vec<(&i32, &Self::T)> = duplicated_data.iter().collect();
-        sorted_dupes.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let mut sorted_dupes: Vec<(&i32, &String)> = duplicated_data.iter().collect();
+        sorted_dupes.sort_by_key(|(a, _)| *a);
 
         for (participant_id, participant) in sorted_dupes {
             if let Some(id) = participant_to_unique_participant_id.get(participant) {
-                deduplicated_participants.insert(participant_id.to_owned(), id.to_owned());
+                deduplicated_participants.insert(*participant_id, *id);
             } else {
                 participant_to_unique_participant_id
                     .insert(participant.to_owned(), unique_participant_identifier);
-                deduplicated_participants
-                    .insert(participant_id.to_owned(), unique_participant_identifier);
+                deduplicated_participants.insert(*participant_id, unique_participant_identifier);
                 unique_participant_identifier += 1;
             }
         }
@@ -140,56 +131,62 @@ impl Deduplicate for Handle {
     }
 }
 
-impl Diagnostic for Handle {
-    /// Emit diagnostic data for the Handles table
+// MARK: Diagnostic
+impl Handle {
+    /// Compute diagnostic data for the Handles table
     ///
-    /// Get the number of handles that are duplicated
-    ///
-    /// The `person_centric_id` is used to map handles that represent the
-    /// same contact across ids (numbers, emails, etc) and across
-    /// services (iMessage, Jabber, iChat, SMS, etc)
+    /// Counts the number of handles that are duplicated. The `person_centric_id`
+    /// is used to map handles that represent the same contact across ids (numbers,
+    /// emails, etc) and across services (iMessage, Jabber, iChat, SMS, etc).
     ///
     /// In some databases, `person_centric_id` may not be available.
     ///
     /// # Example:
     ///
-    /// ```
+    /// ```no_run
     /// use imessage_database::util::dirs::default_db_path;
-    /// use imessage_database::tables::table::{Diagnostic, get_connection};
+    /// use imessage_database::tables::table::get_connection;
     /// use imessage_database::tables::handle::Handle;
     ///
     /// let db_path = default_db_path();
     /// let conn = get_connection(&db_path).unwrap();
     /// Handle::run_diagnostic(&conn);
     /// ```
-    fn run_diagnostic(db: &Connection) -> Result<(), TableError> {
+    pub fn run_diagnostic(db: &Connection) -> Result<HandleDiagnostic, TableError> {
         let query = concat!(
             "SELECT COUNT(DISTINCT person_centric_id) ",
             "FROM handle ",
             "WHERE person_centric_id NOT NULL"
         );
 
-        if let Ok(mut rows) = db.prepare(query).map_err(TableError::Handle) {
-            processing();
+        let handles_with_multiple_ids = if let Ok(mut rows) = db.prepare(query) {
+            rows.query_row([], |r| r.get::<_, i64>(0))
+                .ok()
+                .and_then(|count| usize::try_from(count).ok())
+                .unwrap_or(0)
+        } else {
+            0
+        };
 
-            let count_dupes: Option<i32> = rows
-                .query_row([], |r| r.get(0))
-                .map_err(TableError::Handle)?;
+        // Cache all handles
+        let all_handles = Self::cache(db)?;
 
-            done_processing();
+        // Deduplicate handles
+        let unique_handles = Self::dedupe(&all_handles);
 
-            if let Some(dupes) = count_dupes {
-                if dupes > 0 {
-                    println!("Handle diagnostic data:");
-                    println!("    Contacts with more than one ID: {dupes}");
-                }
-            }
-        }
+        // Calculate total duplicated handles
+        let total_duplicated =
+            all_handles.len() - HashSet::<&i32>::from_iter(unique_handles.values()).len();
 
-        Ok(())
+        Ok(HandleDiagnostic {
+            total_handles: all_handles.len(),
+            handles_with_multiple_ids,
+            total_duplicated,
+        })
     }
 }
 
+// MARK: Impl
 impl Handle {
     /// The handles table does not have a lot of information and can have many duplicate values.
     ///
@@ -213,22 +210,15 @@ impl Handle {
 
         if let Ok(mut statement) = statement {
             // Cache the results of the query in memory
-            let contacts = statement
-                .query_map([], |row| {
-                    let person_centric_id: String = row.get(0)?;
-                    let rowid: i32 = row.get(1)?;
-                    let id: String = row.get(2)?;
-                    Ok((person_centric_id, rowid, id))
-                })
-                .map_err(TableError::Handle)?;
+            let contacts = statement.query_map([], |row| {
+                let person_centric_id: String = row.get(0)?;
+                let rowid: i32 = row.get(1)?;
+                let id: String = row.get(2)?;
+                Ok((person_centric_id, rowid, id))
+            })?;
 
             for contact in contacts {
-                match contact {
-                    Ok(tup) => {
-                        row_data.push(tup);
-                    }
-                    Err(why) => return Err(TableError::Handle(why)),
-                }
+                row_data.push(contact?);
             }
 
             // First pass: generate a map of each person_centric_id to its matching ids
@@ -248,7 +238,7 @@ impl Handle {
                 let (person_centric_id, rowid, _) = contact;
                 let data_to_insert = match person_to_id.get_mut(person_centric_id) {
                     Some(person) => person.iter().cloned().collect::<Vec<String>>().join(" "),
-                    None => panic!("Attempted to resolve contact with no person_centric_id!"),
+                    None => continue,
                 };
                 row_to_id.insert(rowid.to_owned(), data_to_insert);
             }
@@ -258,9 +248,10 @@ impl Handle {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
-    use crate::tables::{handle::Handle, table::Deduplicate};
+    use crate::tables::handle::Handle;
     use std::collections::{HashMap, HashSet};
 
     #[test]
@@ -315,9 +306,9 @@ mod tests {
             .into_iter()
             .collect::<Vec<(i32, i32)>>();
 
-        output_1.sort();
-        output_2.sort();
-        output_3.sort();
+        output_1.sort_unstable();
+        output_2.sort_unstable();
+        output_3.sort_unstable();
 
         assert_eq!(output_1, output_2);
         assert_eq!(output_1, output_3);

@@ -1,5 +1,5 @@
 /*!
-[Digital Touch](https://support.apple.com/guide/ipod-touch/send-a-digital-touch-effect-iph3fadba219/ios) messages are animated doodles, taps, fireballs, lips, heartbeats, and heartbreaks.
+[Digital Touch](https://support.apple.com/guide/ipod-touch/send-a-digital-touch-effect-iph3fadba219/ios) messages are animated sketches, taps, fireballs, kisses, and heartbeats.
 */
 
 pub use crate::message_types::digital_touch::{

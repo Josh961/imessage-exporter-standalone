@@ -1,0 +1,9 @@
+{{ timestamp }}
+{{ sender }}
+{% if is_deleted %}This message was deleted from the conversation!
+{% endif %}{% if let Some(subject) = subject %}{{ subject }}
+{% endif %}{% if let Some(shareplay) = shareplay %}{{ shareplay }}
+{% endif %}{% if let Some(shared_location) = shared_location %}{{ shared_location }}
+{% endif %}{% for part in parts %}{{ part|safe }}{% endfor %}{% if let RenderContext::TopLevel = context %}{% if is_reply %}This message responded to an earlier message.
+{% endif %}
+{% endif %}

@@ -1,0 +1,21 @@
+<hr>
+<div class="message_part">
+    {% match body -%}
+    {%- when PartBody::Empty -%}
+    {%- when PartBody::TextBubble { html } -%}<span class="bubble">{{ html|safe }}</span>
+    {% when PartBody::TextTranslated { translated, original } -%}<span class="bubble">{{ translated|safe }}</span>
+    <div class="translated"><span class="bubble">{{ original|safe }}</span></div>
+    {% when PartBody::TextEdited { html } -%}<div class="edited">{{ html|safe }}</div>
+    {% when PartBody::Attachment { html } -%}<div class="attachment">{{ html|safe }}</div>
+    {% when PartBody::AttachmentError { error } -%}<span class="attachment_error">Unable to locate attachment: {{
+        error|safe }}</span>
+    {% when PartBody::AttachmentMissing -%}<span class="attachment_error">Attachment does not exist!</span>
+    {% when PartBody::Sticker { html } -%}<div class="sticker">{{ html|safe }}</div>
+    {% when PartBody::App { html } -%}<div class="app">{{ html|safe }}</div>
+    {% when PartBody::AppError { html } -%}<div class="app_error">{{ html|safe }}</div>
+    {% when PartBody::Retracted { html } -%}<span class="unsent">{{ html|safe }}</span>
+    {% endmatch -%}
+</div>
+{% if let Some(expressive) = expressive %}<span class="expressive">{{ expressive }}</span>
+{% endif %}{% if let Some(tapbacks) = tapbacks %}{{
+tapbacks|safe }}{% endif %}{% if let Some(replies) = replies %}{{ replies|safe }}{% endif %}

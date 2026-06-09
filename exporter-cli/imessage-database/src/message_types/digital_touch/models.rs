@@ -10,6 +10,7 @@ use crate::message_types::digital_touch::digital_touch_proto::{
 use protobuf::Message;
 
 /// Converts a raw byte payload from the database into a [`DigitalTouch`].
+#[must_use]
 pub fn from_payload(payload: &[u8]) -> Option<DigitalTouch> {
     let msg = BaseMessage::parse_from_bytes(payload).ok()?;
 
@@ -18,7 +19,7 @@ pub fn from_payload(payload: &[u8]) -> Option<DigitalTouch> {
 
 #[cfg(test)]
 mod tests {
-    use crate::message_types::digital_touch::{from_payload, DigitalTouch};
+    use crate::message_types::digital_touch::{DigitalTouch, from_payload};
 
     use std::env::current_dir;
     use std::fs::File;
@@ -34,8 +35,8 @@ mod tests {
         let mut data = vec![];
         proto_data.read_to_end(&mut data).unwrap();
 
-        let expected = from_payload(&data);
-        assert_eq!(expected, Some(DigitalTouch::Tap));
+        let actual = from_payload(&data);
+        assert_eq!(actual, Some(DigitalTouch::Tap));
     }
 
     #[test]
@@ -48,8 +49,8 @@ mod tests {
         let mut data = vec![];
         proto_data.read_to_end(&mut data).unwrap();
 
-        let expected = from_payload(&data);
-        assert_eq!(expected, Some(DigitalTouch::Heartbeat));
+        let actual = from_payload(&data);
+        assert_eq!(actual, Some(DigitalTouch::Heartbeat));
     }
 
     #[test]
@@ -62,8 +63,8 @@ mod tests {
         let mut data = vec![];
         proto_data.read_to_end(&mut data).unwrap();
 
-        let expected = from_payload(&data);
-        assert_eq!(expected, Some(DigitalTouch::Heartbeat));
+        let actual = from_payload(&data);
+        assert_eq!(actual, Some(DigitalTouch::Heartbeat));
     }
 
     #[test]
@@ -76,8 +77,8 @@ mod tests {
         let mut data = vec![];
         proto_data.read_to_end(&mut data).unwrap();
 
-        let expected = from_payload(&data);
-        assert_eq!(expected, Some(DigitalTouch::Sketch));
+        let actual = from_payload(&data);
+        assert_eq!(actual, Some(DigitalTouch::Sketch));
     }
 
     #[test]
@@ -90,8 +91,8 @@ mod tests {
         let mut data = vec![];
         proto_data.read_to_end(&mut data).unwrap();
 
-        let expected = from_payload(&data);
-        assert_eq!(expected, Some(DigitalTouch::Kiss));
+        let actual = from_payload(&data);
+        assert_eq!(actual, Some(DigitalTouch::Kiss));
     }
 
     #[test]
@@ -104,7 +105,7 @@ mod tests {
         let mut data = vec![];
         proto_data.read_to_end(&mut data).unwrap();
 
-        let expected = from_payload(&data);
-        assert_eq!(expected, Some(DigitalTouch::Fireball));
+        let actual = from_payload(&data);
+        assert_eq!(actual, Some(DigitalTouch::Fireball));
     }
 }

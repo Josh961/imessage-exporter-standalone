@@ -46,16 +46,10 @@ The [releases page](https://github.com/ReagentX/imessage-exporter/releases) prov
 ```txt
 -d, --diagnostics
         Print diagnostic information and exit
-
--n, --list-contacts
-        List all contacts and group chats with message counts and latest dates
-        Shows total number of DMs and group chats
-        For each DM: shows phone/email, message count, and last message date
-        For each group: shows name, message count, last message date, and participant list
-
+        
 -f, --format <txt, html>
         Specify a single file format to export messages into
-
+        
 -c, --copy-method <clone, basic, full, disabled>
         Specify an optional method to use when copying message attachments
         `clone` will copy all files without converting anything
@@ -64,64 +58,79 @@ The [releases page](https://github.com/ReagentX/imessage-exporter/releases) prov
         If omitted, the default is `disabled`
         ImageMagick is required to convert images on non-macOS platforms
         ffmpeg is required to convert audio on non-macOS platforms and video on all platforms
-
+        
 -p, --db-path <path/to/source>
         Specify an optional custom path for the iMessage database location
         For macOS, specify a path to a `chat.db` file
-        For iOS, specify a path to the root of an unencrypted backup directory
+        For iOS, specify a path to the root of a device backup directory
+        If the iOS backup is encrypted, --cleartext-password can be passed or you will be prompted for the password
         If omitted, the default directory is ~/Library/Messages/chat.db
-
--r, --attachment-root <path/to/attachments>
-        Specify an optional custom path to look for attachments in (macOS only)
+        
+-r, --attachment-root <path/to/messages/root>
+        Specify an optional custom path to look for attachment data in
         Only use this if attachments are stored separately from the database's default location
-        The default location is ~/Library/Messages/Attachments
-
+        The provided path should be absolute
+        This option affects both the `Attachments` and `StickerCache` directories
+        Also works with jailbroken iOS sms.db databases (use `--platform macOS`)
+        Has no effect on iOS backups
+        The default location is ~/Library/Messages
+        
 -a, --platform <macOS, iOS>
         Specify the platform the database was created on
         If omitted, the platform type is determined automatically
-
+        
 -o, --export-path <path/to/save/files>
         Specify an optional custom directory for outputting exported data
         If omitted, the default directory is ~/imessage_export
-
+        
 -s, --start-date <YYYY-MM-DD>
         The start date filter
         Only messages sent on or after this date will be included
-
+        
 -e, --end-date <YYYY-MM-DD>
         The end date filter
         Only messages sent before this date will be included
-
+        
 -l, --no-lazy
         Do not include `loading="lazy"` in HTML export `img` tags
         This will make pages load slower but PDF generation work
-
+        
 -m, --custom-name <custom-name>
         Specify an optional custom name for the database owner's messages in exports
         Conflicts with --use-caller-id
-
+        
 -i, --use-caller-id
         Use the database owner's caller ID in exports instead of "Me"
         Conflicts with --custom-name
-
+        
 -b, --ignore-disk-warning
         Bypass the disk space check when exporting data
         By default, exports will not run if there is not enough free disk space
-
+        
 -t, --conversation-filter <filter>
-        Filter exported conversations by contact numbers or emails
-        For a single number, exports just that DM conversation
-        For multiple numbers in one group (comma-separated), exports the group chat with exactly those participants
-        For multiple groups, separate them with semicolons
-        Example for one DM: `-t 5558675309`
-        Example for one group: `-t 5558675309,5551234567,5559876543`
-        Example for multiple groups: `-t 5558675309,5551234567;5559876543,5552345678`
-
--v, --images-only
-        Only include image attachments in the export
-        Includes images, GIFs, and HEIC sequences
-        Skips videos, audio, and other file types
-
+        Filter exported conversations by contact names, numbers, or emails
+        To provide multiple filter criteria, use a comma-separated string
+        All conversations with the specified participants are exported, including group conversations
+        Example: `-t steve@apple.com,5558675309`
+        
+-x, --cleartext-password <password>
+        Optional password for encrypted iOS backups
+        This is only used when the source is an encrypted iOS backup directory
+        If omitted on an encrypted backup, you will be prompted for the password (recommended)
+        A password provided with this option is visible on screen, in the process table, and in your shell history
+        
+-n, --contacts-path <path>
+        Optional custom path for a macOS or iOS contacts database file
+        This should be resolved automatically, but can be manually provided
+        Handles from the messages table will be mapped to names in the provided database
+        Generally, one of `AddressBook-v22.abcddb` or `AddressBook.sqlitedb`
+        
+    --no-progress
+        Disable the on-screen progress bar regardless of context
+        By default, the progress bar is shown only when stderr is a terminal,
+        so headless invocations (CI, output redirected to a logfile) stay clean automatically.
+        Use this flag to suppress the bar even in an interactive terminal.
+        
 -h, --help
         Print help
 -V, --version
@@ -142,7 +151,7 @@ Export as `txt` and copy attachments in their original formats from the default 
 imessage-exporter -f txt -o output -c clone
 ```
 
-Export as `txt` from the an unencrypted iPhone backup located at `~/iphone_backup_latest` to a new folder in the current working directory called `backup_export`:
+Export as `txt` from an iPhone backup located at `~/iphone_backup_latest` to a new folder in the current working directory called `backup_export`:
 
 ```zsh
 imessage-exporter -f txt -p ~/iphone_backup_latest -a iOS -o backup_export
@@ -157,7 +166,7 @@ imessage-exporter -f html -c disabled -p /Volumes/external/chat.db -o /Volumes/e
 Export as `html` from `/Volumes/external/chat.db` to `/Volumes/external/export` with attachments in `/Volumes/external/Attachments`:
 
 ```zsh
-imessage-exporter -f html -c clone -p /Volumes/external/chat.db -r /Volumes/external/Attachments -o /Volumes/external/export
+imessage-exporter -f html -c clone -p /Volumes/external/chat.db -r /Volumes/external/Attachments -o /Volumes/external/export 
 ```
 
 Export messages from `2020-01-01` to `2020-12-31` as `txt` from the default macOS iMessage Database location to `~/export-2020`:
@@ -170,6 +179,12 @@ Export messages from a specific participant as `html` and copy attachments in th
 
 ```zsh
 imessage-exporter -f html -c clone -t "5558675309"
+```
+
+Export messages from a specific participant's name as `txt` and without attachments from the default iMessage Database location to your home directory:
+
+```zsh
+imessage-exporter -f txt -t "Steve Jobs"
 ```
 
 Export messages from multiple specific participants as `html` without attachments from the default iMessage Database location to your home directory:
@@ -202,6 +217,10 @@ imessage-exporter -f html -t "@"
 
 [ffmpeg](https://ffmpeg.org) is required to make exported audio more compatible on non-macOS platforms and exported video more compatible on all platforms.
 
+### Contacts
+
+`imessage-exporter` will automatically attempt to resolve handle details (email addresses and phone numbers) against contacts found either in the provided iOS backup or on the local macOS Address Book. Users can optionally pass in a path to an Address Book database, but this should generally not be necessary.
+
 ### HTML Exports
 
 In HTML exports in Safari, when referencing files in-place, you must permit Safari to read from the local file system in the `Develop > Developer Settings...` menu:
@@ -228,11 +247,11 @@ For example, to prevent messages from breaking across pages when printing:
 
 ```css
 .message {
-  break-inside: avoid;
+    break-inside: avoid;
 }
 ```
 
-The default styles can be viewed [here](/imessage-exporter/src/exporters/resources/style.css).
+The default styles can be viewed [here](src/exporters/html/resources/style.css).
 
 ### PDF Exports
 

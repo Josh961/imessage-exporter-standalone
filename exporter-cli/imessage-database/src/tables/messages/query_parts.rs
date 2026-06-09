@@ -12,7 +12,8 @@ use crate::tables::{
     table::{CHAT_MESSAGE_JOIN, MESSAGE, MESSAGE_ATTACHMENT_JOIN, RECENTLY_DELETED},
 };
 
-/// macOS Ventura+ and i0S 16+ schema, interpolated with required columns for performance
+// MARK: Queries
+/// macOS Ventura+ and iOS 16+ schema, interpolated with required columns for performance
 static IOS_16_NEWER_HEAD: LazyLock<String> = LazyLock::new(|| {
     format!("
 SELECT
@@ -63,7 +64,8 @@ ORDER BY
     m.date;
 ";
 
-/// Generate a SQL Query compatible with the macOS Ventura+ and i0S 16+ schema
+// MARK: Functions
+/// Generate a SQL Query compatible with the macOS Ventura+ and iOS 16+ schema
 pub(crate) fn ios_16_newer_query(filters: Option<&str>) -> String {
     format!(
         "{}{}{}",

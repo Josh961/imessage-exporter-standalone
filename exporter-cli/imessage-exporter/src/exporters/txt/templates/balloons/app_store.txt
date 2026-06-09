@@ -1,0 +1,6 @@
+{% if let Some(app_name) = app_name.get() %}{{ app_name }}
+{% endif %}{% if let Some(description) = description.get() %}{{ description }}
+{% endif %}{% if let Some(platform) = platform.get() %}{{ platform }}
+{% endif %}{% if let Some(genre) = genre.get() %}{{ genre }}
+{% endif %}{% if let Some(url) = url.get() %}{{ url }}
+{% endif %}

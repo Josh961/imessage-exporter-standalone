@@ -1,5 +1,5 @@
 import archiver from 'archiver';
-import { exec, spawn } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import Store from 'electron-store';
 import { createWriteStream } from 'fs';
@@ -328,34 +328,37 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
   const chatDbPath = getChatDbPath(inputFolder);
 
   return new Promise((resolve) => {
-    exec(`"${executablePath}" -b -p "${chatDbPath}" -n`, (error, stdout, stderr) => {
+    execFile(executablePath, ['-b', '-p', chatDbPath, '-n'], (error, stdout, stderr) => {
       if (error) {
-        resolve({ success: false, error: error.message });
+        resolve({ success: false, error: stderr || error.message });
       } else {
         const contacts = stdout.split('\n')
           .filter(line => line.trim().length > 0)
           .map(line => {
             const parts = line.split('|');
             if (parts[0] === 'CONTACT') {
-              // CONTACT format: CONTACT|contact_id|message_count|first_date|last_date
-              const [type, contact, messageCount, firstMessageDate, lastMessageDate] = parts;
-              return {
-                type,
-                contact,
-                messageCount: parseInt(messageCount),
-                firstMessageDate,
-                lastMessageDate
-              };
-            } else if (parts[0] === 'GROUP') {
-              // GROUP format: GROUP|name|message_count|first_date|last_date|participants
-              const [type, contact, messageCount, firstMessageDate, lastMessageDate, participants] = parts;
+              // CONTACT format: CONTACT|contact_id|message_count|first_date|last_date|chat_ids|display_name
+              const [type, contact, messageCount, firstMessageDate, lastMessageDate, chatIds, displayName] = parts;
               return {
                 type,
                 contact,
                 messageCount: parseInt(messageCount),
                 firstMessageDate,
                 lastMessageDate,
-                participants
+                chatIds,
+                displayName: displayName || undefined
+              };
+            } else if (parts[0] === 'GROUP') {
+              // GROUP format: GROUP|name|message_count|first_date|last_date|participants|chat_ids
+              const [type, contact, messageCount, firstMessageDate, lastMessageDate, participants, chatIds] = parts;
+              return {
+                type,
+                contact,
+                messageCount: parseInt(messageCount),
+                firstMessageDate,
+                lastMessageDate,
+                participants,
+                chatIds
               };
             } else {
               // Skip any other lines (like Total DMs, Total Group Chats, etc.)
@@ -375,7 +378,7 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
 });
 
 ipcMain.handle('run-exporter', async (event, exportParams) => {
-  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, includeVideos = true, debugMode, isFullExport, isFilteredExport } = exportParams;
+  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, selectedChatIds, includeVideos = true, debugMode, isFullExport, isFilteredExport } = exportParams;
 
   try {
     const uniqueTempFolder = await createUniqueFolder(outputFolder);
@@ -390,7 +393,9 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
     if (startDate) params.push('-s', startDate);
     if (endDate) params.push('-e', endDate);
 
-    if (!isFullExport && !isFilteredExport && selectedContacts && selectedContacts.length > 0) {
+    if (!isFullExport && selectedChatIds && selectedChatIds.length > 0) {
+      params.push('--chat-ids', selectedChatIds.join(','));
+    } else if (!isFullExport && !isFilteredExport && selectedContacts && selectedContacts.length > 0) {
       const contactsString = selectedContacts.map(contact =>
         contact.includes(',') ? `"${contact}"` : contact
       ).join(';');

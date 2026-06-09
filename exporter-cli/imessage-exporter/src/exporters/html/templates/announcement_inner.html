@@ -1,0 +1,27 @@
+{%- match kind -%}
+{%- when AnnouncementBody::Action { timestamp, who, announcement, participant_name } -%}
+<div class="announcement">
+    <p><span class="timestamp">{{ timestamp }}</span> {{ who }} {% match announcement -%}
+        {%- when Announcement::AudioMessageKept -%}kept an audio message.
+        {%- when Announcement::FullyUnsent -%}unsent a message.
+        {%- when Announcement::Unknown(num) -%}performed unknown action {{ num }}.
+        {%- when Announcement::GroupAction(group) -%}
+        {%- match group -%}
+        {%- when GroupAction::ParticipantAdded(_) -%}
+        added {{ participant_name }} to the conversation.
+        {%- when GroupAction::ParticipantRemoved(_) -%}
+        removed {{ participant_name }} from the conversation.
+        {%- when GroupAction::NameChange(name) -%}named the conversation <b>{{ name }}</b>
+        {%- when GroupAction::ParticipantLeft -%}left the conversation.
+        {%- when GroupAction::GroupIconChanged -%}changed the group photo.
+        {%- when GroupAction::GroupIconRemoved -%}removed the group photo.
+        {%- when GroupAction::ChatBackgroundChanged -%}changed the chat background.
+        {%- when GroupAction::ChatBackgroundRemoved -%}removed the chat background.
+        {%- when GroupAction::PhoneNumberChanged(_) -%}changed their phone number.
+        {%- endmatch -%}
+        {%- endmatch %}</p>
+</div>
+{%- when AnnouncementBody::Unknown -%}<div class="announcement">
+    <p>Unable to format announcement!</p>
+</div>
+{%- endmatch -%}

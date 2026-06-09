@@ -47,7 +47,7 @@ export function Step2ContactSelection() {
   }, [state.contacts, searchTerm]);
 
   const handleContactClick = (contact: Contact) => {
-    if (state.selectedContact?.contact !== contact.contact) {
+    if (state.selectedContact?.chatIds !== contact.chatIds) {
       setStartDate('');
       setEndDate('');
     }
@@ -88,7 +88,7 @@ export function Step2ContactSelection() {
           <div className="divide-y divide-slate-100">
             {filteredContacts.map((contact, index) => (
               <button
-                key={`${contact.contact}-${index}`}
+                key={`${contact.chatIds || contact.contact}-${index}`}
                 onClick={() => handleContactClick(contact)}
                 onMouseEnter={(e) => {
                   if (contact.type === 'GROUP' && contact.participants) {

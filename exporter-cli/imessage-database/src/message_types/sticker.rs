@@ -2,7 +2,7 @@
 These are [sticker messages](https://support.apple.com/guide/iphone/send-stickers-iph37b0bfe7b/ios), either from the user's sticker library or sticker apps.
 */
 
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 
 use crate::util::bundle_id::parse_balloon_bundle_id;
 
@@ -32,15 +32,17 @@ impl StickerSource {
     /// # Example
     ///
     /// ```rust
-    /// use imessage_database::message_types::sticker::StickerSource;;
+    /// use imessage_database::message_types::sticker::StickerSource;
     ///
-    /// println!("{:?}", StickerSource::from_bundle_id("com.apple.messages.genmoji")); // StickerSource::Genmoji
+    /// println!("{:?}", StickerSource::from_bundle_id("com.apple.messages.genmoji")); // Some(Genmoji)
     /// ```
+    #[must_use]
     pub fn from_bundle_id(bundle_id: &str) -> Option<Self> {
         match parse_balloon_bundle_id(Some(bundle_id)) {
             Some("com.apple.messages.genmoji") => Some(StickerSource::Genmoji),
-            Some("com.apple.Animoji.StickersApp.MessagesExtension")
-            | Some("com.apple.Jellyfish.Animoji") => Some(StickerSource::Memoji),
+            Some(
+                "com.apple.Animoji.StickersApp.MessagesExtension" | "com.apple.Jellyfish.Animoji",
+            ) => Some(StickerSource::Memoji),
             Some("com.apple.Stickers.UserGenerated.MessagesExtension") => {
                 Some(StickerSource::UserGenerated)
             }
@@ -50,17 +52,43 @@ impl StickerSource {
     }
 }
 
-/// Represents different types of [sticker effects](https://www.macrumors.com/how-to/add-effects-to-stickers-in-messages/) that can be applied to sticker iMessage balloons.
+/// Format-agnostic description of a sticker's source, ready for rendering by
+/// callers. Produced by [`Attachment::get_sticker_decoration`](crate::tables::attachment::Attachment::get_sticker_decoration).
+///
+/// `None` from `get_sticker_decoration` means one of:
+/// - The sticker has no readable source (missing `STICKER_USER_INFO`,
+///   malformed plist, or unrecognized bundle id).
+/// - The source is [`StickerSource::Genmoji`] but no description is stored.
+/// - The source is [`StickerSource::UserGenerated`] but the effect blob is
+///   missing or unreadable.
 #[derive(Debug, PartialEq, Eq)]
+pub enum StickerDecoration {
+    /// A [`StickerSource::Genmoji`] with the user-supplied prompt.
+    GenmojiPrompt(String),
+    /// A [`StickerSource::Memoji`]; no further data.
+    Memoji,
+    /// A [`StickerSource::UserGenerated`] sticker with the parsed [`StickerEffect`].
+    Effect(StickerEffect),
+    /// A [`StickerSource::App`] sticker; the string is the resolved app name
+    /// or, if that lookup fails, the bundle id.
+    AppName(String),
+}
+
+/// Represents different types of [sticker effects](https://www.macrumors.com/how-to/add-effects-to-stickers-in-messages/) that can be applied to sticker iMessage balloons.
+#[derive(Debug, PartialEq, Eq, Default)]
 pub enum StickerEffect {
     /// Sticker sent with no effect
+    #[default]
     Normal,
     /// Internally referred to as `stroke`
     Outline,
+    /// Comic effect applied to the sticker
     Comic,
+    /// Puffy effect applied to the sticker
     Puffy,
     /// Internally referred to as `iridescent`
     Shiny,
+    /// Other unrecognized sticker effect
     Other(String),
 }
 
@@ -78,7 +106,7 @@ impl StickerEffect {
 }
 
 impl Display for StickerEffect {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             StickerEffect::Normal => write!(fmt, "Normal"),
             StickerEffect::Outline => write!(fmt, "Outline"),
@@ -90,21 +118,16 @@ impl Display for StickerEffect {
     }
 }
 
-impl Default for StickerEffect {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
-
 /// Parse the sticker effect type from the EXIF data of a HEIC blob
-pub fn get_sticker_effect(mut heic_data: Vec<u8>) -> StickerEffect {
+#[must_use]
+pub fn get_sticker_effect(mut heic_data: &[u8]) -> StickerEffect {
     // Find the start index and drain
     for idx in 0..heic_data.len() {
         if idx + STICKER_EFFECT_PREFIX.len() < heic_data.len() {
             let part = &heic_data[idx..idx + STICKER_EFFECT_PREFIX.len()];
             if part == STICKER_EFFECT_PREFIX {
                 // Remove the start pattern from the blob
-                heic_data.drain(..idx + STICKER_EFFECT_PREFIX.len());
+                heic_data = &heic_data[idx + STICKER_EFFECT_PREFIX.len()..];
                 break;
             }
         } else {
@@ -121,11 +144,11 @@ pub fn get_sticker_effect(mut heic_data: Vec<u8>) -> StickerEffect {
 
         if part == STICKER_EFFECT_SUFFIX {
             // Remove the end pattern from the string
-            heic_data.truncate(idx);
+            heic_data = &heic_data[..idx];
             break;
         }
     }
-    StickerEffect::from_exif(&String::from_utf8_lossy(&heic_data))
+    StickerEffect::from_exif(&String::from_utf8_lossy(heic_data))
 }
 
 #[cfg(test)]
@@ -134,7 +157,7 @@ mod tests {
     use std::fs::File;
     use std::io::Read;
 
-    use crate::message_types::sticker::{get_sticker_effect, StickerEffect};
+    use crate::message_types::sticker::{StickerEffect, get_sticker_effect};
 
     #[test]
     fn test_parse_sticker_normal() {
@@ -146,7 +169,7 @@ mod tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let effect = get_sticker_effect(bytes);
+        let effect = get_sticker_effect(&bytes);
 
         assert_eq!(effect, StickerEffect::Normal);
     }
@@ -161,7 +184,7 @@ mod tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let effect = get_sticker_effect(bytes);
+        let effect = get_sticker_effect(&bytes);
 
         assert_eq!(effect, StickerEffect::Outline);
     }
@@ -176,7 +199,7 @@ mod tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let effect = get_sticker_effect(bytes);
+        let effect = get_sticker_effect(&bytes);
 
         assert_eq!(effect, StickerEffect::Comic);
     }
@@ -191,7 +214,7 @@ mod tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let effect = get_sticker_effect(bytes);
+        let effect = get_sticker_effect(&bytes);
 
         assert_eq!(effect, StickerEffect::Puffy);
     }
@@ -206,7 +229,7 @@ mod tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let effect = get_sticker_effect(bytes);
+        let effect = get_sticker_effect(&bytes);
 
         assert_eq!(effect, StickerEffect::Shiny);
     }

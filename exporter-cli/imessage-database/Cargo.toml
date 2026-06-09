@@ -10,13 +10,18 @@ repository = "https://github.com/ReagentX/imessage-exporter"
 version = "0.0.0"
 
 [dependencies]
-chrono = "=0.4.40"
-plist = "=1.7.1"
-rusqlite = { version = "=0.34.0", features = ["blob", "bundled"] }
-sha1 = "=0.10.6"
+chrono = "=0.4.44"
+plist = "=1.9.0"
+rusqlite = { version = "=0.40.0", features = ["blob", "bundled"] }
+sha1 = "=0.11.0"
 protobuf = "=3.7.2"
 lzma-rs = "=0.3.0"
+crabstep = "=0.3.2"
+base64 = "=0.22.1"
+jzon = "=0.12.5"
+
+[features]
+proto-regen = ["dep:protobuf-codegen"]
 
 [build-dependencies]
-protobuf = "=3.7.2"
-protobuf-codegen = "=3.7.2"
+protobuf-codegen = { version = "=3.7.2", optional = true }

@@ -1,0 +1,2 @@
+{% for reply in replies %}{{ reply.body|safe }}
+{% endfor %}

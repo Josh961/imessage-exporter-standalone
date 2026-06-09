@@ -15,7 +15,7 @@ use crate::{
 pub struct Placemark<'a> {
     /// The name of the placemark
     pub name: Option<&'a str>,
-    /// The full address formatted associated with the placemark
+    /// The full formatted address associated with the placemark
     pub address: Option<&'a str>,
     /// The state or province associated with the placemark
     pub state: Option<&'a str>,
@@ -125,6 +125,7 @@ impl<'a> PlacemarkMessage<'a> {
     }
 
     /// Get the redirected URL from a URL message, falling back to the original URL, if it exists
+    #[must_use]
     pub fn get_url(&self) -> Option<&str> {
         self.url.or(self.original_url)
     }
@@ -155,8 +156,12 @@ mod tests {
 
         let balloon = PlacemarkMessage::from_map(&parsed).unwrap();
         let expected = PlacemarkMessage {
-            url: Some("https://maps.apple.com/?address=Cherry%20Cove,%20Avalon,%20CA%20%2090704,%20United%20States&ll=33.450858,-118.508212&q=Cherry%20Cove&t=m"),
-            original_url: Some("https://maps.apple.com/?address=Cherry%20Cove,%20Avalon,%20CA%20%2090704,%20United%20States&ll=33.450858,-118.508212&q=Cherry%20Cove&t=m"),
+            url: Some(
+                "https://maps.apple.com/?address=Cherry%20Cove,%20Avalon,%20CA%20%2090704,%20United%20States&ll=33.450858,-118.508212&q=Cherry%20Cove&t=m",
+            ),
+            original_url: Some(
+                "https://maps.apple.com/?address=Cherry%20Cove,%20Avalon,%20CA%20%2090704,%20United%20States&ll=33.450858,-118.508212&q=Cherry%20Cove&t=m",
+            ),
             place_name: Some("Cherry Cove Avalon CA 90704 United States"),
             placemark: Placemark {
                 name: Some("Cherry Cove"),

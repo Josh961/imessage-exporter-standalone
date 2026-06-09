@@ -51,6 +51,10 @@ jobs:
         working-directory: electron-app
         run: npm run build-exporter-mac
 
+      - name: Check bundled exporter binaries
+        working-directory: electron-app
+        run: npm run check-exporter-resources
+
       - name: Build renderer
         working-directory: electron-app
         run: npm run build
@@ -173,6 +177,10 @@ jobs:
       - name: Build bundled exporter binary
         working-directory: electron-app
         run: npm run build-exporter-win
+
+      - name: Check bundled exporter binary
+        working-directory: electron-app
+        run: npm run check-exporter-resources
 
       - name: Build renderer
         working-directory: electron-app

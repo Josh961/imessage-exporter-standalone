@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn can_get_valid_guid_empty() {
         let mut m = Message::blank();
-        m.associated_message_guid = Some("".to_string());
+        m.associated_message_guid = Some(String::new());
         assert_eq!(None, m.clean_associated_guid());
     }
 

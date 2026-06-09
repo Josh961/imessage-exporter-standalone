@@ -7,15 +7,35 @@ use std::fmt::{Display, Formatter, Result};
 /// Errors that can happen when parsing `handwriting` data
 #[derive(Debug)]
 pub enum HandwritingError {
+    /// Wraps an error returned by the protobuf parser.
     ProtobufError(protobuf::Error),
+    /// Indicates that the frame size was invalid.
     InvalidFrameSize(usize),
+    /// Wraps an error returned by the LZMA decompression.
     XZError(lzma_rs::error::Error),
+    /// Indicates that the compression method is unknown.
     CompressionUnknown,
+    /// Indicates that the strokes length is invalid.
     InvalidStrokesLength(usize, usize),
+    /// Indicates a numeric conversion error.
     ConversionError,
+    /// Indicates that the decompressed data was not set.
     DecompressedNotSet,
+    /// Indicates that the decompressed length is invalid.
     InvalidDecompressedLength(usize, usize),
+    /// Wraps an error that occurred during resizing of handwriting coordinates.
     ResizeError(std::num::TryFromIntError),
+}
+
+impl std::error::Error for HandwritingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            HandwritingError::ProtobufError(e) => Some(e),
+            HandwritingError::XZError(e) => Some(e),
+            HandwritingError::ResizeError(e) => Some(e),
+            _ => None,
+        }
+    }
 }
 
 impl Display for HandwritingError {

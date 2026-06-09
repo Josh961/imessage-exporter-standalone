@@ -1,0 +1,17 @@
+{%- match kind -%}
+{%- when Edit::Edited { rows } -%}
+<table>
+    {%- for row in rows -%}
+    <{% if row.is_last %}tfoot{% else %}tbody{% endif %}>
+        <tr>
+            <td><span class="timestamp">{{ row.timestamp }}</span></td>
+            <td>{{ row.text_html|safe }}</td>
+        </tr>
+    </{% if row.is_last %}tfoot{% else %}tbody{% endif %}>
+    {%- endfor -%}
+</table>
+{%- when Edit::Unsent { who, elapsed } -%}
+<span class="unsent">{{ who }} unsent this message part
+    {%- if let Some(elapsed) = elapsed %} {{ elapsed }} after sending{% endif -%}
+    !</span>
+{%- endmatch -%}

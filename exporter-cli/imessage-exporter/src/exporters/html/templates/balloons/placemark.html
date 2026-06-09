@@ -1,0 +1,25 @@
+{%- if let Some(url) = url.get() -%}<a href="{{ url }}">{%- endif -%}
+    <div class="app_header">
+        {%- if let Some(place_name) = place_name.get() -%}<div class="name">{{ place_name }}</div>
+        {%- else if let Some(url) = url.get() -%}<div class="name">{{ url }}</div>{%- endif -%}
+        {%- if let Some(name) = name.get() -%}<div class="image_title">{{ name }}</div>{%- endif -%}
+    </div>
+    {%- if self.has_footer() -%}
+    <div class="app_footer">
+        {%- if let Some(address) = address.get() -%}<div class="caption">{{ address }}</div>{%- endif -%}
+        {%- if let Some(postal_code) = postal_code.get() -%}<div class="trailing_caption">{{ postal_code }}</div>{%-
+        endif -%}
+        {%- if let Some(country) = country.get() -%}<div class="subcaption">{{ country }}</div>{%- endif -%}
+        {%- if let Some(sub_administrative_area) = sub_administrative_area.get() -%}<div class="trailing_subcaption">{{
+            sub_administrative_area }}</div>{%- endif -%}
+        {%- if let Some(street) = street.get() -%}<div class="street">{{ street }}</div>{%- endif -%}
+        {%- if let Some(city) = city.get() -%}<div class="city">{{ city }}</div>{%- endif -%}
+        {%- if let Some(state) = state.get() -%}<div class="state">{{ state }}</div>{%- endif -%}
+        {%- if let Some(sub_locality) = sub_locality.get() -%}<div class="sub_locality">{{ sub_locality }}</div>{%-
+        endif -%}
+        {%- if let Some(iso_country_code) = iso_country_code.get() -%}<div class="iso_country_code">{{ iso_country_code
+            }}</div>{%- endif -%}
+    </div>
+    {%- endif -%}
+    {%- if url.get().is_some() -%}
+</a>{%- endif -%}

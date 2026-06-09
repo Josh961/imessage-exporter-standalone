@@ -1,0 +1,7 @@
+{
+  "upstreamRepo": "https://github.com/ReagentX/imessage-exporter.git",
+  "tag": "4.1.0",
+  "commit": "d6a4b005e3c364c2e29d936557c2085e4ca7be5a",
+  "syncedAt": "2026-06-09T15:22:04.558Z",
+  "patchDirectory": "scripts/cli-sync/patches"
+}

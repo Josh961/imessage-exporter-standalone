@@ -1,0 +1,16 @@
+<div class="poll-container">
+    {%- for option in options -%}
+    <div class="poll-option">
+        <div class="option-header"><span>{{ option.text }}</span><span class="vote-count">{{ option.vote_count }}</span>
+        </div>
+        <div class="vote-bar-container">
+            {{ option.bar_html|safe }}
+        </div>
+        {%- if !option.voters.is_empty() -%}
+        <div class="voters-list">
+            {%- for voter in option.voters -%}<span class="voter">{{ voter }}</span>{%- endfor -%}
+        </div>
+        {%- endif -%}
+    </div>
+    {%- endfor -%}
+</div>

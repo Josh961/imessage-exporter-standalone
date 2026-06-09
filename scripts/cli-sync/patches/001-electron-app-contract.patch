@@ -1,0 +1,1304 @@
+diff --git a/imessage-exporter/Cargo.toml b/imessage-exporter/Cargo.toml
+index cb7bfe3..b0abe41 100644
+--- a/imessage-exporter/Cargo.toml
++++ b/imessage-exporter/Cargo.toml
+@@ -18,3 +18,5 @@ imessage-database = { path = "../imessage-database" }
+ rpassword = "=7.5.3"
+ rusqlite = { version = "=0.40.0", features = ["blob", "bundled"] }
+ crabapple = { version = "=0.4.7" }
++serde = { version = "1.0", features = ["derive"] }
++serde_json = "1.0"
+diff --git a/imessage-exporter/src/app/compatibility/attachment_manager.rs b/imessage-exporter/src/app/compatibility/attachment_manager.rs
+index 528a3f3..6a04a36 100644
+--- a/imessage-exporter/src/app/compatibility/attachment_manager.rs
++++ b/imessage-exporter/src/app/compatibility/attachment_manager.rs
+@@ -135,6 +135,14 @@ impl AttachmentManager {
+         config: &Config,
+     ) -> Result<(), ConversionError> {
+         if !matches!(self.mode, AttachmentManagerMode::Disabled) {
++            if config.options.images_only {
++                match attachment.mime_type() {
++                    MediaType::Image(_) => {}
++                    MediaType::Video(ext) if ext.eq_ignore_ascii_case("heics") => {}
++                    _ => return Ok(()),
++                }
++            }
++
+             // Resolve the path to the attachment
+             let Some(attachment_path) = attachment.resolved_attachment_path(
+                 &config.options.platform,
+diff --git a/imessage-exporter/src/app/options.rs b/imessage-exporter/src/app/options.rs
+index dadd406..865e9e2 100644
+--- a/imessage-exporter/src/app/options.rs
++++ b/imessage-exporter/src/app/options.rs
+@@ -2,7 +2,7 @@
+  Represents CLI options and validation logic.
+ */
+ 
+-use std::path::PathBuf;
++use std::{collections::BTreeSet, path::PathBuf};
+ 
+ use clap::{Arg, ArgAction, ArgMatches, Command, crate_version};
+ 
+@@ -40,9 +40,12 @@ pub const OPTION_PLATFORM: &str = "platform";
+ pub const OPTION_BYPASS_FREE_SPACE_CHECK: &str = "ignore-disk-warning";
+ pub const OPTION_USE_CALLER_ID: &str = "use-caller-id";
+ pub const OPTION_CONVERSATION_FILTER: &str = "conversation-filter";
++pub const OPTION_SELECTED_CHAT_IDS: &str = "chat-ids";
+ pub const OPTION_CLEARTEXT_PASSWORD: &str = "cleartext-password";
+ pub const OPTION_CUSTOM_CONTACTS_DB_PATH: &str = "contacts-path";
+ pub const OPTION_NO_PROGRESS: &str = "no-progress";
++pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
++pub const OPTION_IGNORE_VIDEOS: &str = "images-only";
+ 
+ // Other CLI Text
+ pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
+@@ -65,6 +68,8 @@ pub struct Options {
+     pub attachment_manager: AttachmentManager,
+     /// If true, emit diagnostic information to stdout
+     pub diagnostic: bool,
++    /// If true, list all contacts and group chats
++    pub list_contacts: bool,
+     /// The type of file we are exporting data to
+     pub export_type: Option<ExportType>,
+     /// Where the app will save exported data
+@@ -89,6 +94,8 @@ pub struct Options {
+     pub contacts_path: Option<PathBuf>,
+     /// If false, suppress the export progress bar regardless of TTY state
+     pub show_progress: bool,
++    /// If true, only include image attachments in the export
++    pub images_only: bool,
+ }
+ 
+ // Override Debug default impl to avoid printing the cleartext password if it's set
+@@ -99,6 +106,7 @@ impl std::fmt::Debug for Options {
+             .field("attachment_root", &self.attachment_root)
+             .field("attachment_manager", &self.attachment_manager)
+             .field("diagnostic", &self.diagnostic)
++            .field("list_contacts", &self.list_contacts)
+             .field("export_type", &self.export_type)
+             .field("export_path", &self.export_path)
+             .field("query_context", &self.query_context)
+@@ -115,6 +123,7 @@ impl std::fmt::Debug for Options {
+             )
+             .field("contacts_path", &self.contacts_path)
+             .field("show_progress", &self.show_progress)
++            .field("images_only", &self.images_only)
+             .finish()
+     }
+ }
+@@ -126,6 +135,7 @@ impl Options {
+         let attachment_root: Option<&String> = args.get_one(OPTION_ATTACHMENT_ROOT);
+         let attachment_manager_type: Option<&String> = args.get_one(OPTION_ATTACHMENT_MANAGER);
+         let diagnostic = args.get_flag(OPTION_DIAGNOSTIC);
++        let list_contacts = args.get_flag(OPTION_LIST_CONTACTS);
+         let export_file_type: Option<&String> = args.get_one(OPTION_EXPORT_TYPE);
+         let user_export_path: Option<&String> = args.get_one(OPTION_EXPORT_PATH);
+         let start_date: Option<&String> = args.get_one(OPTION_START_DATE);
+@@ -136,9 +146,11 @@ impl Options {
+         let platform_type: Option<&String> = args.get_one(OPTION_PLATFORM);
+         let ignore_disk_space = args.get_flag(OPTION_BYPASS_FREE_SPACE_CHECK);
+         let conversation_filter: Option<&String> = args.get_one(OPTION_CONVERSATION_FILTER);
++        let selected_chat_ids: Option<&String> = args.get_one(OPTION_SELECTED_CHAT_IDS);
+         let cleartext_password: Option<&String> = args.get_one(OPTION_CLEARTEXT_PASSWORD);
+         let contacts_path: Option<&String> = args.get_one(OPTION_CUSTOM_CONTACTS_DB_PATH);
+         let show_progress = !args.get_flag(OPTION_NO_PROGRESS);
++        let images_only = args.get_flag(OPTION_IGNORE_VIDEOS);
+ 
+         // Build the export type
+         let export_type: Option<ExportType> = match export_file_type {
+@@ -161,7 +173,9 @@ impl Options {
+                 (custom_name.is_some(), OPTION_CUSTOM_NAME),
+                 (use_caller_id, OPTION_USE_CALLER_ID),
+                 (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
++                (selected_chat_ids.is_some(), OPTION_SELECTED_CHAT_IDS),
+                 (!show_progress, OPTION_NO_PROGRESS),
++                (images_only, OPTION_IGNORE_VIDEOS),
+             ];
+             for (set, opt) in format_deps {
+                 if set {
+@@ -183,7 +197,9 @@ impl Options {
+             (use_caller_id, OPTION_USE_CALLER_ID),
+             (custom_name.is_some(), OPTION_CUSTOM_NAME),
+             (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
++            (selected_chat_ids.is_some(), OPTION_SELECTED_CHAT_IDS),
+             (!show_progress, OPTION_NO_PROGRESS),
++            (images_only, OPTION_IGNORE_VIDEOS),
+         ];
+         for (set, opt) in diag_conflicts {
+             if diagnostic && set {
+@@ -200,6 +216,12 @@ impl Options {
+             )));
+         }
+ 
++        if conversation_filter.is_some() && selected_chat_ids.is_some() {
++            return Err(RuntimeError::InvalidOptions(format!(
++                "--{OPTION_CONVERSATION_FILTER} and --{OPTION_SELECTED_CHAT_IDS} cannot be used together"
++            )));
++        }
++
+         // Build query context
+         let mut query_context = QueryContext::default();
+         if let Some(start) = start_date
+@@ -212,6 +234,9 @@ impl Options {
+         {
+             return Err(RuntimeError::InvalidOptions(format!("{why}")));
+         }
++        if let Some(chat_ids) = selected_chat_ids {
++            query_context.set_selected_chat_ids(parse_selected_chat_ids(chat_ids)?);
++        }
+ 
+         // We have to allocate a PathBuf here because it can be created from data owned by this function in the default state
+         let db_path = match user_path {
+@@ -290,6 +315,7 @@ impl Options {
+             attachment_root: attachment_root.cloned(),
+             attachment_manager: AttachmentManager::from(attachment_manager_mode),
+             diagnostic,
++            list_contacts,
+             export_type,
+             export_path,
+             query_context,
+@@ -302,6 +328,7 @@ impl Options {
+             cleartext_password: cleartext_password.cloned(),
+             contacts_path: contacts_path.cloned().map(PathBuf::from),
+             show_progress,
++            images_only,
+         })
+     }
+ 
+@@ -379,12 +406,20 @@ fn get_command() -> Command {
+             .action(ArgAction::SetTrue)
+             .display_order(0),
+         )
++        .arg(
++            Arg::new(OPTION_LIST_CONTACTS)
++                .short('n')
++                .long(OPTION_LIST_CONTACTS)
++                .help("List all contacts and group chats with message counts and latest dates")
++                .action(ArgAction::SetTrue)
++                .display_order(1),
++        )
+         .arg(
+             Arg::new(OPTION_EXPORT_TYPE)
+             .short('f')
+             .long(OPTION_EXPORT_TYPE)
+             .help("Specify a single file format to export messages into\n")
+-            .display_order(1)
++            .display_order(2)
+             .value_name(SUPPORTED_FILE_TYPES),
+         )
+         .arg(
+@@ -392,7 +427,7 @@ fn get_command() -> Command {
+             .short('c')
+             .long(OPTION_ATTACHMENT_MANAGER)
+             .help(format!("Specify an optional method to use when copying message attachments\n`clone` will copy all files without converting anything\n`basic` will copy all files and convert HEIC images to JPEG\n`full` will copy all files and convert HEIC files to JPEG, CAF to MP4, and MOV to MP4\nIf omitted, the default is `{}`\nImageMagick is required to convert images on non-macOS platforms\nffmpeg is required to convert audio on non-macOS platforms and video on all platforms\n", AttachmentManagerMode::default()))
+-            .display_order(2)
++            .display_order(3)
+             .value_name(SUPPORTED_ATTACHMENT_MANAGER_MODES),
+         )
+         .arg(
+@@ -400,7 +435,7 @@ fn get_command() -> Command {
+                 .short('p')
+                 .long(OPTION_DB_PATH)
+                 .help(format!("Specify an optional custom path for the iMessage database location\nFor macOS, specify a path to a `chat.db` file\nFor iOS, specify a path to the root of a device backup directory\nIf the iOS backup is encrypted, --{OPTION_CLEARTEXT_PASSWORD} can be passed or you will be prompted for the password\nIf omitted, the default directory is {}\n", default_db_path().display()))
+-                .display_order(3)
++                .display_order(4)
+                 .value_name("path/to/source"),
+         )
+         .arg(
+@@ -408,7 +443,7 @@ fn get_command() -> Command {
+                 .short('r')
+                 .long(OPTION_ATTACHMENT_ROOT)
+                 .help(format!("Specify an optional custom path to look for attachment data in\nOnly use this if attachments are stored separately from the database's default location\nThe provided path should be absolute\nThis option affects both the `Attachments` and `StickerCache` directories\nAlso works with jailbroken iOS sms.db databases (use `--platform macOS`)\nHas no effect on iOS backups\nThe default location is {}\n", DEFAULT_MESSAGES_ROOT.replacen('~', &home(), 1)))
+-                .display_order(4)
++                .display_order(5)
+                 .value_name("path/to/messages/root"),
+         )
+         .arg(
+@@ -416,7 +451,7 @@ fn get_command() -> Command {
+             .short('a')
+             .long(OPTION_PLATFORM)
+             .help("Specify the platform the database was created on\nIf omitted, the platform type is determined automatically\n")
+-            .display_order(5)
++            .display_order(6)
+             .value_name(SUPPORTED_PLATFORMS),
+         )
+         .arg(
+@@ -424,7 +459,7 @@ fn get_command() -> Command {
+                 .short('o')
+                 .long(OPTION_EXPORT_PATH)
+                 .help(format!("Specify an optional custom directory for outputting exported data\nIf omitted, the default directory is {}/{DEFAULT_OUTPUT_DIR}\n", home()))
+-                .display_order(6)
++                .display_order(7)
+                 .value_name("path/to/save/files"),
+         )
+         .arg(
+@@ -432,7 +467,7 @@ fn get_command() -> Command {
+                 .short('s')
+                 .long(OPTION_START_DATE)
+                 .help("The start date filter\nOnly messages sent on or after this date will be included\n")
+-                .display_order(7)
++                .display_order(8)
+                 .value_name("YYYY-MM-DD"),
+         )
+         .arg(
+@@ -440,7 +475,7 @@ fn get_command() -> Command {
+                 .short('e')
+                 .long(OPTION_END_DATE)
+                 .help("The end date filter\nOnly messages sent before this date will be included\n")
+-                .display_order(8)
++                .display_order(9)
+                 .value_name("YYYY-MM-DD"),
+         )
+         .arg(
+@@ -449,14 +484,14 @@ fn get_command() -> Command {
+                 .long(OPTION_DISABLE_LAZY_LOADING)
+                 .help("Do not include `loading=\"lazy\"` in HTML export `img` tags\nThis will make pages load slower but PDF generation work\n")
+                 .action(ArgAction::SetTrue)
+-                .display_order(9),
++                .display_order(10),
+         )
+         .arg(
+             Arg::new(OPTION_CUSTOM_NAME)
+                 .short('m')
+                 .long(OPTION_CUSTOM_NAME)
+                 .help(format!("Specify an optional custom name for the database owner's messages in exports\nConflicts with --{OPTION_USE_CALLER_ID}\n"))
+-                .display_order(10)
++                .display_order(11)
+         )
+         .arg(
+             Arg::new(OPTION_USE_CALLER_ID)
+@@ -464,7 +499,7 @@ fn get_command() -> Command {
+                 .long(OPTION_USE_CALLER_ID)
+                 .help(format!("Use the database owner's caller ID in exports instead of \"Me\"\nConflicts with --{OPTION_CUSTOM_NAME}\n"))
+                 .action(ArgAction::SetTrue)
+-                .display_order(11)
++                .display_order(12)
+         )
+         .arg(
+             Arg::new(OPTION_BYPASS_FREE_SPACE_CHECK)
+@@ -472,30 +507,36 @@ fn get_command() -> Command {
+                 .long(OPTION_BYPASS_FREE_SPACE_CHECK)
+                 .help("Bypass the disk space check when exporting data\nBy default, exports will not run if there is not enough free disk space\n")
+                 .action(ArgAction::SetTrue)
+-                .display_order(12)
++                .display_order(13)
+         )
+         .arg(
+             Arg::new(OPTION_CONVERSATION_FILTER)
+                 .short('t')
+                 .long(OPTION_CONVERSATION_FILTER)
+-                .help("Filter exported conversations by contact names, numbers, or emails\nTo provide multiple filter criteria, use a comma-separated string\nAll conversations with the specified participants are exported, including group conversations\nExample: `-t steve@apple.com,5558675309`\n")
+-                .display_order(13)
++                .help("Filter exported conversations by contact names, numbers, or emails\nFor a single contact, exports matching DM conversations\nFor multiple contacts in one group, use a comma-separated string\nFor multiple groups, separate them with semicolons\nExample: `-t steve@apple.com,5558675309`\n")
++                .display_order(14)
+                 .value_name("filter"),
+         )
++        .arg(
++            Arg::new(OPTION_SELECTED_CHAT_IDS)
++                .long(OPTION_SELECTED_CHAT_IDS)
++                .help("Filter exported conversations by exact chat ROWID values\nUse this for app-driven exports from --list-contacts output\n")
++                .display_order(15)
++                .value_name("ids"),
++        )
+         .arg(
+             Arg::new(OPTION_CLEARTEXT_PASSWORD)
+                 .short('x')
+                 .long(OPTION_CLEARTEXT_PASSWORD)
+                 .help("Optional password for encrypted iOS backups\nThis is only used when the source is an encrypted iOS backup directory\nIf omitted on an encrypted backup, you will be prompted for the password (recommended)\nA password provided with this option is visible on screen, in the process table, and in your shell history\n")
+-                .display_order(14)
++                .display_order(16)
+                 .value_name("password"),
+         )
+         .arg(
+             Arg::new(OPTION_CUSTOM_CONTACTS_DB_PATH)
+-                .short('n')
+                 .long(OPTION_CUSTOM_CONTACTS_DB_PATH)
+                 .help("Optional custom path for a macOS or iOS contacts database file\nThis should be resolved automatically, but can be manually provided\nHandles from the messages table will be mapped to names in the provided database\nGenerally, one of `AddressBook-v22.abcddb` or `AddressBook.sqlitedb`\n")
+-                .display_order(15)
++                .display_order(17)
+                 .value_name("path"),
+         )
+         .arg(
+@@ -503,8 +544,49 @@ fn get_command() -> Command {
+                 .long(OPTION_NO_PROGRESS)
+                 .help("Disable the on-screen progress bar regardless of context\nBy default, the progress bar is shown only when stderr is a terminal,\nso headless invocations (CI, output redirected to a logfile) stay clean automatically.\nUse this flag to suppress the bar even in an interactive terminal.\n")
+                 .action(ArgAction::SetTrue)
+-                .display_order(16),
++                .display_order(18),
+         )
++        .arg(
++            Arg::new(OPTION_IGNORE_VIDEOS)
++                .short('v')
++                .long(OPTION_IGNORE_VIDEOS)
++                .help("Only include image attachments in the export\nIncludes images, GIFs, and HEIC sequences\nSkips videos, audio, and other file types\n")
++                .action(ArgAction::SetTrue)
++                .display_order(19),
++        )
++}
++
++fn parse_selected_chat_ids(raw: &str) -> Result<BTreeSet<i32>, RuntimeError> {
++    let mut chat_ids = BTreeSet::new();
++
++    for token in raw.split(',') {
++        let token = token.trim();
++        if token.is_empty() {
++            continue;
++        }
++
++        let chat_id = token.parse::<i32>().map_err(|_| {
++            RuntimeError::InvalidOptions(format!(
++                "--{OPTION_SELECTED_CHAT_IDS} contains an invalid chat ID: {token}"
++            ))
++        })?;
++
++        if chat_id <= 0 {
++            return Err(RuntimeError::InvalidOptions(format!(
++                "--{OPTION_SELECTED_CHAT_IDS} values must be positive: {chat_id}"
++            )));
++        }
++
++        chat_ids.insert(chat_id);
++    }
++
++    if chat_ids.is_empty() {
++        return Err(RuntimeError::InvalidOptions(format!(
++            "--{OPTION_SELECTED_CHAT_IDS} requires at least one chat ID"
++        )));
++    }
++
++    Ok(chat_ids)
+ }
+ 
+ #[cfg(test)]
+@@ -521,6 +603,7 @@ impl Options {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::default(),
+             diagnostic: false,
++            list_contacts: false,
+             export_type: Some(export_type),
+             export_path: unique_test_dir("fake-options"),
+             query_context: QueryContext::default(),
+@@ -533,6 +616,7 @@ impl Options {
+             cleartext_password: None,
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         }
+     }
+ }
+@@ -544,6 +628,8 @@ pub fn from_command_line() -> ArgMatches {
+ 
+ #[cfg(test)]
+ mod arg_tests {
++    use std::collections::BTreeSet;
++
+     use imessage_database::util::{
+         dirs::default_db_path, platform::Platform, query_context::QueryContext,
+     };
+@@ -570,6 +656,7 @@ mod arg_tests {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+             diagnostic: true,
++            list_contacts: false,
+             export_type: None,
+             export_path: validate_path(None, None).unwrap(),
+             query_context: QueryContext::default(),
+@@ -582,6 +669,7 @@ mod arg_tests {
+             cleartext_password: None,
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         };
+ 
+         assert_eq!(actual, expected);
+@@ -653,6 +741,7 @@ mod arg_tests {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+             diagnostic: false,
++            list_contacts: false,
+             export_type: Some(ExportType::Html),
+             export_path: validate_path(Some(&dir_str), None).unwrap(),
+             query_context: QueryContext::default(),
+@@ -665,6 +754,7 @@ mod arg_tests {
+             cleartext_password: None,
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         };
+ 
+         assert_eq!(actual, expected);
+@@ -685,6 +775,7 @@ mod arg_tests {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+             diagnostic: false,
++            list_contacts: false,
+             export_type: Some(ExportType::Txt),
+             export_path: validate_path(None, None).unwrap(),
+             query_context: QueryContext::default(),
+@@ -697,6 +788,7 @@ mod arg_tests {
+             cleartext_password: None,
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         };
+ 
+         assert_eq!(actual, expected);
+@@ -766,6 +858,7 @@ mod arg_tests {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+             diagnostic: false,
++            list_contacts: false,
+             export_type: Some(ExportType::Txt),
+             export_path: validate_path(None, None).unwrap(),
+             query_context: QueryContext::default(),
+@@ -778,6 +871,7 @@ mod arg_tests {
+             cleartext_password: None,
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         };
+ 
+         assert_eq!(actual, expected);
+@@ -806,6 +900,7 @@ mod arg_tests {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+             diagnostic: false,
++            list_contacts: false,
+             export_type: Some(ExportType::Txt),
+             export_path: validate_path(None, None).unwrap(),
+             query_context: QueryContext::default(),
+@@ -818,6 +913,7 @@ mod arg_tests {
+             cleartext_password: Some("password".to_string()),
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         };
+ 
+         assert_eq!(actual, expected);
+@@ -862,6 +958,7 @@ mod arg_tests {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+             diagnostic: false,
++            list_contacts: false,
+             export_type: Some(ExportType::Txt),
+             export_path: validate_path(None, None).unwrap(),
+             query_context: QueryContext::default(),
+@@ -874,6 +971,7 @@ mod arg_tests {
+             cleartext_password: None,
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         };
+ 
+         assert_eq!(actual, expected);
+@@ -894,6 +992,7 @@ mod arg_tests {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+             diagnostic: false,
++            list_contacts: false,
+             export_type: Some(ExportType::Txt),
+             export_path: validate_path(None, None).unwrap(),
+             query_context: QueryContext::default(),
+@@ -906,6 +1005,7 @@ mod arg_tests {
+             cleartext_password: None,
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         };
+ 
+         assert_eq!(actual, expected);
+@@ -927,6 +1027,7 @@ mod arg_tests {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+             diagnostic: false,
++            list_contacts: false,
+             export_type: Some(ExportType::Txt),
+             export_path: validate_path(None, None).unwrap(),
+             query_context: QueryContext::default(),
+@@ -939,6 +1040,7 @@ mod arg_tests {
+             cleartext_password: None,
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         };
+ 
+         assert_eq!(actual, expected);
+@@ -959,6 +1061,7 @@ mod arg_tests {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Full),
+             diagnostic: false,
++            list_contacts: false,
+             export_type: Some(ExportType::Txt),
+             export_path: validate_path(None, None).unwrap(),
+             query_context: QueryContext::default(),
+@@ -971,6 +1074,7 @@ mod arg_tests {
+             cleartext_password: None,
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         };
+ 
+         assert_eq!(actual, expected);
+@@ -991,6 +1095,7 @@ mod arg_tests {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Clone),
+             diagnostic: false,
++            list_contacts: false,
+             export_type: Some(ExportType::Txt),
+             export_path: validate_path(None, None).unwrap(),
+             query_context: QueryContext::default(),
+@@ -1003,6 +1108,7 @@ mod arg_tests {
+             cleartext_password: None,
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         };
+ 
+         assert_eq!(actual, expected);
+@@ -1040,6 +1146,56 @@ mod arg_tests {
+         assert!(Options::from_args(&args).is_err());
+     }
+ 
++    #[test]
++    fn can_build_option_selected_chat_ids() {
++        let args = get_command().get_matches_from([
++            "imessage-exporter",
++            "-f",
++            "txt",
++            "--chat-ids",
++            "1, 2,3",
++        ]);
++        let actual = Options::from_args(&args).unwrap();
++
++        assert_eq!(
++            actual.query_context.selected_chat_ids,
++            Some(BTreeSet::from([1, 2, 3]))
++        );
++        assert!(actual.conversation_filter.is_none());
++    }
++
++    #[test]
++    fn cant_build_option_selected_chat_ids_no_export() {
++        let args = get_command().get_matches_from(["imessage-exporter", "--chat-ids", "1"]);
++        assert!(Options::from_args(&args).is_err());
++    }
++
++    #[test]
++    fn cant_build_option_selected_chat_ids_with_contact_filter() {
++        let args = get_command().get_matches_from([
++            "imessage-exporter",
++            "-f",
++            "txt",
++            "-t",
++            "steve@apple.com",
++            "--chat-ids",
++            "1",
++        ]);
++        assert!(Options::from_args(&args).is_err());
++    }
++
++    #[test]
++    fn cant_build_option_invalid_selected_chat_ids() {
++        let args = get_command().get_matches_from([
++            "imessage-exporter",
++            "-f",
++            "txt",
++            "--chat-ids",
++            "1,nope",
++        ]);
++        assert!(Options::from_args(&args).is_err());
++    }
++
+     #[test]
+     fn cant_build_option_no_lazy_without_format() {
+         let args = get_command().get_matches_from(["imessage-exporter", "-l"]);
+@@ -1065,6 +1221,7 @@ mod arg_tests {
+             attachment_root: None,
+             attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+             diagnostic: false,
++            list_contacts: false,
+             export_type: Some(ExportType::Txt),
+             export_path: validate_path(None, None).unwrap(),
+             query_context: QueryContext::default(),
+@@ -1077,6 +1234,7 @@ mod arg_tests {
+             cleartext_password: None,
+             contacts_path: None,
+             show_progress: true,
++            images_only: false,
+         };
+ 
+         assert_eq!(actual, expected);
+@@ -1090,7 +1248,32 @@ mod arg_tests {
+ 
+     #[test]
+     fn cant_build_option_invalid_contacts_path() {
+-        let args = get_command().get_matches_from(["imessage-exporter", "-n", "/does/not/exist"]);
++        let args = get_command().get_matches_from([
++            "imessage-exporter",
++            "--contacts-path",
++            "/does/not/exist",
++        ]);
++        assert!(Options::from_args(&args).is_err());
++    }
++
++    #[test]
++    fn can_build_option_list_contacts() {
++        let args = get_command().get_matches_from(["imessage-exporter", "-n"]);
++        let actual = Options::from_args(&args).unwrap();
++        assert!(actual.list_contacts);
++        assert!(actual.export_type.is_none());
++    }
++
++    #[test]
++    fn can_build_option_images_only_flag() {
++        let args = get_command().get_matches_from(["imessage-exporter", "-f", "txt", "-v"]);
++        let actual = Options::from_args(&args).unwrap();
++        assert!(actual.images_only);
++    }
++
++    #[test]
++    fn cant_build_option_images_only_without_format() {
++        let args = get_command().get_matches_from(["imessage-exporter", "-v"]);
+         assert!(Options::from_args(&args).is_err());
+     }
+ 
+diff --git a/imessage-exporter/src/app/progress.rs b/imessage-exporter/src/app/progress.rs
+index 577581d..9afb061 100644
+--- a/imessage-exporter/src/app/progress.rs
++++ b/imessage-exporter/src/app/progress.rs
+@@ -9,6 +9,8 @@ use std::{
+     time::Instant,
+ };
+ 
++use serde::{Deserialize, Serialize};
++
+ const BAR_WIDTH: usize = 20;
+ const BAR_FILL: char = '#';
+ const BAR_ARROW: char = '>';
+@@ -22,6 +24,18 @@ const HUMAN_COUNT_THRESHOLDS: [(u64, &str); 5] = [
+     (0, ""),                  // no suffix
+ ];
+ 
++#[derive(Debug, Clone, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct ProgressEvent {
++    pub event_type: String,
++    pub phase: String,
++    pub current: u64,
++    pub total: u64,
++    pub percentage: f32,
++    pub message: Option<String>,
++    pub current_file: Option<String>,
++}
++
+ /// Format a number with comma separators
+ fn format_with_commas(n: u64) -> String {
+     let s = n.to_string();
+@@ -78,12 +92,20 @@ impl ExportProgress {
+ 
+     /// Starts the progress bar with the specified total length
+     pub fn start(&self, length: i64) {
++        let length = length.try_into().unwrap_or(0);
++        self.length.set(length);
++        self.position.set(0);
++        self.start_time.set(Some(Instant::now()));
++        self.emit_progress(
++            "scanning",
++            length,
++            0,
++            Some(format!("Found {length} messages")),
++            None,
++        );
+         if !self.enabled {
+             return;
+         }
+-        self.length.set(length.try_into().unwrap_or(0));
+-        self.position.set(0);
+-        self.start_time.set(Some(Instant::now()));
+         self.draw();
+     }
+ 
+@@ -98,28 +120,38 @@ impl ExportProgress {
+ 
+     /// Sets the progress bar to busy style with a message
+     pub fn set_busy_style(&self, message: String) {
++        *self.message.borrow_mut() = Some(message.clone());
++        self.emit_progress(
++            "busy",
++            self.position.get(),
++            self.length.get(),
++            Some(message),
++            None,
++        );
+         if !self.enabled {
+             return;
+         }
+-        *self.message.borrow_mut() = Some(message);
+         self.draw();
+     }
+ 
+     /// Sets the position of the progress bar
+     pub fn set_position(&self, pos: u64) {
++        self.position.set(pos);
++        self.emit_progress("exporting", pos, self.length.get(), None, None);
+         if !self.enabled {
+             return;
+         }
+-        self.position.set(pos);
+         self.draw();
+     }
+ 
+     /// Finishes the progress bar
+     pub fn finish(&self) {
++        let length = self.length.get();
++        self.position.set(length);
++        self.emit_progress("complete", length, length, None, None);
+         if !self.enabled {
+             return;
+         }
+-        self.position.set(self.length.get());
+         self.draw();
+         eprintln!();
+     }
+@@ -204,6 +236,44 @@ impl ExportProgress {
+         let _ = write!(stderr, "{line}\x1b[K");
+         let _ = stderr.flush();
+     }
++
++    fn emit_progress(
++        &self,
++        phase: &str,
++        current: u64,
++        total: u64,
++        message: Option<String>,
++        current_file: Option<String>,
++    ) {
++        let percentage = match phase {
++            "scanning" => 0.0,
++            "exporting" => {
++                if total > 0 {
++                    (current as f32 / total as f32) * 100.0
++                } else {
++                    0.0
++                }
++            }
++            "complete" => 100.0,
++            _ => 0.0,
++        };
++
++        let event = ProgressEvent {
++            event_type: "progress".to_string(),
++            phase: phase.to_string(),
++            current,
++            total,
++            percentage,
++            message,
++            current_file,
++        };
++
++        if let Ok(json) = serde_json::to_string(&event) {
++            let mut stdout = io::stdout().lock();
++            let _ = writeln!(stdout, "PROGRESS_JSON: {json}");
++            let _ = stdout.flush();
++        }
++    }
+ }
+ 
+ impl Default for ExportProgress {
+diff --git a/imessage-exporter/src/app/runtime.rs b/imessage-exporter/src/app/runtime.rs
+index 7d5aac3..ad09233 100644
+--- a/imessage-exporter/src/app/runtime.rs
++++ b/imessage-exporter/src/app/runtime.rs
+@@ -4,7 +4,7 @@
+ 
+ use std::{
+     cmp::min,
+-    collections::{BTreeSet, HashMap, HashSet},
++    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+     fs::create_dir_all,
+     path::{Path, PathBuf},
+ };
+@@ -12,6 +12,7 @@ use std::{
+ use fdlimit::raise_fd_limit;
+ use fs2::available_space;
+ use imessage_database::{
++    error::table::TableError,
+     tables::{
+         attachment::Attachment,
+         chat::Chat,
+@@ -39,6 +40,38 @@ use crate::{
+ // Maximum length for filenames
+ const MAX_LENGTH: usize = 235;
+ 
++#[derive(Default)]
++struct ListedChat {
++    chat_ids: BTreeSet<i32>,
++    participant_ids: BTreeSet<i32>,
++    message_ids: HashSet<i32>,
++    first_message_date: Option<i64>,
++    last_message_date: Option<i64>,
++    display_name: Option<String>,
++    chat_identifier: Option<String>,
++}
++
++impl ListedChat {
++    fn record_message(&mut self, message_id: i32, message_date: i64) {
++        if !self.message_ids.insert(message_id) {
++            return;
++        }
++
++        self.first_message_date = Some(
++            self.first_message_date
++                .map_or(message_date, |current| current.min(message_date)),
++        );
++        self.last_message_date = Some(
++            self.last_message_date
++                .map_or(message_date, |current| current.max(message_date)),
++        );
++    }
++
++    fn message_count(&self) -> usize {
++        self.message_ids.len()
++    }
++}
++
+ // MARK: Config
+ /// Stores the application state and handles application lifecycle
+ pub struct Config {
+@@ -274,41 +307,185 @@ impl Config {
+     ///   3) send those chat and handle IDs to the query context so they are included in the message table filters
+     pub(crate) fn resolve_filtered_handles(&mut self) {
+         if let Some(conversation_filter) = &self.options.conversation_filter {
+-            let parsed_handle_filter = conversation_filter.split(',').collect::<Vec<&str>>();
++            let groups = conversation_filter.split(';').collect::<Vec<&str>>();
++            let mut all_included_chatrooms: BTreeSet<i32> = BTreeSet::new();
++            let mut all_included_handles: BTreeSet<i32> = BTreeSet::new();
++
++            for group in groups {
++                let parsed_handle_filter = group.split(',').collect::<Vec<&str>>();
++                let mut current_group_included_handles: BTreeSet<i32> = BTreeSet::new();
++                let mut filter_to_handles: HashMap<String, BTreeSet<i32>> = HashMap::new();
++                let mut unresolved_filter_strings: BTreeSet<String> = BTreeSet::new();
++
++                for included_name_filter_str_raw in &parsed_handle_filter {
++                    let included_name_filter_str = included_name_filter_str_raw.trim();
++                    if included_name_filter_str.is_empty() {
++                        continue;
++                    }
++
++                    let clean_filter = self.normalize_identifier(included_name_filter_str);
++                    if filter_to_handles.contains_key(&clean_filter) {
++                        continue;
++                    }
+ 
+-            let mut included_chatrooms: BTreeSet<i32> = BTreeSet::new();
+-            let mut included_handles: BTreeSet<i32> = BTreeSet::new();
++                    let mut found_match_for_current_filter_in_handles = false;
++
++                    for handle_name in self.participants.values() {
++                        let clean_handle = self.normalize_identifier(&handle_name.details);
++                        if self.identifiers_match(&clean_filter, &clean_handle)
++                            || handle_name.contains(included_name_filter_str)
++                        {
++                            for handle_id in &handle_name.handle_ids {
++                                current_group_included_handles.insert(*handle_id);
++                                filter_to_handles
++                                    .entry(clean_filter.clone())
++                                    .or_default()
++                                    .insert(*handle_id);
++                            }
++                            found_match_for_current_filter_in_handles = true;
++                        }
++                    }
+ 
+-            // First: Scan the list of participants for included handle IDs
+-            self.participants.iter().for_each(|(_, handle_name)| {
+-                for included_name in &parsed_handle_filter {
+-                    if handle_name.contains(included_name) {
+-                        included_handles.extend(&handle_name.handle_ids);
++                    if !found_match_for_current_filter_in_handles {
++                        unresolved_filter_strings.insert(clean_filter);
+                     }
+                 }
+-            });
+ 
+-            // Second: scan the list of chatrooms for IDs that contain the selected participants
+-            self.chatroom_participants
+-                .iter()
+-                .for_each(|(chat_id, participants)| {
+-                    if !participants.is_disjoint(&included_handles) {
+-                        included_chatrooms.insert(*chat_id);
++                if parsed_handle_filter.is_empty()
++                    || parsed_handle_filter.iter().all(|f| f.trim().is_empty())
++                {
++                    continue;
++                }
++
++                if parsed_handle_filter.len() > 1 && !unresolved_filter_strings.is_empty() {
++                    continue;
++                }
++
++                for (chat_id, chat_participants) in &self.chatroom_participants {
++                    let non_empty_filter_count = parsed_handle_filter
++                        .iter()
++                        .filter(|f| !f.trim().is_empty())
++                        .count();
++
++                    if non_empty_filter_count == 1 {
++                        let dm_filter_str_raw = parsed_handle_filter
++                            .iter()
++                            .find(|s| !s.trim().is_empty())
++                            .map_or("", |s| s.trim());
++                        if dm_filter_str_raw.is_empty() {
++                            continue;
++                        }
++
++                        let dm_filter_clean = self.normalize_identifier(dm_filter_str_raw);
++
++                        if chat_participants.len() == 1 {
++                            let mut matched_dm = false;
++                            if let Some(handles_for_filter) =
++                                filter_to_handles.get(&dm_filter_clean)
++                                && !handles_for_filter.is_empty()
++                                && chat_participants.is_subset(handles_for_filter)
++                            {
++                                all_included_chatrooms.insert(*chat_id);
++                                matched_dm = true;
++                            }
++
++                            if !matched_dm
++                                && unresolved_filter_strings.contains(&dm_filter_clean)
++                                && let Some(chat_obj) = self.chatrooms.get(chat_id)
++                            {
++                                let clean_chat_identifier =
++                                    self.normalize_identifier(&chat_obj.chat_identifier);
++
++                                if self.identifiers_match(&dm_filter_clean, &clean_chat_identifier)
++                                {
++                                    all_included_chatrooms.insert(*chat_id);
++                                }
++                            }
++                        }
++                    } else if chat_participants.len() == non_empty_filter_count
++                        && chat_participants.is_subset(&current_group_included_handles)
++                    {
++                        let mut group_filters_represented_in_chat = true;
++                        if !filter_to_handles.is_empty() {
++                            for handles_for_one_filter in filter_to_handles.values() {
++                                if chat_participants
++                                    .intersection(handles_for_one_filter)
++                                    .next()
++                                    .is_none()
++                                {
++                                    group_filters_represented_in_chat = false;
++                                    break;
++                                }
++                            }
++                        } else if non_empty_filter_count > 0 {
++                            group_filters_represented_in_chat = false;
++                        }
++
++                        if group_filters_represented_in_chat {
++                            all_included_chatrooms.insert(*chat_id);
++                        }
+                     }
+-                });
++                }
++
++                all_included_handles.extend(current_group_included_handles);
++            }
+ 
+             self.options
+                 .query_context
+-                .set_selected_handle_ids(included_handles);
++                .set_selected_handle_ids(all_included_handles);
+ 
+             self.options
+                 .query_context
+-                .set_selected_chat_ids(included_chatrooms);
++                .set_selected_chat_ids(all_included_chatrooms.clone());
++
++            if all_included_chatrooms.is_empty() {
++                eprintln!("No chatrooms were found with the supplied contacts.");
++                println!("No chatrooms were found with the supplied contacts.");
++                std::process::exit(0);
++            }
+ 
+             self.log_filtered_handles_and_chats();
+         }
+     }
+ 
++    fn normalize_identifier(&self, identifier: &str) -> String {
++        let mut normalized = identifier.replace(['+', ' ', '(', ')', '-', '.'], "");
++
++        if normalized.contains('@') {
++            normalized = normalized.to_lowercase();
++        }
++
++        normalized
++    }
++
++    fn identifiers_match(&self, filter: &str, handle: &str) -> bool {
++        if filter == handle {
++            return true;
++        }
++
++        let both_are_numeric = !handle.contains('@')
++            && !filter.contains('@')
++            && handle.chars().all(|c| c.is_ascii_digit())
++            && filter.chars().all(|c| c.is_ascii_digit());
++
++        if both_are_numeric {
++            if handle.len() >= 10 && filter.len() >= 10 {
++                let handle_suffix = &handle[handle.len().saturating_sub(10)..];
++                let filter_suffix = &filter[filter.len().saturating_sub(10)..];
++                return handle_suffix == filter_suffix;
++            }
++
++            if handle.len() >= 5 && filter.len() >= 5 {
++                let min_len = handle.len().min(filter.len());
++                let handle_suffix = &handle[handle.len().saturating_sub(min_len)..];
++                let filter_suffix = &filter[filter.len().saturating_sub(min_len)..];
++                return handle_suffix == filter_suffix;
++            }
++        }
++
++        false
++    }
++
+     /// If we set some filtered chatrooms, emit how many will be included in the export
+     fn log_filtered_handles_and_chats(&self) {
+         if let (Some(selected_handle_ids), Some(selected_chat_ids)) = (
+@@ -529,6 +706,8 @@ impl Config {
+     pub fn start(&self) -> Result<(), RuntimeError> {
+         if self.options.diagnostic {
+             self.run_diagnostic()?;
++        } else if self.options.list_contacts {
++            self.list_contacts_and_chats()?;
+         } else if let Some(export_type) = &self.options.export_type {
+             // Ensure that if we want to filter on things, we have stuff to filter for
+             if let Some(filters) = &self.options.conversation_filter
+@@ -572,6 +751,222 @@ impl Config {
+         Ok(())
+     }
+ 
++    /// List all contacts and group chats with message counts and latest dates.
++    fn list_contacts_and_chats(&self) -> Result<(), TableError> {
++        let sql = "
++            SELECT
++                chat_message_join.chat_id,
++                message.ROWID,
++                message.date
++            FROM chat_message_join
++            JOIN message ON chat_message_join.message_id = message.ROWID
++            WHERE chat_message_join.chat_id IS NOT NULL
++            ORDER BY message.date
++        ";
++
++        let mut stmt = self
++            .data_source
++            .db()
++            .prepare(sql)
++            .map_err(TableError::QueryError)?;
++        let rows = stmt
++            .query_map([], |row| {
++                Ok((
++                    row.get::<_, i32>(0)?,
++                    row.get::<_, i32>(1)?,
++                    row.get::<_, i64>(2)?,
++                ))
++            })
++            .map_err(TableError::QueryError)?;
++
++        let mut listed_chats: BTreeMap<i32, ListedChat> = BTreeMap::new();
++
++        for row in rows {
++            let (chat_id, message_id, message_date) = row.map_err(TableError::QueryError)?;
++            let Some(chatroom) = self.chatrooms.get(&chat_id) else {
++                continue;
++            };
++
++            let deduped_chat_id = self
++                .real_chatrooms
++                .get(&chat_id)
++                .copied()
++                .unwrap_or(chat_id);
++            let entry = listed_chats.entry(deduped_chat_id).or_default();
++
++            entry.chat_ids.insert(chat_id);
++            entry.record_message(message_id, message_date);
++
++            if entry.display_name.is_none() {
++                entry.display_name = chatroom.display_name().map(str::to_string);
++            }
++            if entry
++                .chat_identifier
++                .as_ref()
++                .map_or(true, |identifier| identifier.is_empty())
++            {
++                entry.chat_identifier = Some(chatroom.chat_identifier.clone());
++            }
++
++            if let Some(participants) = self.chatroom_participants.get(&chat_id) {
++                for handle_id in participants {
++                    entry.participant_ids.insert(
++                        self.real_participants
++                            .get(handle_id)
++                            .copied()
++                            .unwrap_or(*handle_id),
++                    );
++                }
++            }
++        }
++
++        let mut individual_chats = Vec::new();
++        let mut group_chats = Vec::new();
++
++        for chat in listed_chats.values() {
++            if chat.message_count() == 0 {
++                continue;
++            }
++
++            if self.is_group_list_entry(chat) {
++                group_chats.push(chat);
++            } else {
++                individual_chats.push(chat);
++            }
++        }
++
++        individual_chats.sort_by(|left, right| {
++            right
++                .last_message_date
++                .cmp(&left.last_message_date)
++                .then_with(|| {
++                    self.list_contact_identifier(left)
++                        .cmp(&self.list_contact_identifier(right))
++                })
++        });
++        group_chats.sort_by(|left, right| {
++            right
++                .last_message_date
++                .cmp(&left.last_message_date)
++                .then_with(|| self.list_group_name(left).cmp(&self.list_group_name(right)))
++        });
++
++        println!("Total DMs: {}", individual_chats.len());
++        println!("Total Group Chats: {}", group_chats.len());
++        println!(
++            "Total Chats: {}",
++            individual_chats.len() + group_chats.len()
++        );
++
++        for chat in individual_chats {
++            let contact_id = Self::list_field(&self.list_contact_identifier(chat));
++            let display_name = Self::list_field(&self.list_contact_display_name(chat));
++            let first_date = self.format_list_date(chat.first_message_date);
++            let last_date = self.format_list_date(chat.last_message_date);
++            let chat_ids = Self::chat_ids_field(&chat.chat_ids);
++
++            println!(
++                "CONTACT|{contact_id}|{}|{first_date}|{last_date}|{chat_ids}|{display_name}",
++                chat.message_count()
++            );
++        }
++
++        for chat in group_chats {
++            let name = Self::list_field(&self.list_group_name(chat));
++            let participants = Self::list_field(&self.list_participant_names(chat).join(","));
++            let first_date = self.format_list_date(chat.first_message_date);
++            let last_date = self.format_list_date(chat.last_message_date);
++            let chat_ids = Self::chat_ids_field(&chat.chat_ids);
++
++            println!(
++                "GROUP|{name}|{}|{first_date}|{last_date}|{participants}|{chat_ids}",
++                chat.message_count()
++            );
++        }
++
++        Ok(())
++    }
++
++    fn is_group_list_entry(&self, chat: &ListedChat) -> bool {
++        chat.participant_ids.len() > 1
++            || chat
++                .chat_identifier
++                .as_deref()
++                .map_or(false, |identifier| identifier.starts_with("chat"))
++    }
++
++    fn list_contact_identifier(&self, chat: &ListedChat) -> String {
++        if let Some(participant_id) = chat.participant_ids.iter().next()
++            && let Some(participant) = self.participants.get(participant_id)
++        {
++            if !participant.details.is_empty() {
++                return participant.details.clone();
++            }
++            return participant.get_display_name().to_string();
++        }
++
++        chat.chat_identifier
++            .clone()
++            .unwrap_or_else(|| UNKNOWN.to_string())
++    }
++
++    fn list_contact_display_name(&self, chat: &ListedChat) -> String {
++        if let Some(participant_id) = chat.participant_ids.iter().next()
++            && let Some(participant) = self.participants.get(participant_id)
++        {
++            return participant.get_display_name().to_string();
++        }
++
++        String::new()
++    }
++
++    fn list_group_name(&self, chat: &ListedChat) -> String {
++        if let Some(display_name) = &chat.display_name
++            && !display_name.is_empty()
++        {
++            return display_name.clone();
++        }
++
++        let participants = self.list_participant_names(chat);
++        if !participants.is_empty() {
++            return participants.join(", ");
++        }
++
++        chat.chat_identifier
++            .clone()
++            .unwrap_or_else(|| UNKNOWN.to_string())
++    }
++
++    fn list_participant_names(&self, chat: &ListedChat) -> Vec<String> {
++        chat.participant_ids
++            .iter()
++            .map(|participant_id| {
++                self.participants
++                    .get(participant_id)
++                    .map(|participant| participant.get_display_name().to_string())
++                    .unwrap_or_else(|| UNKNOWN.to_string())
++            })
++            .collect()
++    }
++
++    fn format_list_date(&self, date: Option<i64>) -> String {
++        date.and_then(|timestamp| get_local_time(timestamp, self.offset).ok())
++            .map(|date| format_date(&date))
++            .unwrap_or_else(|| String::from("Unknown"))
++    }
++
++    fn chat_ids_field(chat_ids: &BTreeSet<i32>) -> String {
++        chat_ids
++            .iter()
++            .map(std::string::ToString::to_string)
++            .collect::<Vec<String>>()
++            .join(",")
++    }
++
++    fn list_field(value: &str) -> String {
++        value.replace(['|', '\n', '\r'], " ").trim().to_string()
++    }
++
+     /// Determine who sent a message
+     pub fn who<'a, 'b: 'a>(
+         &'a self,

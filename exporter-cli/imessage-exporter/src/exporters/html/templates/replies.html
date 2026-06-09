@@ -1,0 +1,3 @@
+<div class="replies">
+    {%- for reply in replies %}<div class="reply" id="{{ reply.guid }}">{{ reply.body|safe }}</div>
+    {%- endfor %}</div>

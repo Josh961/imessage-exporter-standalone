@@ -2,12 +2,12 @@
  Represents CLI options and validation logic.
 */
 
-use std::path::PathBuf;
+use std::{collections::BTreeSet, path::PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Command, crate_version};
 
 use imessage_database::{
-    tables::{attachment::DEFAULT_ATTACHMENT_ROOT, table::DEFAULT_PATH_IOS},
+    tables::{attachment::DEFAULT_MESSAGES_ROOT, table::DEFAULT_PATH_IOS},
     util::{
         dirs::{default_db_path, home},
         platform::Platform,
@@ -21,6 +21,7 @@ use crate::app::{
     export_type::ExportType,
 };
 
+// MARK: Constants
 /// Default export directory name
 pub const DEFAULT_OUTPUT_DIR: &str = "imessage_export";
 
@@ -39,6 +40,10 @@ pub const OPTION_PLATFORM: &str = "platform";
 pub const OPTION_BYPASS_FREE_SPACE_CHECK: &str = "ignore-disk-warning";
 pub const OPTION_USE_CALLER_ID: &str = "use-caller-id";
 pub const OPTION_CONVERSATION_FILTER: &str = "conversation-filter";
+pub const OPTION_SELECTED_CHAT_IDS: &str = "chat-ids";
+pub const OPTION_CLEARTEXT_PASSWORD: &str = "cleartext-password";
+pub const OPTION_CUSTOM_CONTACTS_DB_PATH: &str = "contacts-path";
+pub const OPTION_NO_PROGRESS: &str = "no-progress";
 pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
 pub const OPTION_IGNORE_VIDEOS: &str = "images-only";
 
@@ -52,7 +57,8 @@ pub const ABOUT: &str = concat!(
     "to find problems with the iMessage database."
 );
 
-#[derive(Debug, PartialEq, Eq)]
+// MARK: Options
+#[derive(PartialEq, Eq)]
 pub struct Options {
     /// Path to database file
     pub db_path: PathBuf,
@@ -82,10 +88,47 @@ pub struct Options {
     pub ignore_disk_space: bool,
     /// An optional filter for conversation participants
     pub conversation_filter: Option<String>,
+    /// An optional password for encrypted backups
+    pub cleartext_password: Option<String>,
+    /// An optional path to a custom contacts database
+    pub contacts_path: Option<PathBuf>,
+    /// If false, suppress the export progress bar regardless of TTY state
+    pub show_progress: bool,
     /// If true, only include image attachments in the export
     pub images_only: bool,
 }
 
+// Override Debug default impl to avoid printing the cleartext password if it's set
+impl std::fmt::Debug for Options {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Options")
+            .field("db_path", &self.db_path)
+            .field("attachment_root", &self.attachment_root)
+            .field("attachment_manager", &self.attachment_manager)
+            .field("diagnostic", &self.diagnostic)
+            .field("list_contacts", &self.list_contacts)
+            .field("export_type", &self.export_type)
+            .field("export_path", &self.export_path)
+            .field("query_context", &self.query_context)
+            .field("no_lazy", &self.no_lazy)
+            .field("custom_name", &self.custom_name)
+            .field("use_caller_id", &self.use_caller_id)
+            .field("platform", &self.platform)
+            .field("ignore_disk_space", &self.ignore_disk_space)
+            .field("conversation_filter", &self.conversation_filter)
+            // Don't print the actual password if it's set
+            .field(
+                "cleartext_password",
+                &self.cleartext_password.as_ref().map(|_| "***"),
+            )
+            .field("contacts_path", &self.contacts_path)
+            .field("show_progress", &self.show_progress)
+            .field("images_only", &self.images_only)
+            .finish()
+    }
+}
+
+// MARK: Validation
 impl Options {
     pub fn from_args(args: &ArgMatches) -> Result<Self, RuntimeError> {
         let user_path: Option<&String> = args.get_one(OPTION_DB_PATH);
@@ -103,6 +146,10 @@ impl Options {
         let platform_type: Option<&String> = args.get_one(OPTION_PLATFORM);
         let ignore_disk_space = args.get_flag(OPTION_BYPASS_FREE_SPACE_CHECK);
         let conversation_filter: Option<&String> = args.get_one(OPTION_CONVERSATION_FILTER);
+        let selected_chat_ids: Option<&String> = args.get_one(OPTION_SELECTED_CHAT_IDS);
+        let cleartext_password: Option<&String> = args.get_one(OPTION_CLEARTEXT_PASSWORD);
+        let contacts_path: Option<&String> = args.get_one(OPTION_CUSTOM_CONTACTS_DB_PATH);
+        let show_progress = !args.get_flag(OPTION_NO_PROGRESS);
         let images_only = args.get_flag(OPTION_IGNORE_VIDEOS);
 
         // Build the export type
@@ -126,12 +173,14 @@ impl Options {
                 (custom_name.is_some(), OPTION_CUSTOM_NAME),
                 (use_caller_id, OPTION_USE_CALLER_ID),
                 (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
+                (selected_chat_ids.is_some(), OPTION_SELECTED_CHAT_IDS),
+                (!show_progress, OPTION_NO_PROGRESS),
+                (images_only, OPTION_IGNORE_VIDEOS),
             ];
             for (set, opt) in format_deps {
                 if set {
                     return Err(RuntimeError::InvalidOptions(format!(
-                        "Option `{opt}` is enabled, which requires `--{}`",
-                        OPTION_EXPORT_TYPE
+                        "Option --{opt} is enabled, which requires --{OPTION_EXPORT_TYPE}"
                     )));
                 }
             }
@@ -148,6 +197,9 @@ impl Options {
             (use_caller_id, OPTION_USE_CALLER_ID),
             (custom_name.is_some(), OPTION_CUSTOM_NAME),
             (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
+            (selected_chat_ids.is_some(), OPTION_SELECTED_CHAT_IDS),
+            (!show_progress, OPTION_NO_PROGRESS),
+            (images_only, OPTION_IGNORE_VIDEOS),
         ];
         for (set, opt) in diag_conflicts {
             if diagnostic && set {
@@ -160,21 +212,30 @@ impl Options {
         // Prevent custom_name vs. use_caller_id collision
         if custom_name.is_some() && use_caller_id {
             return Err(RuntimeError::InvalidOptions(format!(
-                "`--{OPTION_CUSTOM_NAME}` is enabled; `--{OPTION_USE_CALLER_ID}` is disallowed"
+                "--{OPTION_CUSTOM_NAME} is enabled; --{OPTION_USE_CALLER_ID} is disallowed"
+            )));
+        }
+
+        if conversation_filter.is_some() && selected_chat_ids.is_some() {
+            return Err(RuntimeError::InvalidOptions(format!(
+                "--{OPTION_CONVERSATION_FILTER} and --{OPTION_SELECTED_CHAT_IDS} cannot be used together"
             )));
         }
 
         // Build query context
         let mut query_context = QueryContext::default();
-        if let Some(start) = start_date {
-            if let Err(why) = query_context.set_start(start) {
-                return Err(RuntimeError::InvalidOptions(format!("{why}")));
-            }
+        if let Some(start) = start_date
+            && let Err(why) = query_context.set_start(start)
+        {
+            return Err(RuntimeError::InvalidOptions(format!("{why}")));
         }
-        if let Some(end) = end_date {
-            if let Err(why) = query_context.set_end(end) {
-                return Err(RuntimeError::InvalidOptions(format!("{why}")));
-            }
+        if let Some(end) = end_date
+            && let Err(why) = query_context.set_end(end)
+        {
+            return Err(RuntimeError::InvalidOptions(format!("{why}")));
+        }
+        if let Some(chat_ids) = selected_chat_ids {
+            query_context.set_selected_chat_ids(parse_selected_chat_ids(chat_ids)?);
         }
 
         // We have to allocate a PathBuf here because it can be created from data owned by this function in the default state
@@ -190,23 +251,48 @@ impl Options {
                     "{platform_str} is not a valid platform! Must be one of <{SUPPORTED_PLATFORMS}>"
                 )))?
             }
-            None => Platform::determine(&db_path),
+            None => Platform::determine(&db_path)?,
         };
+
+        // Prevent cleartext_password from being set if the source is not an iOS backup
+        if cleartext_password.is_some() && !matches!(platform, Platform::iOS) {
+            return Err(RuntimeError::InvalidOptions(format!(
+                "--{OPTION_CLEARTEXT_PASSWORD} is enabled; it can only be used with iOS backups."
+            )));
+        }
 
         // Validate that the custom attachment root exists, if provided
         if let Some(path) = attachment_root {
             let custom_attachment_path = PathBuf::from(path);
             if !custom_attachment_path.exists() {
                 return Err(RuntimeError::InvalidOptions(format!(
-                    "Supplied {OPTION_ATTACHMENT_ROOT} `{path}` does not exist!"
+                    "Supplied --{OPTION_ATTACHMENT_ROOT} `{path}` does not exist!"
                 )));
             }
-        };
+        }
 
         // Warn the user that custom attachment roots have no effect on iOS backups
         if attachment_root.is_some() && platform == Platform::iOS {
             eprintln!(
-                "Option {OPTION_ATTACHMENT_ROOT} is enabled, but the platform is {}, so the root will have no effect!",
+                "Option --{OPTION_ATTACHMENT_ROOT} is enabled, but the platform is {}, so the root will have no effect!",
+                Platform::iOS
+            );
+        }
+
+        // Validate that the custom contacts database path exists, if provided
+        if let Some(path) = contacts_path {
+            let custom_contacts_path = PathBuf::from(path);
+            if !custom_contacts_path.exists() {
+                return Err(RuntimeError::InvalidOptions(format!(
+                    "Supplied --{OPTION_CUSTOM_CONTACTS_DB_PATH} `{path}` does not exist!"
+                )));
+            }
+        }
+
+        // Warn the user that custom contacts database path have no effect on iOS backups
+        if contacts_path.is_some() && platform == Platform::iOS {
+            eprintln!(
+                "Option --{OPTION_CUSTOM_CONTACTS_DB_PATH} is enabled, but the platform is {}, so the path will have no effect!",
                 Platform::iOS
             );
         }
@@ -222,7 +308,7 @@ impl Options {
         };
 
         // Validate the provided export path
-        let export_path = validate_path(user_export_path, &export_type.as_ref())?;
+        let export_path = validate_path(user_export_path, export_type.as_ref())?;
 
         Ok(Options {
             db_path,
@@ -239,6 +325,9 @@ impl Options {
             platform,
             ignore_disk_space,
             conversation_filter: conversation_filter.cloned(),
+            cleartext_password: cleartext_password.cloned(),
+            contacts_path: contacts_path.cloned().map(PathBuf::from),
+            show_progress,
             images_only,
         })
     }
@@ -257,49 +346,52 @@ impl Options {
 /// We have to allocate a `PathBuf` here because it can be created from data owned by this function in the default state
 fn validate_path(
     export_path: Option<&String>,
-    export_type: &Option<&ExportType>,
+    export_type: Option<&ExportType>,
 ) -> Result<PathBuf, RuntimeError> {
     // Build a path from the user-provided data or the default location
     let resolved_path =
         PathBuf::from(export_path.unwrap_or(&format!("{}/{DEFAULT_OUTPUT_DIR}", home())));
 
     // If there is an export type selected, ensure we do not overwrite files of the same type
-    if let Some(export_type) = export_type {
-        if resolved_path.exists() {
-            // Get the word to use if there is a problem with the specified path
-            let path_word = match export_path {
-                Some(_) => "Specified",
-                None => "Default",
-            };
+    if let Some(export_type) = export_type
+        && resolved_path.exists()
+    {
+        // Get the word to use if there is a problem with the specified path
+        let path_word = match export_path {
+            Some(_) => "Specified",
+            None => "Default",
+        };
 
-            // Ensure the directory exists and does not contain files of the same export type
-            match resolved_path.read_dir() {
-                Ok(files) => {
-                    let export_type_extension = export_type.to_string();
-                    for file in files.flatten() {
-                        if file
-                            .path()
-                            .extension()
-                            .is_some_and(|s| s.to_str().unwrap_or("") == export_type_extension)
-                        {
-                            return Err(RuntimeError::InvalidOptions(format!(
-                                "{path_word} export path {resolved_path:?} contains existing \"{export_type}\" export data!"
-                            )));
-                        }
+        // Ensure the directory exists and does not contain files of the same export type
+        match resolved_path.read_dir() {
+            Ok(files) => {
+                let export_type_extension = export_type.to_string();
+                for file in files.flatten() {
+                    if file
+                        .path()
+                        .extension()
+                        .is_some_and(|s| s.to_str().unwrap_or("") == export_type_extension)
+                    {
+                        return Err(RuntimeError::InvalidOptions(format!(
+                            "{path_word} export path {} contains existing \"{export_type}\" export data!",
+                            resolved_path.display()
+                        )));
                     }
                 }
-                Err(why) => {
-                    return Err(RuntimeError::InvalidOptions(format!(
-                        "{path_word} export path {resolved_path:?} is not a valid directory: {why}"
-                    )));
-                }
+            }
+            Err(why) => {
+                return Err(RuntimeError::InvalidOptions(format!(
+                    "{path_word} export path {} is not a valid directory: {why}",
+                    resolved_path.display()
+                )));
             }
         }
-    };
+    }
 
     Ok(resolved_path)
 }
 
+// MARK: CLI
 /// Build the command line argument parser
 fn get_command() -> Command {
     Command::new("iMessage Exporter")
@@ -342,7 +434,7 @@ fn get_command() -> Command {
             Arg::new(OPTION_DB_PATH)
                 .short('p')
                 .long(OPTION_DB_PATH)
-                .help(format!("Specify an optional custom path for the iMessage database location\nFor macOS, specify a path to a `chat.db` file\nFor iOS, specify a path to the root of an unencrypted backup directory\nIf omitted, the default directory is {}\n", default_db_path().display()))
+                .help(format!("Specify an optional custom path for the iMessage database location\nFor macOS, specify a path to a `chat.db` file\nFor iOS, specify a path to the root of a device backup directory\nIf the iOS backup is encrypted, --{OPTION_CLEARTEXT_PASSWORD} can be passed or you will be prompted for the password\nIf omitted, the default directory is {}\n", default_db_path().display()))
                 .display_order(4)
                 .value_name("path/to/source"),
         )
@@ -350,9 +442,9 @@ fn get_command() -> Command {
             Arg::new(OPTION_ATTACHMENT_ROOT)
                 .short('r')
                 .long(OPTION_ATTACHMENT_ROOT)
-                .help(format!("Specify an optional custom path to look for attachments in (macOS only)\nOnly use this if attachments are stored separately from the database's default location\nThe default location is {}\n", DEFAULT_ATTACHMENT_ROOT.replacen('~', &home(), 1)))
+                .help(format!("Specify an optional custom path to look for attachment data in\nOnly use this if attachments are stored separately from the database's default location\nThe provided path should be absolute\nThis option affects both the `Attachments` and `StickerCache` directories\nAlso works with jailbroken iOS sms.db databases (use `--platform macOS`)\nHas no effect on iOS backups\nThe default location is {}\n", DEFAULT_MESSAGES_ROOT.replacen('~', &home(), 1)))
                 .display_order(5)
-                .value_name("path/to/attachments"),
+                .value_name("path/to/messages/root"),
         )
         .arg(
             Arg::new(OPTION_PLATFORM)
@@ -398,14 +490,14 @@ fn get_command() -> Command {
             Arg::new(OPTION_CUSTOM_NAME)
                 .short('m')
                 .long(OPTION_CUSTOM_NAME)
-                .help(format!("Specify an optional custom name for the database owner's messages in exports\nConflicts with --{}", OPTION_USE_CALLER_ID))
+                .help(format!("Specify an optional custom name for the database owner's messages in exports\nConflicts with --{OPTION_USE_CALLER_ID}\n"))
                 .display_order(11)
         )
         .arg(
             Arg::new(OPTION_USE_CALLER_ID)
                 .short('i')
                 .long(OPTION_USE_CALLER_ID)
-                .help(format!("Use the database owner's caller ID in exports instead of \"Me\"\nConflicts with --{}", OPTION_CUSTOM_NAME))
+                .help(format!("Use the database owner's caller ID in exports instead of \"Me\"\nConflicts with --{OPTION_CUSTOM_NAME}\n"))
                 .action(ArgAction::SetTrue)
                 .display_order(12)
         )
@@ -421,9 +513,38 @@ fn get_command() -> Command {
             Arg::new(OPTION_CONVERSATION_FILTER)
                 .short('t')
                 .long(OPTION_CONVERSATION_FILTER)
-                .help("Filter exported conversations by contact numbers or emails\nFor a single number, exports just that DM conversation\nFor multiple numbers in one group (comma-separated), exports the group chat with exactly those participants\nFor multiple groups, separate them with semicolons\nExample for one DM: `-t 5558675309`\nExample for one group: `-t 5558675309,5551234567,5559876543`\nExample for multiple groups: `-t 5558675309,5551234567;5559876543,5552345678`\n")
-                .value_name("filter")
+                .help("Filter exported conversations by contact names, numbers, or emails\nFor a single contact, exports matching DM conversations\nFor multiple contacts in one group, use a comma-separated string\nFor multiple groups, separate them with semicolons\nExample: `-t steve@apple.com,5558675309`\n")
                 .display_order(14)
+                .value_name("filter"),
+        )
+        .arg(
+            Arg::new(OPTION_SELECTED_CHAT_IDS)
+                .long(OPTION_SELECTED_CHAT_IDS)
+                .help("Filter exported conversations by exact chat ROWID values\nUse this for app-driven exports from --list-contacts output\n")
+                .display_order(15)
+                .value_name("ids"),
+        )
+        .arg(
+            Arg::new(OPTION_CLEARTEXT_PASSWORD)
+                .short('x')
+                .long(OPTION_CLEARTEXT_PASSWORD)
+                .help("Optional password for encrypted iOS backups\nThis is only used when the source is an encrypted iOS backup directory\nIf omitted on an encrypted backup, you will be prompted for the password (recommended)\nA password provided with this option is visible on screen, in the process table, and in your shell history\n")
+                .display_order(16)
+                .value_name("password"),
+        )
+        .arg(
+            Arg::new(OPTION_CUSTOM_CONTACTS_DB_PATH)
+                .long(OPTION_CUSTOM_CONTACTS_DB_PATH)
+                .help("Optional custom path for a macOS or iOS contacts database file\nThis should be resolved automatically, but can be manually provided\nHandles from the messages table will be mapped to names in the provided database\nGenerally, one of `AddressBook-v22.abcddb` or `AddressBook.sqlitedb`\n")
+                .display_order(17)
+                .value_name("path"),
+        )
+        .arg(
+            Arg::new(OPTION_NO_PROGRESS)
+                .long(OPTION_NO_PROGRESS)
+                .help("Disable the on-screen progress bar regardless of context\nBy default, the progress bar is shown only when stderr is a terminal,\nso headless invocations (CI, output redirected to a logfile) stay clean automatically.\nUse this flag to suppress the bar even in an interactive terminal.\n")
+                .action(ArgAction::SetTrue)
+                .display_order(18),
         )
         .arg(
             Arg::new(OPTION_IGNORE_VIDEOS)
@@ -431,13 +552,48 @@ fn get_command() -> Command {
                 .long(OPTION_IGNORE_VIDEOS)
                 .help("Only include image attachments in the export\nIncludes images, GIFs, and HEIC sequences\nSkips videos, audio, and other file types\n")
                 .action(ArgAction::SetTrue)
-                .display_order(15)
+                .display_order(19),
         )
+}
+
+fn parse_selected_chat_ids(raw: &str) -> Result<BTreeSet<i32>, RuntimeError> {
+    let mut chat_ids = BTreeSet::new();
+
+    for token in raw.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+
+        let chat_id = token.parse::<i32>().map_err(|_| {
+            RuntimeError::InvalidOptions(format!(
+                "--{OPTION_SELECTED_CHAT_IDS} contains an invalid chat ID: {token}"
+            ))
+        })?;
+
+        if chat_id <= 0 {
+            return Err(RuntimeError::InvalidOptions(format!(
+                "--{OPTION_SELECTED_CHAT_IDS} values must be positive: {chat_id}"
+            )));
+        }
+
+        chat_ids.insert(chat_id);
+    }
+
+    if chat_ids.is_empty() {
+        return Err(RuntimeError::InvalidOptions(format!(
+            "--{OPTION_SELECTED_CHAT_IDS} requires at least one chat ID"
+        )));
+    }
+
+    Ok(chat_ids)
 }
 
 #[cfg(test)]
 impl Options {
     pub fn fake_options(export_type: ExportType) -> Options {
+        use crate::app::test_dir::unique_test_dir;
+
         Options {
             db_path: std::env::current_dir()
                 .unwrap()
@@ -445,11 +601,11 @@ impl Options {
                 .unwrap()
                 .join("imessage-database/test_data/db/test.db"),
             attachment_root: None,
-            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+            attachment_manager: AttachmentManager::default(),
             diagnostic: false,
             list_contacts: false,
             export_type: Some(export_type),
-            export_path: PathBuf::from("/tmp"),
+            export_path: unique_test_dir("fake-options"),
             query_context: QueryContext::default(),
             no_lazy: false,
             custom_name: None,
@@ -457,6 +613,9 @@ impl Options {
             platform: Platform::macOS,
             ignore_disk_space: false,
             conversation_filter: None,
+            cleartext_password: None,
+            contacts_path: None,
+            show_progress: true,
             images_only: false,
         }
     }
@@ -469,7 +628,7 @@ pub fn from_command_line() -> ArgMatches {
 
 #[cfg(test)]
 mod arg_tests {
-    use std::fs;
+    use std::collections::BTreeSet;
 
     use imessage_database::util::{
         dirs::default_db_path, platform::Platform, query_context::QueryContext,
@@ -479,6 +638,7 @@ mod arg_tests {
         compatibility::attachment_manager::{AttachmentManager, AttachmentManagerMode},
         export_type::ExportType,
         options::{Options, get_command, validate_path},
+        test_dir::unique_test_dir,
     };
 
     #[test]
@@ -498,7 +658,7 @@ mod arg_tests {
             diagnostic: true,
             list_contacts: false,
             export_type: None,
-            export_path: validate_path(None, &None).unwrap(),
+            export_path: validate_path(None, None).unwrap(),
             query_context: QueryContext::default(),
             no_lazy: false,
             custom_name: None,
@@ -506,6 +666,9 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            cleartext_password: None,
+            contacts_path: None,
+            show_progress: true,
             images_only: false,
         };
 
@@ -562,18 +725,17 @@ mod arg_tests {
 
     #[test]
     fn can_build_option_export_html() {
-        // Cleanup existing temp data
-        let _ = fs::remove_file("/tmp/orphaned.html");
+        let dir = unique_test_dir("build-option-export-html");
+        let dir_str = dir.to_string_lossy().into_owned();
 
         // Get matches from sample args
         let command = get_command();
-        let args = command.get_matches_from(["imessage-exporter", "-f", "html", "-o", "/tmp"]);
+        let args = command.get_matches_from(["imessage-exporter", "-f", "html", "-o", &dir_str]);
 
         // Build the Options
         let actual = Options::from_args(&args).unwrap();
 
         // Expected data
-        let tmp_dir = String::from("/tmp");
         let expected = Options {
             db_path: default_db_path(),
             attachment_root: None,
@@ -581,7 +743,7 @@ mod arg_tests {
             diagnostic: false,
             list_contacts: false,
             export_type: Some(ExportType::Html),
-            export_path: validate_path(Some(&tmp_dir), &None).unwrap(),
+            export_path: validate_path(Some(&dir_str), None).unwrap(),
             query_context: QueryContext::default(),
             no_lazy: false,
             custom_name: None,
@@ -589,6 +751,9 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            cleartext_password: None,
+            contacts_path: None,
+            show_progress: true,
             images_only: false,
         };
 
@@ -597,9 +762,6 @@ mod arg_tests {
 
     #[test]
     fn can_build_option_export_txt_no_lazy() {
-        // Cleanup existing temp data
-        let _ = fs::remove_file("/tmp/orphaned.txt");
-
         // Get matches from sample args
         let command = get_command();
         let args = command.get_matches_from(["imessage-exporter", "-f", "txt", "-l"]);
@@ -615,7 +777,7 @@ mod arg_tests {
             diagnostic: false,
             list_contacts: false,
             export_type: Some(ExportType::Txt),
-            export_path: validate_path(None, &None).unwrap(),
+            export_path: validate_path(None, None).unwrap(),
             query_context: QueryContext::default(),
             no_lazy: true,
             custom_name: None,
@@ -623,6 +785,9 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            cleartext_password: None,
+            contacts_path: None,
+            show_progress: true,
             images_only: false,
         };
 
@@ -679,6 +844,98 @@ mod arg_tests {
     }
 
     #[test]
+    fn can_build_option_valid_platform() {
+        // Get matches from sample args
+        let command = get_command();
+        let args = command.get_matches_from(["imessage-exporter", "-a", "ios", "-f", "txt"]);
+
+        // Build the Options
+        let actual = Options::from_args(&args).unwrap();
+
+        // Expected data
+        let expected = Options {
+            db_path: default_db_path(),
+            attachment_root: None,
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+            diagnostic: false,
+            list_contacts: false,
+            export_type: Some(ExportType::Txt),
+            export_path: validate_path(None, None).unwrap(),
+            query_context: QueryContext::default(),
+            no_lazy: false,
+            custom_name: None,
+            use_caller_id: false,
+            platform: Platform::iOS,
+            ignore_disk_space: false,
+            conversation_filter: None,
+            cleartext_password: None,
+            contacts_path: None,
+            show_progress: true,
+            images_only: false,
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn can_build_option_ios_password() {
+        // Get matches from sample args
+        let command = get_command();
+        let args = command.get_matches_from([
+            "imessage-exporter",
+            "-a",
+            "ios",
+            "-f",
+            "txt",
+            "-x",
+            "password",
+        ]);
+
+        // Build the Options
+        let actual = Options::from_args(&args).unwrap();
+
+        // Expected data
+        let expected = Options {
+            db_path: default_db_path(),
+            attachment_root: None,
+            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
+            diagnostic: false,
+            list_contacts: false,
+            export_type: Some(ExportType::Txt),
+            export_path: validate_path(None, None).unwrap(),
+            query_context: QueryContext::default(),
+            no_lazy: false,
+            custom_name: None,
+            use_caller_id: false,
+            platform: Platform::iOS,
+            ignore_disk_space: false,
+            conversation_filter: None,
+            cleartext_password: Some("password".to_string()),
+            contacts_path: None,
+            show_progress: true,
+            images_only: false,
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn cant_build_option_macos_password() {
+        // Get matches from sample args
+        let command = get_command();
+        let args = command.get_matches_from([
+            "imessage-exporter",
+            "-a",
+            "macos",
+            "-f",
+            "txt",
+            "-x",
+            "password",
+        ]);
+        assert!(Options::from_args(&args).is_err());
+    }
+
+    #[test]
     fn cant_build_option_invalid_export_type() {
         // Get matches from sample args
         let command = get_command();
@@ -703,7 +960,7 @@ mod arg_tests {
             diagnostic: false,
             list_contacts: false,
             export_type: Some(ExportType::Txt),
-            export_path: validate_path(None, &None).unwrap(),
+            export_path: validate_path(None, None).unwrap(),
             query_context: QueryContext::default(),
             no_lazy: false,
             custom_name: Some("Name".to_string()),
@@ -711,6 +968,9 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            cleartext_password: None,
+            contacts_path: None,
+            show_progress: true,
             images_only: false,
         };
 
@@ -734,7 +994,7 @@ mod arg_tests {
             diagnostic: false,
             list_contacts: false,
             export_type: Some(ExportType::Txt),
-            export_path: validate_path(None, &None).unwrap(),
+            export_path: validate_path(None, None).unwrap(),
             query_context: QueryContext::default(),
             no_lazy: false,
             custom_name: None,
@@ -742,6 +1002,9 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            cleartext_password: None,
+            contacts_path: None,
+            show_progress: true,
             images_only: false,
         };
 
@@ -766,7 +1029,7 @@ mod arg_tests {
             diagnostic: false,
             list_contacts: false,
             export_type: Some(ExportType::Txt),
-            export_path: validate_path(None, &None).unwrap(),
+            export_path: validate_path(None, None).unwrap(),
             query_context: QueryContext::default(),
             no_lazy: false,
             custom_name: None,
@@ -774,6 +1037,9 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: Some(String::from("steve@apple.com")),
+            cleartext_password: None,
+            contacts_path: None,
+            show_progress: true,
             images_only: false,
         };
 
@@ -797,7 +1063,7 @@ mod arg_tests {
             diagnostic: false,
             list_contacts: false,
             export_type: Some(ExportType::Txt),
-            export_path: validate_path(None, &None).unwrap(),
+            export_path: validate_path(None, None).unwrap(),
             query_context: QueryContext::default(),
             no_lazy: false,
             custom_name: None,
@@ -805,6 +1071,9 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            cleartext_password: None,
+            contacts_path: None,
+            show_progress: true,
             images_only: false,
         };
 
@@ -828,7 +1097,7 @@ mod arg_tests {
             diagnostic: false,
             list_contacts: false,
             export_type: Some(ExportType::Txt),
-            export_path: validate_path(None, &None).unwrap(),
+            export_path: validate_path(None, None).unwrap(),
             query_context: QueryContext::default(),
             no_lazy: false,
             custom_name: None,
@@ -836,6 +1105,9 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: false,
             conversation_filter: None,
+            cleartext_password: None,
+            contacts_path: None,
+            show_progress: true,
             images_only: false,
         };
 
@@ -875,6 +1147,56 @@ mod arg_tests {
     }
 
     #[test]
+    fn can_build_option_selected_chat_ids() {
+        let args = get_command().get_matches_from([
+            "imessage-exporter",
+            "-f",
+            "txt",
+            "--chat-ids",
+            "1, 2,3",
+        ]);
+        let actual = Options::from_args(&args).unwrap();
+
+        assert_eq!(
+            actual.query_context.selected_chat_ids,
+            Some(BTreeSet::from([1, 2, 3]))
+        );
+        assert!(actual.conversation_filter.is_none());
+    }
+
+    #[test]
+    fn cant_build_option_selected_chat_ids_no_export() {
+        let args = get_command().get_matches_from(["imessage-exporter", "--chat-ids", "1"]);
+        assert!(Options::from_args(&args).is_err());
+    }
+
+    #[test]
+    fn cant_build_option_selected_chat_ids_with_contact_filter() {
+        let args = get_command().get_matches_from([
+            "imessage-exporter",
+            "-f",
+            "txt",
+            "-t",
+            "steve@apple.com",
+            "--chat-ids",
+            "1",
+        ]);
+        assert!(Options::from_args(&args).is_err());
+    }
+
+    #[test]
+    fn cant_build_option_invalid_selected_chat_ids() {
+        let args = get_command().get_matches_from([
+            "imessage-exporter",
+            "-f",
+            "txt",
+            "--chat-ids",
+            "1,nope",
+        ]);
+        assert!(Options::from_args(&args).is_err());
+    }
+
+    #[test]
     fn cant_build_option_no_lazy_without_format() {
         let args = get_command().get_matches_from(["imessage-exporter", "-l"]);
         assert!(Options::from_args(&args).is_err());
@@ -901,7 +1223,7 @@ mod arg_tests {
             diagnostic: false,
             list_contacts: false,
             export_type: Some(ExportType::Txt),
-            export_path: validate_path(None, &None).unwrap(),
+            export_path: validate_path(None, None).unwrap(),
             query_context: QueryContext::default(),
             no_lazy: false,
             custom_name: None,
@@ -909,6 +1231,9 @@ mod arg_tests {
             platform: Platform::default(),
             ignore_disk_space: true,
             conversation_filter: None,
+            cleartext_password: None,
+            contacts_path: None,
+            show_progress: true,
             images_only: false,
         };
 
@@ -922,27 +1247,61 @@ mod arg_tests {
     }
 
     #[test]
+    fn cant_build_option_invalid_contacts_path() {
+        let args = get_command().get_matches_from([
+            "imessage-exporter",
+            "--contacts-path",
+            "/does/not/exist",
+        ]);
+        assert!(Options::from_args(&args).is_err());
+    }
+
+    #[test]
+    fn can_build_option_list_contacts() {
+        let args = get_command().get_matches_from(["imessage-exporter", "-n"]);
+        let actual = Options::from_args(&args).unwrap();
+        assert!(actual.list_contacts);
+        assert!(actual.export_type.is_none());
+    }
+
+    #[test]
     fn can_build_option_images_only_flag() {
         let args = get_command().get_matches_from(["imessage-exporter", "-f", "txt", "-v"]);
         let actual = Options::from_args(&args).unwrap();
-        let expected = Options {
-            db_path: default_db_path(),
-            attachment_root: None,
-            attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
-            diagnostic: false,
-            list_contacts: false,
-            export_type: Some(ExportType::Txt),
-            export_path: validate_path(None, &None).unwrap(),
-            query_context: QueryContext::default(),
-            no_lazy: false,
-            custom_name: None,
-            use_caller_id: false,
-            platform: Platform::default(),
-            ignore_disk_space: false,
-            conversation_filter: None,
-            images_only: true,
-        };
-        assert_eq!(actual, expected);
+        assert!(actual.images_only);
+    }
+
+    #[test]
+    fn cant_build_option_images_only_without_format() {
+        let args = get_command().get_matches_from(["imessage-exporter", "-v"]);
+        assert!(Options::from_args(&args).is_err());
+    }
+
+    #[test]
+    fn can_build_option_no_progress() {
+        let args =
+            get_command().get_matches_from(["imessage-exporter", "-f", "txt", "--no-progress"]);
+        let actual = Options::from_args(&args).unwrap();
+        assert!(!actual.show_progress);
+    }
+
+    #[test]
+    fn show_progress_defaults_to_true() {
+        let args = get_command().get_matches_from(["imessage-exporter", "-f", "txt"]);
+        let actual = Options::from_args(&args).unwrap();
+        assert!(actual.show_progress);
+    }
+
+    #[test]
+    fn cant_build_option_no_progress_no_export_type() {
+        let args = get_command().get_matches_from(["imessage-exporter", "--no-progress"]);
+        assert!(Options::from_args(&args).is_err());
+    }
+
+    #[test]
+    fn cant_build_option_diagnostic_flag_with_no_progress() {
+        let args = get_command().get_matches_from(["imessage-exporter", "-d", "--no-progress"]);
+        assert!(Options::from_args(&args).is_err());
     }
 }
 
@@ -955,61 +1314,55 @@ mod path_tests {
     use crate::app::{
         export_type::ExportType,
         options::{DEFAULT_OUTPUT_DIR, validate_path},
+        test_dir::unique_test_dir,
     };
+
     use imessage_database::util::dirs::home;
 
     #[test]
     fn can_validate_empty() {
-        // Cleanup existing temp data
-        let _ = fs::remove_file("/tmp/orphaned.txt");
-
-        let tmp = String::from("/tmp");
-        let export_path = Some(&tmp);
+        let dir = unique_test_dir("validate-empty");
+        let dir_str = dir.to_string_lossy().into_owned();
+        let export_path = Some(&dir_str);
         let export_type = Some(ExportType::Txt);
 
-        let result = validate_path(export_path, &export_type.as_ref());
+        let result = validate_path(export_path, export_type.as_ref());
 
-        assert_eq!(result.unwrap(), PathBuf::from("/tmp"));
+        assert_eq!(result.unwrap(), dir);
     }
 
     #[test]
     fn can_validate_different_type() {
-        // Cleanup existing temp data
-        let _ = fs::remove_file("/tmp/orphaned.txt");
-
-        let tmp = String::from("/tmp");
-        let export_path = Some(&tmp);
+        let dir = unique_test_dir("validate-different-type");
+        let dir_str = dir.to_string_lossy().into_owned();
+        let export_path = Some(&dir_str);
         let export_type = Some(ExportType::Txt);
 
-        let result = validate_path(export_path, &export_type.as_ref());
+        let result = validate_path(export_path, export_type.as_ref());
 
-        let mut tmp = PathBuf::from("/tmp");
-        tmp.push("fake1.html");
-        let mut file = fs::File::create(&tmp).unwrap();
+        let mut fake = dir.clone();
+        fake.push("fake1.html");
+        let mut file = fs::File::create(&fake).unwrap();
         file.write_all(&[]).unwrap();
 
-        assert_eq!(result.unwrap(), PathBuf::from("/tmp"));
-        fs::remove_file(&tmp).unwrap();
+        assert_eq!(result.unwrap(), dir);
     }
 
     #[test]
     fn can_validate_same_type() {
-        // Cleanup existing temp data
-        let _ = fs::remove_file("/tmp/orphaned.txt");
-
-        let tmp = String::from("/tmp");
-        let export_path = Some(&tmp);
+        let dir = unique_test_dir("validate-same-type");
+        let dir_str = dir.to_string_lossy().into_owned();
+        let export_path = Some(&dir_str);
         let export_type = Some(ExportType::Txt);
 
-        let result = validate_path(export_path, &export_type.as_ref());
+        let result = validate_path(export_path, export_type.as_ref());
 
-        let mut tmp = PathBuf::from("/tmp");
-        tmp.push("fake2.txt");
-        let mut file = fs::File::create(&tmp).unwrap();
+        let mut fake = dir.clone();
+        fake.push("fake2.txt");
+        let mut file = fs::File::create(&fake).unwrap();
         file.write_all(&[]).unwrap();
 
-        assert_eq!(result.unwrap(), PathBuf::from("/tmp"));
-        fs::remove_file(&tmp).unwrap();
+        assert_eq!(result.unwrap(), dir);
     }
 
     #[test]
@@ -1017,7 +1370,7 @@ mod path_tests {
         let export_path = None;
         let export_type = None;
 
-        let result = validate_path(export_path, &export_type);
+        let result = validate_path(export_path, export_type);
 
         assert_eq!(
             result.unwrap(),

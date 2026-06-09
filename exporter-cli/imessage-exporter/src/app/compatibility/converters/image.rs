@@ -2,12 +2,15 @@
  Defines routines for converting image files.
 */
 
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 use imessage_database::tables::attachment::MediaType;
 
 use crate::app::compatibility::{
-    converters::common::{copy_raw, ensure_paths, run_command},
+    converters::common::{copy_raw, ensure_output_dir, run_command},
     models::{Converter, ImageConverter, ImageType},
 };
 
@@ -19,12 +22,9 @@ pub(crate) fn image_copy_convert(
     from: &Path,
     to: &mut PathBuf,
     converter: &ImageConverter,
-    mime_type: MediaType,
+    mime_type: &MediaType,
 ) -> Option<MediaType<'static>> {
-    if matches!(
-        mime_type,
-        MediaType::Image("heic") | MediaType::Image("HEIC")
-    ) {
+    if matches!(mime_type, MediaType::Image("heic" | "HEIC")) {
         let output_type = ImageType::Jpeg;
 
         // Update extension for conversion
@@ -35,9 +35,8 @@ pub(crate) fn image_copy_convert(
             // If the conversion was successful, update the path
             *to = converted_path;
             return Some(MediaType::Image(output_type.to_str()));
-        } else {
-            eprintln!("Unable to convert {from:?}");
         }
+        eprintln!("Unable to convert {}", from.display());
     }
 
     // Fallback
@@ -47,7 +46,7 @@ pub(crate) fn image_copy_convert(
 
 /// Convert a HEIC image file to the provided format
 ///
-/// This uses the macOS builtin `sips` program
+/// This uses the macOS builtin `sips` program or `ImageMagick`
 ///
 /// Docs: <https://www.unix.com/man-page/osx/1/sips/> (or `man sips`)
 ///
@@ -61,18 +60,18 @@ fn convert_heic(
     converter: &ImageConverter,
     output_image_type: &ImageType,
 ) -> Option<()> {
-    let (from_path, to_path) = ensure_paths(from, to)?;
+    ensure_output_dir(to)?;
 
-    let args = match converter {
+    let args: Vec<&OsStr> = match converter {
         ImageConverter::Sips => vec![
-            "-s",
-            "format",
-            output_image_type.to_str(),
-            from_path,
-            "-o",
-            to_path,
+            OsStr::new("-s"),
+            OsStr::new("format"),
+            OsStr::new(output_image_type.to_str()),
+            from.as_os_str(),
+            OsStr::new("-o"),
+            to.as_os_str(),
         ],
-        ImageConverter::Imagemagick => vec![from_path, to_path],
+        ImageConverter::Imagemagick => vec![from.as_os_str(), to.as_os_str()],
     };
 
     run_command(converter.name(), args)

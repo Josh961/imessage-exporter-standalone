@@ -1,0 +1,9 @@
+{% if let Some(lyrics) = lyrics %}Lyrics:
+{% for line in lyrics %}{{ line }}
+{% endfor %}
+
+{% endif %}{% if let Some(track_name) = track_name.get() %}{{ track_name }}
+{% endif %}{% if let Some(album) = album.get() %}{{ album }}
+{% endif %}{% if let Some(artist) = artist.get() %}{{ artist }}
+{% endif %}{% if let Some(url) = url.get() %}{{ url }}
+{% endif %}

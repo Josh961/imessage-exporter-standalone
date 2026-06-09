@@ -4,23 +4,13 @@
 
 use std::{
     cmp::min,
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs::create_dir_all,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use fdlimit::raise_fd_limit;
 use fs2::available_space;
-use rusqlite::Connection;
-
-use crate::{
-    app::{
-        compatibility::attachment_manager::AttachmentManagerMode, error::RuntimeError,
-        export_type::ExportType, options::Options, sanitizers::sanitize_filename,
-    },
-    Exporter, HTML, TXT,
-};
-
 use imessage_database::{
     error::table::TableError,
     tables::{
@@ -29,40 +19,86 @@ use imessage_database::{
         chat_handle::ChatToHandle,
         handle::Handle,
         messages::Message,
-        table::{
-            get_connection, get_db_size, Cacheable, Deduplicate, Diagnostic, ATTACHMENTS_DIR, ME,
-            ORPHANED, UNKNOWN,
-        },
+        table::{ATTACHMENTS_DIR, Cacheable, ME, ORPHANED, UNKNOWN, get_db_size},
     },
-    util::{dates::get_offset, size::format_file_size},
+    util::{
+        dates::{format as format_date, get_local_time, get_offset, readable_diff},
+        size::format_file_size,
+    },
 };
 
+use crate::{
+    HTML, TXT,
+    app::{
+        compatibility::attachment_manager::AttachmentManagerMode, contacts::Name,
+        data_source::DataSource, error::RuntimeError, export_type::ExportType, options::Options,
+        sanitizers::sanitize_filename,
+    },
+    exporters::shared::driver::run_export,
+};
+
+// Maximum length for filenames
 const MAX_LENGTH: usize = 235;
 
+#[derive(Default)]
+struct ListedChat {
+    chat_ids: BTreeSet<i32>,
+    participant_ids: BTreeSet<i32>,
+    message_ids: HashSet<i32>,
+    first_message_date: Option<i64>,
+    last_message_date: Option<i64>,
+    display_name: Option<String>,
+    chat_identifier: Option<String>,
+}
+
+impl ListedChat {
+    fn record_message(&mut self, message_id: i32, message_date: i64) {
+        if !self.message_ids.insert(message_id) {
+            return;
+        }
+
+        self.first_message_date = Some(
+            self.first_message_date
+                .map_or(message_date, |current| current.min(message_date)),
+        );
+        self.last_message_date = Some(
+            self.last_message_date
+                .map_or(message_date, |current| current.max(message_date)),
+        );
+    }
+
+    fn message_count(&self) -> usize {
+        self.message_ids.len()
+    }
+}
+
+// MARK: Config
 /// Stores the application state and handles application lifecycle
 pub struct Config {
-    /// Map of chatroom ID to chatroom information
+    /// Map of iMessage database chatroom ID to chatroom information
     pub chatrooms: HashMap<i32, Chat>,
-    /// Map of chatroom ID to an internal unique chatroom ID
+    /// Map of iMessage database chatroom ID to an internal unique chatroom ID
     pub real_chatrooms: HashMap<i32, i32>,
-    /// Map of chatroom ID to chatroom participants
+    /// Map of iMessage database chatroom ID to chatroom participant iMessage database handle IDs
     pub chatroom_participants: HashMap<i32, BTreeSet<i32>>,
-    /// Map of participant ID to contact info
-    pub participants: HashMap<i32, String>,
-    /// Map of participant ID to an internal unique participant ID
+    /// Map of deduplicated internal participant ID to contact info
+    pub participants: HashMap<i32, Name>,
+    /// Map of iMessage database handle ID to an internal unique participant ID, used to generate `participants`
     pub real_participants: HashMap<i32, i32>,
     /// Messages that are tapbacks (reactions) to other messages
     pub tapbacks: HashMap<String, HashMap<usize, Vec<Message>>>,
+    /// Translated message GUIDs
+    pub translated_messages: HashSet<String>,
     /// App configuration options
     pub options: Options,
     /// Global date offset used by the iMessage database:
     pub offset: i64,
-    /// The connection we use to query the database
-    pub db: Connection,
+    /// Data source for the application
+    pub data_source: DataSource,
 }
 
 impl Config {
-    /// Get a deduplicated chat ID or a default value
+    /// Get the chatroom and its deduplicated ID for a message, if available
     pub fn conversation(&self, message: &Message) -> Option<(&Chat, &i32)> {
         match message.chat_id.or(message.deleted_from) {
             Some(chat_id) => {
@@ -87,10 +123,10 @@ impl Config {
 
     /// Get the attachment path for a specific chat ID
     pub fn conversation_attachment_path(&self, chat_id: Option<i32>) -> String {
-        if let Some(chat_id) = chat_id {
-            if let Some(real_id) = self.real_chatrooms.get(&chat_id) {
-                return real_id.to_string();
-            }
+        if let Some(chat_id) = chat_id
+            && let Some(real_id) = self.real_chatrooms.get(&chat_id)
+        {
+            return real_id.to_string();
         }
         String::from(ORPHANED)
     }
@@ -114,31 +150,45 @@ impl Config {
                     &self.options.db_path,
                     self.options.attachment_root.as_deref(),
                 )
-                .unwrap_or_else(|| attachment.filename().to_string()),
+                .unwrap_or_else(|| {
+                    attachment
+                        .filename()
+                        .unwrap_or("Attachment missing name metadata!")
+                        .to_string()
+                }),
         }
     }
 
     /// Get a relative path for the provided file.
-    pub fn relative_path(&self, path: PathBuf) -> Option<String> {
+    pub fn relative_path(&self, path: &Path) -> String {
         if let Ok(relative_path) = path.strip_prefix(&self.options.export_path) {
-            return Some(relative_path.display().to_string());
+            return relative_path.display().to_string();
         }
-        Some(path.display().to_string())
+        path.display().to_string()
     }
 
+    // MARK: Filenames
     /// Get a filename for a chat, possibly using cached data.
     ///
     /// If the chat has an assigned name, use that, truncating if necessary.
     ///
     /// If it does not, first try and make a flat list of its members. Failing that, use the unique `chat_identifier` field.
     pub fn filename(&self, chatroom: &Chat) -> String {
+        // Calculate effective max length accounting for export path
+        let export_path_len = self.options.export_path.as_os_str().len();
+        let max_len = MAX_LENGTH.saturating_sub(export_path_len + 1);
+
         let mut filename = match &chatroom.display_name() {
             // If there is a display name, use that
             Some(name) => {
+                let truncated_len = name.floor_char_boundary(min(max_len, name.len()));
                 format!(
                     "{} - {}",
-                    &name[..min(MAX_LENGTH, name.len())],
-                    chatroom.rowid
+                    &name[..truncated_len],
+                    // Get the deduplicated chat ID to ensure the filename is unique, even if the group name is not
+                    self.real_chatrooms
+                        .get(&chatroom.rowid)
+                        .unwrap_or(&chatroom.rowid)
                 )
             }
             // Fallback if there is no name set
@@ -170,23 +220,33 @@ impl Config {
     /// - Truncated Names
     ///   - Contact 1, Contact 2, ... Contact 13 and 4 others
     fn filename_from_participants(&self, participants: &BTreeSet<i32>) -> String {
+        // Calculate effective max length accounting for export path
+        let export_path_len = self.options.export_path.as_os_str().len();
+        let max_len = MAX_LENGTH.saturating_sub(export_path_len + 1);
+
         let mut added = 0;
-        let mut out_s = String::with_capacity(MAX_LENGTH);
+        let mut out_s = String::with_capacity(max_len);
         for participant_id in participants {
-            let participant = self.who(Some(*participant_id), false, &None);
-            if participant.len() + out_s.len() < MAX_LENGTH {
-                if !out_s.is_empty() {
-                    out_s.push_str(", ");
-                }
-                out_s.push_str(participant);
+            let participant_details = match self.resolve_participant(*participant_id) {
+                Some(name) => name.details.as_str(),
+                None => UNKNOWN,
+            };
+
+            let separator = if out_s.is_empty() { "" } else { ", " };
+            if participant_details.len() + separator.len() + out_s.len() <= max_len {
+                out_s.push_str(separator);
+                out_s.push_str(participant_details);
                 added += 1;
             } else {
                 let extra = format!(", and {} others", participants.len() - added);
                 let space_remaining = extra.len() + out_s.len();
-                if space_remaining >= MAX_LENGTH {
-                    out_s.replace_range((MAX_LENGTH - extra.len()).., &extra);
+                if space_remaining >= max_len {
+                    let start = out_s.floor_char_boundary(max_len.saturating_sub(extra.len()));
+                    out_s.replace_range(start.., &extra);
                 } else if out_s.is_empty() {
-                    out_s.push_str(&participant[..MAX_LENGTH]);
+                    let truncated_len = participant_details
+                        .floor_char_boundary(min(max_len, participant_details.len()));
+                    out_s.push_str(&participant_details[..truncated_len]);
                 } else {
                     out_s.push_str(&extra);
                 }
@@ -196,241 +256,184 @@ impl Config {
         out_s
     }
 
+    // MARK: Init
     /// Create a new instance of the application
     ///
-    /// # Example:
-    ///
-    /// ```
-    /// use crate::app::{
-    ///    options::{from_command_line, Options},
-    ///    runtime::Config,
-    /// };
-    ///
-    /// let args = from_command_line();
-    /// let options = Options::from_args(&args);
-    /// let app = Config::new(options).unwrap();
-    /// ```
     pub fn new(options: Options) -> Result<Config, RuntimeError> {
-        let conn = get_connection(&options.get_db_path()).map_err(RuntimeError::DatabaseError)?;
+        let data_source = DataSource::from(&options)?;
+
         eprintln!("Building cache...");
-        eprintln!("  [1/4] Caching chats...");
-        let chatrooms = Chat::cache(&conn).map_err(RuntimeError::DatabaseError)?;
-        eprintln!("  [2/4] Caching chatrooms...");
-        let chatroom_participants =
-            ChatToHandle::cache(&conn).map_err(RuntimeError::DatabaseError)?;
-        eprintln!("  [3/4] Caching participants...");
-        let participants = Handle::cache(&conn).map_err(RuntimeError::DatabaseError)?;
-        eprintln!("  [4/4] Caching tapbacks...");
-        let tapbacks = Message::cache(&conn).map_err(RuntimeError::DatabaseError)?;
+        eprintln!("  [1/5] Caching chats...");
+        let chatrooms = Chat::cache(data_source.db())?;
+
+        eprintln!("  [2/5] Caching chatrooms...");
+        let chatroom_participants = ChatToHandle::cache(data_source.db())?;
+        let chat_handle_lookup = ChatToHandle::get_chat_lookup_map(data_source.db())?;
+        let real_chatrooms = ChatToHandle::dedupe(&chatroom_participants, &chat_handle_lookup)?;
+
+        eprintln!("  [3/5] Caching participants...");
+        let participants = Handle::cache(data_source.db())?;
+        let real_participants = Handle::dedupe(&participants);
+        let participants_map = data_source
+            .contacts_index
+            .build_participants_map(&participants, &real_participants);
+
+        eprintln!("  [4/5] Caching tapbacks...");
+        let tapbacks = Message::cache(data_source.db())?;
+
+        eprintln!("  [5/5] Caching translations...");
+        // Translations are not available in older database versions, so we default to an empty set
+        let translated_messages = Message::cache_translations(data_source.db()).unwrap_or_default();
         eprintln!("Cache built!");
 
         Ok(Config {
             chatrooms,
-            real_chatrooms: ChatToHandle::dedupe(&chatroom_participants),
+            real_chatrooms,
             chatroom_participants,
-            real_participants: Handle::dedupe(&participants),
-            participants,
+            real_participants,
+            participants: participants_map,
             tapbacks,
+            translated_messages,
             options,
             offset: get_offset(),
-            db: conn,
+            data_source,
         })
     }
 
+    // MARK: Filters
     /// Convert comma separated list of participant strings into table chat IDs using
-    ///   1) filter `self.participant` keys based on the values (by comparing to user values)
-    ///   2) get the chat IDs keys from `self.chatroom_participants` for values that contain the selected handle_ids
+    ///   1) filter `self.participants` values based on name matches with the user-provided filter strings
+    ///   2) get the chat IDs keys from `self.chatroom_participants` for values that contain the selected `handle_ids`
     ///   3) send those chat and handle IDs to the query context so they are included in the message table filters
     pub(crate) fn resolve_filtered_handles(&mut self) {
         if let Some(conversation_filter) = &self.options.conversation_filter {
             let groups = conversation_filter.split(';').collect::<Vec<&str>>();
-            println!("Processing {} groups", groups.len());
             let mut all_included_chatrooms: BTreeSet<i32> = BTreeSet::new();
             let mut all_included_handles: BTreeSet<i32> = BTreeSet::new();
 
-            for (group_idx, group) in groups.iter().enumerate() {
-                println!("\nProcessing group {}", group_idx + 1);
+            for group in groups {
                 let parsed_handle_filter = group.split(',').collect::<Vec<&str>>();
-                println!("Parsed handle filter: {:?}", parsed_handle_filter);
                 let mut current_group_included_handles: BTreeSet<i32> = BTreeSet::new();
                 let mut filter_to_handles: HashMap<String, BTreeSet<i32>> = HashMap::new();
                 let mut unresolved_filter_strings: BTreeSet<String> = BTreeSet::new();
 
-                // First: Scan the list of participants for included handle IDs for the current group
                 for included_name_filter_str_raw in &parsed_handle_filter {
                     let included_name_filter_str = included_name_filter_str_raw.trim();
                     if included_name_filter_str.is_empty() {
-                        println!("Skipping empty filter part in group '{}'", group);
                         continue;
                     }
 
-                    // Normalize the filter string
                     let clean_filter = self.normalize_identifier(included_name_filter_str);
-
-                    // Skip if we've already processed this exact filter (handles duplicates)
                     if filter_to_handles.contains_key(&clean_filter) {
-                        println!("Skipping duplicate filter: {}", included_name_filter_str);
                         continue;
                     }
 
                     let mut found_match_for_current_filter_in_handles = false;
 
-                    for (handle_id, handle_name_str) in &self.participants {
-                        let clean_handle = self.normalize_identifier(handle_name_str);
-
-                        if self.identifiers_match(&clean_filter, &clean_handle) {
-                            current_group_included_handles.insert(*handle_id);
-                            filter_to_handles
-                                .entry(clean_filter.clone())
-                                .or_default()
-                                .insert(*handle_id);
-                            println!(
-                                "Found matching handle: {} for filter: {}",
-                                handle_name_str, included_name_filter_str
-                            );
+                    for handle_name in self.participants.values() {
+                        let clean_handle = self.normalize_identifier(&handle_name.details);
+                        if self.identifiers_match(&clean_filter, &clean_handle)
+                            || handle_name.contains(included_name_filter_str)
+                        {
+                            for handle_id in &handle_name.handle_ids {
+                                current_group_included_handles.insert(*handle_id);
+                                filter_to_handles
+                                    .entry(clean_filter.clone())
+                                    .or_default()
+                                    .insert(*handle_id);
+                            }
                             found_match_for_current_filter_in_handles = true;
                         }
                     }
+
                     if !found_match_for_current_filter_in_handles {
-                        eprintln!(
-                            "Warning: No matching handle found for filter '{}' in group '{}'. Will attempt direct chat ID match if this is a DM filter.",
-                            included_name_filter_str, group
-                        );
-                        unresolved_filter_strings.insert(clean_filter.clone());
+                        unresolved_filter_strings.insert(clean_filter);
                     }
                 }
-                println!(
-                    "Found handles for group {}: {:?}",
-                    group_idx + 1,
-                    current_group_included_handles
-                );
-                println!(
-                    "Filter to handles map for group {}: {:?}",
-                    group_idx + 1,
-                    filter_to_handles
-                );
-                println!(
-                    "Unresolved filter strings for group {}: {:?}",
-                    group_idx + 1,
-                    unresolved_filter_strings
-                );
 
-                // Group Validity Check & Processing Logic
                 if parsed_handle_filter.is_empty()
                     || parsed_handle_filter.iter().all(|f| f.trim().is_empty())
                 {
-                    eprintln!("Warning: Filter group '{}' is empty or contains only empty filter strings. Skipping.", group);
                     continue;
                 }
 
                 if parsed_handle_filter.len() > 1 && !unresolved_filter_strings.is_empty() {
-                    eprintln!("Warning: Group chat filter '{}' has unresolved components ({:?}). Group chat filters require all parts to match known contacts. Skipping this group.", group, unresolved_filter_strings);
                     continue;
                 }
 
-                // Second, scan the list of chatrooms
                 for (chat_id, chat_participants) in &self.chatroom_participants {
-                    if parsed_handle_filter
+                    let non_empty_filter_count = parsed_handle_filter
                         .iter()
                         .filter(|f| !f.trim().is_empty())
-                        .count()
-                        == 1
-                    {
-                        // DM case
+                        .count();
+
+                    if non_empty_filter_count == 1 {
                         let dm_filter_str_raw = parsed_handle_filter
                             .iter()
                             .find(|s| !s.trim().is_empty())
                             .map_or("", |s| s.trim());
                         if dm_filter_str_raw.is_empty() {
                             continue;
-                        } // Should be caught by group validity check, but defensive
+                        }
 
                         let dm_filter_clean = self.normalize_identifier(dm_filter_str_raw);
 
                         if chat_participants.len() == 1 {
-                            // It's a DM chat
                             let mut matched_dm = false;
-                            // Try match via resolved handle first
                             if let Some(handles_for_filter) =
                                 filter_to_handles.get(&dm_filter_clean)
+                                && !handles_for_filter.is_empty()
+                                && chat_participants.is_subset(handles_for_filter)
                             {
-                                if !handles_for_filter.is_empty()
-                                    && chat_participants.is_subset(handles_for_filter)
-                                {
-                                    println!(
-                                        "Found matching DM chat (via handle): {} with participants: {:?}",
-                                        chat_id, chat_participants
-                                    );
-                                    all_included_chatrooms.insert(*chat_id);
-                                    matched_dm = true;
-                                }
+                                all_included_chatrooms.insert(*chat_id);
+                                matched_dm = true;
                             }
 
-                            // If not matched by handle, and the filter was unresolved (or no handles for it), try direct chat_identifier match
-                            if !matched_dm && unresolved_filter_strings.contains(&dm_filter_clean) {
-                                if let Some(chat_obj) = self.chatrooms.get(chat_id) {
-                                    let clean_chat_identifier =
-                                        self.normalize_identifier(&chat_obj.chat_identifier);
+                            if !matched_dm
+                                && unresolved_filter_strings.contains(&dm_filter_clean)
+                                && let Some(chat_obj) = self.chatrooms.get(chat_id)
+                            {
+                                let clean_chat_identifier =
+                                    self.normalize_identifier(&chat_obj.chat_identifier);
 
-                                    if self
-                                        .identifiers_match(&dm_filter_clean, &clean_chat_identifier)
-                                    {
-                                        println!(
-                                            "Found matching DM chat (via direct chat_identifier): {} with chat_identifier: {}",
-                                            chat_id, chat_obj.chat_identifier
-                                        );
-                                        all_included_chatrooms.insert(*chat_id);
-                                    }
+                                if self.identifiers_match(&dm_filter_clean, &clean_chat_identifier)
+                                {
+                                    all_included_chatrooms.insert(*chat_id);
                                 }
                             }
                         }
-                    } else {
-                        // Group chat case (more than 1 non-empty filter)
-                        // This part only runs if !unresolved_filter_strings.is_empty() was false for this group.
-                        // So, all filters in parsed_handle_filter should have corresponding entries in filter_to_handles.
-                        let non_empty_filter_count = parsed_handle_filter
-                            .iter()
-                            .filter(|f| !f.trim().is_empty())
-                            .count();
-                        if chat_participants.len() == non_empty_filter_count
-                            && chat_participants.is_subset(&current_group_included_handles)
-                        {
-                            let mut group_filters_represented_in_chat = true;
-                            if !filter_to_handles.is_empty() {
-                                //Iterate over the BTreeSet<i32> (set of handle IDs) for each distinct cleaned filter string
-                                for handles_for_one_filter in filter_to_handles.values() {
-                                    if chat_participants
-                                        .intersection(handles_for_one_filter)
-                                        .next()
-                                        .is_none()
-                                    {
-                                        group_filters_represented_in_chat = false;
-                                        break;
-                                    }
+                    } else if chat_participants.len() == non_empty_filter_count
+                        && chat_participants.is_subset(&current_group_included_handles)
+                    {
+                        let mut group_filters_represented_in_chat = true;
+                        if !filter_to_handles.is_empty() {
+                            for handles_for_one_filter in filter_to_handles.values() {
+                                if chat_participants
+                                    .intersection(handles_for_one_filter)
+                                    .next()
+                                    .is_none()
+                                {
+                                    group_filters_represented_in_chat = false;
+                                    break;
                                 }
-                            } else if non_empty_filter_count > 0 {
-                                // This means filter_to_handles is empty, but the user did provide non-empty filters.
-                                // This should ideally be caught by the group validity check that ensures no unresolved_filter_strings for groups.
-                                // If reached, it means none of the filters resolved, so they can't be represented.
-                                group_filters_represented_in_chat = false;
                             }
+                        } else if non_empty_filter_count > 0 {
+                            group_filters_represented_in_chat = false;
+                        }
 
-                            if group_filters_represented_in_chat {
-                                println!(
-                                    "Found matching group chat: {} with participants: {:?}",
-                                    chat_id, chat_participants
-                                );
-                                all_included_chatrooms.insert(*chat_id);
-                            }
+                        if group_filters_represented_in_chat {
+                            all_included_chatrooms.insert(*chat_id);
                         }
                     }
                 }
+
                 all_included_handles.extend(current_group_included_handles);
             }
 
             self.options
                 .query_context
                 .set_selected_handle_ids(all_included_handles);
+
             self.options
                 .query_context
                 .set_selected_chat_ids(all_included_chatrooms.clone());
@@ -440,17 +443,14 @@ impl Config {
                 println!("No chatrooms were found with the supplied contacts.");
                 std::process::exit(0);
             }
-            println!("\nTotal chatrooms found: {:?}", all_included_chatrooms);
 
-            self.log_filtered_handles_and_chats()
+            self.log_filtered_handles_and_chats();
         }
     }
 
-    /// Normalize an identifier (phone number or email) for comparison
     fn normalize_identifier(&self, identifier: &str) -> String {
         let mut normalized = identifier.replace(['+', ' ', '(', ')', '-', '.'], "");
 
-        // For emails, convert to lowercase for case-insensitive matching
         if normalized.contains('@') {
             normalized = normalized.to_lowercase();
         }
@@ -458,29 +458,23 @@ impl Config {
         normalized
     }
 
-    /// Check if two normalized identifiers match
     fn identifiers_match(&self, filter: &str, handle: &str) -> bool {
-        // Check for exact match first
         if filter == handle {
             return true;
         }
 
-        // For phone numbers (both long and short), try intelligent matching
         let both_are_numeric = !handle.contains('@')
             && !filter.contains('@')
             && handle.chars().all(|c| c.is_ascii_digit())
             && filter.chars().all(|c| c.is_ascii_digit());
 
         if both_are_numeric {
-            // For long phone numbers (10+ digits), use suffix matching
             if handle.len() >= 10 && filter.len() >= 10 {
                 let handle_suffix = &handle[handle.len().saturating_sub(10)..];
                 let filter_suffix = &filter[filter.len().saturating_sub(10)..];
                 return handle_suffix == filter_suffix;
             }
 
-            // For shorter numbers (5-9 digits), try suffix matching with the shorter length
-            // This handles toll-free numbers, short codes, etc.
             if handle.len() >= 5 && filter.len() >= 5 {
                 let min_len = handle.len().min(filter.len());
                 let handle_suffix = &handle[handle.len().saturating_sub(min_len)..];
@@ -489,7 +483,6 @@ impl Config {
             }
         }
 
-        // No partial matching - we want to match exactly one contact, not multiple
         false
     }
 
@@ -514,10 +507,10 @@ impl Config {
             eprintln!(
                 "Filtering for {} handle{} across {} chatrooms...",
                 unique_handle_ids.len(),
-                if unique_handle_ids.len() != 1 {
-                    "s"
-                } else {
+                if unique_handle_ids.len() == 1 {
                     ""
+                } else {
+                    "s"
                 },
                 unique_chat_ids.len()
             );
@@ -526,14 +519,18 @@ impl Config {
 
     /// Ensure there is available disk space for the requested export
     fn ensure_free_space(&self) -> Result<(), RuntimeError> {
-        // Export size is usually about 6% the size of the db; we divide by 10 to over-estimate about 10% of the total size
+        // Export size is usually about 6% the size of the db;
+        // we divide by 10 to over-estimate about 10% of the total size
         // for some safe headroom
-        let total_db_size =
-            get_db_size(&self.options.db_path).map_err(RuntimeError::DatabaseError)?;
+        let total_db_size = get_db_size(Path::new(self.data_source.db().path().ok_or_else(
+            || RuntimeError::FileNameError {
+                path: self.options.db_path.clone(),
+                reason: "database connection has no associated path",
+            },
+        )?))?;
         let mut estimated_export_size = total_db_size / 10;
 
-        let free_space_at_location =
-            available_space(&self.options.export_path).map_err(RuntimeError::DiskError)?;
+        let free_space_at_location = available_space(&self.options.export_path)?;
 
         // Validate that there is enough disk space free to write the export
         if let AttachmentManagerMode::Disabled = self.options.attachment_manager.mode {
@@ -544,17 +541,18 @@ impl Config {
                 ));
             }
         } else {
-            let total_attachment_size =
-                Attachment::get_total_attachment_bytes(&self.db, &self.options.query_context)
-                    .map_err(RuntimeError::DatabaseError)?;
+            let total_attachment_size = Attachment::get_total_attachment_bytes(
+                self.data_source.db(),
+                &self.options.query_context,
+            )?;
             estimated_export_size += total_attachment_size;
-            if (estimated_export_size + total_attachment_size) >= free_space_at_location {
+            if estimated_export_size >= free_space_at_location {
                 return Err(RuntimeError::NotEnoughAvailableSpace(
-                    estimated_export_size + total_attachment_size,
+                    estimated_export_size,
                     free_space_at_location,
                 ));
             }
-        };
+        }
 
         println!(
             "Estimated export size: {}",
@@ -564,35 +562,137 @@ impl Config {
         Ok(())
     }
 
+    // MARK: Diagnostic
     /// Handles diagnostic tests for database
-    fn run_diagnostic(&self) -> Result<(), TableError> {
+    fn run_diagnostic(&self) -> Result<(), RuntimeError> {
         println!("\niMessage Database Diagnostics\n");
-        Handle::run_diagnostic(&self.db)?;
-        Message::run_diagnostic(&self.db)?;
-        Attachment::run_diagnostic(&self.db, &self.options.db_path, &self.options.platform)?;
-        ChatToHandle::run_diagnostic(&self.db)?;
+
+        // Handle diagnostics
+        let handle_diag = Handle::run_diagnostic(self.data_source.db())?;
+        println!("Handle diagnostic data:");
+        println!("    Total handles: {}", handle_diag.total_handles);
+        if handle_diag.handles_with_multiple_ids > 0 {
+            println!(
+                "    Handles with more than one ID: {}",
+                handle_diag.handles_with_multiple_ids
+            );
+        }
+        if handle_diag.total_duplicated > 0 {
+            println!(
+                "    Total duplicated handles: {}",
+                handle_diag.total_duplicated
+            );
+        }
+
+        // Message diagnostics
+        let message_diag = Message::run_diagnostic(self.data_source.db())?;
+        println!("Message diagnostic data:");
+        println!("    Total messages: {}", message_diag.total_messages);
+        if message_diag.messages_without_chat > 0 {
+            println!(
+                "    Messages not associated with a chat: {}",
+                message_diag.messages_without_chat
+            );
+        }
+        if message_diag.messages_in_multiple_chats > 0 {
+            println!(
+                "    Messages belonging to more than one chat: {}",
+                message_diag.messages_in_multiple_chats
+            );
+        }
+        if message_diag.recoverable_messages > 0 {
+            println!(
+                "    Recoverable deleted messages: {}",
+                message_diag.recoverable_messages
+            );
+        }
+        if let (Some(first), Some(last)) = (
+            message_diag.first_message_date,
+            message_diag.last_message_date,
+        ) && let (Ok(first_date), Ok(last_date)) = (
+            get_local_time(first, self.offset),
+            get_local_time(last, self.offset),
+        ) {
+            println!(
+                "    Date range: {} to {}\n                {}",
+                format_date(&first_date),
+                format_date(&last_date),
+                readable_diff(&first_date, &last_date).unwrap_or_else(|| "N/A".to_string()),
+            );
+        }
+
+        // Attachment diagnostics
+        let attach_diag = Attachment::run_diagnostic(
+            self.data_source.db(),
+            &self.options.db_path,
+            &self.options.platform,
+            self.options.attachment_root.as_deref(),
+        )?;
+        if attach_diag.total_attachments > 0 {
+            println!("Attachment diagnostic data:");
+            println!("    Total attachments: {}", attach_diag.total_attachments);
+            println!(
+                "        Data referenced in table: {}",
+                format_file_size(attach_diag.total_bytes_referenced)
+            );
+            println!(
+                "        Data present on disk: {}",
+                format_file_size(attach_diag.total_bytes_on_disk)
+            );
+            if attach_diag.missing_files > 0 {
+                println!(
+                    "    Missing files: {} ({:.0}%)",
+                    attach_diag.missing_files,
+                    attach_diag.missing_percent().unwrap_or(0.0)
+                );
+                println!("        No path provided: {}", attach_diag.no_path_provided);
+                println!("        No file located: {}", attach_diag.no_file_located());
+            }
+        }
+
+        // Chat/thread diagnostics
+        let chat_diag = ChatToHandle::run_diagnostic(self.data_source.db())?;
+        println!("Thread diagnostic data:");
+        println!("    Total chats: {}", chat_diag.total_chats);
+        if chat_diag.total_duplicated > 0 {
+            println!("    Total duplicated chats: {}", chat_diag.total_duplicated);
+        }
+        if chat_diag.chats_with_no_handles > 0 {
+            println!(
+                "    Chats with no handles: {}",
+                chat_diag.chats_with_no_handles
+            );
+        }
 
         // Global Diagnostics
         println!("Global diagnostic data:");
 
-        let total_db_size = get_db_size(&self.options.db_path)?;
+        let total_db_size = get_db_size(Path::new(self.data_source.db().path().ok_or_else(
+            || RuntimeError::FileNameError {
+                path: self.options.db_path.clone(),
+                reason: "database connection has no associated path",
+            },
+        )?))?;
         println!(
             "    Total database size: {}",
             format_file_size(total_db_size)
         );
 
-        let unique_handles: HashSet<i32> =
-            HashSet::from_iter(self.real_participants.values().cloned());
-        let duplicated_handles = self.participants.len() - unique_handles.len();
-        if duplicated_handles > 0 {
-            println!("    Duplicated contacts: {duplicated_handles}");
-        }
+        // For each handle in the participants list, count how many have matches in the contacts index
+        let total_resolved =
+            self.participants.iter().fold(
+                0,
+                |acc, (_, name)| {
+                    if name.full.is_empty() { acc } else { acc + 1 }
+                },
+            );
 
-        let unique_chats: HashSet<i32> = HashSet::from_iter(self.real_chatrooms.values().cloned());
-        let duplicated_chats = self.chatrooms.len() - unique_chats.len();
-        if duplicated_chats > 0 {
-            println!("    Duplicated chats: {duplicated_chats}");
-        }
+        println!(
+            "    Handles with resolved names: {}/{} ({}%)",
+            total_resolved,
+            self.participants.len(),
+            (total_resolved as f32 / self.participants.len() as f32 * 100.0).round()
+        );
 
         println!("\nEnvironment Diagnostics\n");
         self.options.attachment_manager.diagnostic();
@@ -600,48 +700,33 @@ impl Config {
         Ok(())
     }
 
+    // MARK: Startup
     /// Start the app given the provided set of options. This will either run
     /// diagnostic tests on the database or export data to the specified file type.
-    ///
-    // # Example:
-    ///
-    /// ```
-    /// use crate::app::{
-    ///    options::{from_command_line, Options},
-    ///    runtime::Config,
-    /// };
-    ///
-    /// let args = from_command_line();
-    /// let options = Options::from_args(&args);
-    /// let app = Config::new(options).unwrap();
-    /// app.start();
-    /// ```
     pub fn start(&self) -> Result<(), RuntimeError> {
         if self.options.diagnostic {
-            self.run_diagnostic().map_err(RuntimeError::DatabaseError)?;
+            self.run_diagnostic()?;
         } else if self.options.list_contacts {
-            self.list_contacts_and_chats()
-                .map_err(RuntimeError::DatabaseError)?;
+            self.list_contacts_and_chats()?;
         } else if let Some(export_type) = &self.options.export_type {
             // Ensure that if we want to filter on things, we have stuff to filter for
-            if let Some(filters) = &self.options.conversation_filter {
-                if !self.options.query_context.has_filters() {
-                    return Err(RuntimeError::InvalidOptions(format!(
-                        "Selected filter `{}` does not match any participants!",
-                        filters
-                    )));
-                }
+            if let Some(filters) = &self.options.conversation_filter
+                && !self.options.query_context.has_filters()
+            {
+                return Err(RuntimeError::InvalidOptions(format!(
+                    "Selected filter `{filters}` does not match any participants!"
+                )));
             }
 
             // Ensure the path we want to export to exists
-            create_dir_all(&self.options.export_path).map_err(RuntimeError::DiskError)?;
+            create_dir_all(&self.options.export_path)?;
 
             // Ensure the path we want to copy attachments to exists, if requested
             if !matches!(
                 self.options.attachment_manager.mode,
                 AttachmentManagerMode::Disabled
             ) {
-                create_dir_all(self.attachment_path()).map_err(RuntimeError::DiskError)?;
+                create_dir_all(self.attachment_path())?;
             }
 
             // Ensure there is enough free disk space to write the export
@@ -655,10 +740,10 @@ impl Config {
             // Create exporter, pass it data we care about, then kick it off
             match export_type {
                 ExportType::Html => {
-                    HTML::new(self)?.iter_messages()?;
+                    run_export(&mut HTML::new(self)?)?;
                 }
                 ExportType::Txt => {
-                    TXT::new(self)?.iter_messages()?;
+                    run_export(&mut TXT::new(self)?)?;
                 }
             }
         }
@@ -666,139 +751,220 @@ impl Config {
         Ok(())
     }
 
-    /// List all contacts and group chats with message counts and latest dates
+    /// List all contacts and group chats with message counts and latest dates.
     fn list_contacts_and_chats(&self) -> Result<(), TableError> {
-        use imessage_database::util::dates::{format, get_local_time};
-
-        // Get message counts and first/last dates for each chat
         let sql = "
             SELECT
-                chat.rowid as chat_id,
-                chat.display_name,
-                chat.chat_identifier,
-                COUNT(DISTINCT message.ROWID) as message_count,
-                MIN(message.date) as first_message_date,
-                MAX(message.date) as last_message_date,
-                GROUP_CONCAT(DISTINCT handle.id) as participants
-            FROM chat
-            JOIN chat_message_join ON chat.ROWID = chat_message_join.chat_id
+                chat_message_join.chat_id,
+                message.ROWID,
+                message.date
+            FROM chat_message_join
             JOIN message ON chat_message_join.message_id = message.ROWID
-            LEFT JOIN chat_handle_join ON chat.ROWID = chat_handle_join.chat_id
-            LEFT JOIN handle ON chat_handle_join.handle_id = handle.ROWID
-            GROUP BY chat.ROWID
-            HAVING message_count >= 1
-            ORDER BY last_message_date DESC
+            WHERE chat_message_join.chat_id IS NOT NULL
+            ORDER BY message.date
         ";
 
-        // First get all the rows
-        let mut stmt = self.db.prepare(sql).map_err(TableError::Chat)?;
+        let mut stmt = self
+            .data_source
+            .db()
+            .prepare(sql)
+            .map_err(TableError::QueryError)?;
         let rows = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, i32>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i32>(3)?,
-                    row.get::<_, i64>(4)?,  // first_message_date
-                    row.get::<_, i64>(5)?,  // last_message_date
-                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, i32>(1)?,
+                    row.get::<_, i64>(2)?,
                 ))
             })
-            .map_err(TableError::Chat)?;
+            .map_err(TableError::QueryError)?;
 
-        // Collect all rows into a Vec to avoid multiple queries
-        let all_chats: Vec<_> = rows.collect::<Result<_, _>>().map_err(TableError::Chat)?;
+        let mut listed_chats: BTreeMap<i32, ListedChat> = BTreeMap::new();
 
-        // Count individual and group chats
-        let mut individual_count = 0;
-        let mut group_count = 0;
-
-        for (_, _, _, _, _, _, participants_str_opt) in &all_chats {
-            if let Some(participants_str) = participants_str_opt {
-                let participant_count = participants_str.split(',').count();
-                if participant_count > 1 {
-                    group_count += 1;
-                } else {
-                    individual_count += 1;
-                }
-            } else {
-                // Assuming a chat with no participants listed in chat_handle_join is an individual chat (e.g. with a deleted contact)
-                // or a chat that only contains the user themselves.
-                individual_count += 1;
-            }
-        }
-
-        println!("Total DMs: {}", individual_count);
-        println!("Total Group Chats: {}", group_count);
-        println!("Total Chats: {}", individual_count + group_count);
-
-        // First pass - print individual chats
-        for (
-            _,
-            display_name,
-            chat_identifier,
-            message_count,
-            first_message_date,
-            last_message_date,
-            participants_str_opt,
-        ) in &all_chats
-        {
-            let is_group_chat = if let Some(participants_str) = participants_str_opt {
-                participants_str.split(',').count() > 1
-            } else {
-                false // Treat as individual if no participants listed
+        for row in rows {
+            let (chat_id, message_id, message_date) = row.map_err(TableError::QueryError)?;
+            let Some(chatroom) = self.chatrooms.get(&chat_id) else {
+                continue;
             };
 
-            if !is_group_chat {
-                let first_date = get_local_time(first_message_date, &self.offset)
-                    .map(|d| format(&Ok(d)))
-                    .unwrap_or_else(|_| String::from("Unknown"));
-                let last_date = get_local_time(last_message_date, &self.offset)
-                    .map(|d| format(&Ok(d)))
-                    .unwrap_or_else(|_| String::from("Unknown"));
-                // For individual chats, participants_str_opt might be Some(handle_id_str) or None
-                // If Some, use it. If None, it might be a chat with self or a deleted contact; use chat_identifier.
-                let contact_id = participants_str_opt.as_deref().unwrap_or(chat_identifier);
-                println!("CONTACT|{}|{}|{}|{}", contact_id, message_count, first_date, last_date);
+            let deduped_chat_id = self
+                .real_chatrooms
+                .get(&chat_id)
+                .copied()
+                .unwrap_or(chat_id);
+            let entry = listed_chats.entry(deduped_chat_id).or_default();
+
+            entry.chat_ids.insert(chat_id);
+            entry.record_message(message_id, message_date);
+
+            if entry.display_name.is_none() {
+                entry.display_name = chatroom.display_name().map(str::to_string);
             }
-        }
+            if entry
+                .chat_identifier
+                .as_ref()
+                .map_or(true, |identifier| identifier.is_empty())
+            {
+                entry.chat_identifier = Some(chatroom.chat_identifier.clone());
+            }
 
-        // Second pass - print group chats
-        for (
-            _,
-            display_name,
-            chat_identifier,
-            message_count,
-            first_message_date,
-            last_message_date,
-            participants_str_opt,
-        ) in &all_chats
-        {
-            if let Some(participants_str) = participants_str_opt {
-                if participants_str.split(',').count() > 1 {
-                    let name = display_name
-                        .clone()
-                        .unwrap_or_else(|| chat_identifier.clone());
-                    let name = if name.is_empty() {
-                        chat_identifier.clone()
-                    } else {
-                        name
-                    };
-                    let first_date = get_local_time(first_message_date, &self.offset)
-                        .map(|d| format(&Ok(d)))
-                        .unwrap_or_else(|_| String::from("Unknown"));
-                    let last_date = get_local_time(last_message_date, &self.offset)
-                        .map(|d| format(&Ok(d)))
-                        .unwrap_or_else(|_| String::from("Unknown"));
-
-                    println!(
-                        "GROUP|{}|{}|{}|{}|{}",
-                        name, message_count, first_date, last_date, participants_str
+            if let Some(participants) = self.chatroom_participants.get(&chat_id) {
+                for handle_id in participants {
+                    entry.participant_ids.insert(
+                        self.real_participants
+                            .get(handle_id)
+                            .copied()
+                            .unwrap_or(*handle_id),
                     );
                 }
             }
         }
+
+        let mut individual_chats = Vec::new();
+        let mut group_chats = Vec::new();
+
+        for chat in listed_chats.values() {
+            if chat.message_count() == 0 {
+                continue;
+            }
+
+            if self.is_group_list_entry(chat) {
+                group_chats.push(chat);
+            } else {
+                individual_chats.push(chat);
+            }
+        }
+
+        individual_chats.sort_by(|left, right| {
+            right
+                .last_message_date
+                .cmp(&left.last_message_date)
+                .then_with(|| {
+                    self.list_contact_identifier(left)
+                        .cmp(&self.list_contact_identifier(right))
+                })
+        });
+        group_chats.sort_by(|left, right| {
+            right
+                .last_message_date
+                .cmp(&left.last_message_date)
+                .then_with(|| self.list_group_name(left).cmp(&self.list_group_name(right)))
+        });
+
+        println!("Total DMs: {}", individual_chats.len());
+        println!("Total Group Chats: {}", group_chats.len());
+        println!(
+            "Total Chats: {}",
+            individual_chats.len() + group_chats.len()
+        );
+
+        for chat in individual_chats {
+            let contact_id = Self::list_field(&self.list_contact_identifier(chat));
+            let display_name = Self::list_field(&self.list_contact_display_name(chat));
+            let first_date = self.format_list_date(chat.first_message_date);
+            let last_date = self.format_list_date(chat.last_message_date);
+            let chat_ids = Self::chat_ids_field(&chat.chat_ids);
+
+            println!(
+                "CONTACT|{contact_id}|{}|{first_date}|{last_date}|{chat_ids}|{display_name}",
+                chat.message_count()
+            );
+        }
+
+        for chat in group_chats {
+            let name = Self::list_field(&self.list_group_name(chat));
+            let participants = Self::list_field(&self.list_participant_names(chat).join(","));
+            let first_date = self.format_list_date(chat.first_message_date);
+            let last_date = self.format_list_date(chat.last_message_date);
+            let chat_ids = Self::chat_ids_field(&chat.chat_ids);
+
+            println!(
+                "GROUP|{name}|{}|{first_date}|{last_date}|{participants}|{chat_ids}",
+                chat.message_count()
+            );
+        }
+
         Ok(())
+    }
+
+    fn is_group_list_entry(&self, chat: &ListedChat) -> bool {
+        chat.participant_ids.len() > 1
+            || chat
+                .chat_identifier
+                .as_deref()
+                .map_or(false, |identifier| identifier.starts_with("chat"))
+    }
+
+    fn list_contact_identifier(&self, chat: &ListedChat) -> String {
+        if let Some(participant_id) = chat.participant_ids.iter().next()
+            && let Some(participant) = self.participants.get(participant_id)
+        {
+            if !participant.details.is_empty() {
+                return participant.details.clone();
+            }
+            return participant.get_display_name().to_string();
+        }
+
+        chat.chat_identifier
+            .clone()
+            .unwrap_or_else(|| UNKNOWN.to_string())
+    }
+
+    fn list_contact_display_name(&self, chat: &ListedChat) -> String {
+        if let Some(participant_id) = chat.participant_ids.iter().next()
+            && let Some(participant) = self.participants.get(participant_id)
+        {
+            return participant.get_display_name().to_string();
+        }
+
+        String::new()
+    }
+
+    fn list_group_name(&self, chat: &ListedChat) -> String {
+        if let Some(display_name) = &chat.display_name
+            && !display_name.is_empty()
+        {
+            return display_name.clone();
+        }
+
+        let participants = self.list_participant_names(chat);
+        if !participants.is_empty() {
+            return participants.join(", ");
+        }
+
+        chat.chat_identifier
+            .clone()
+            .unwrap_or_else(|| UNKNOWN.to_string())
+    }
+
+    fn list_participant_names(&self, chat: &ListedChat) -> Vec<String> {
+        chat.participant_ids
+            .iter()
+            .map(|participant_id| {
+                self.participants
+                    .get(participant_id)
+                    .map(|participant| participant.get_display_name().to_string())
+                    .unwrap_or_else(|| UNKNOWN.to_string())
+            })
+            .collect()
+    }
+
+    fn format_list_date(&self, date: Option<i64>) -> String {
+        date.and_then(|timestamp| get_local_time(timestamp, self.offset).ok())
+            .map(|date| format_date(&date))
+            .unwrap_or_else(|| String::from("Unknown"))
+    }
+
+    fn chat_ids_field(chat_ids: &BTreeSet<i32>) -> String {
+        chat_ids
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<String>>()
+            .join(",")
+    }
+
+    fn list_field(value: &str) -> String {
+        value.replace(['|', '\n', '\r'], " ").trim().to_string()
     }
 
     /// Determine who sent a message
@@ -814,19 +980,29 @@ impl Config {
             }
             return self.options.custom_name.as_deref().unwrap_or(ME);
         } else if let Some(handle_id) = handle_id {
-            return match self.participants.get(&handle_id) {
-                Some(contact) => contact,
+            return match self.resolve_participant(handle_id) {
+                Some(contact) => contact.get_display_name(),
                 None => UNKNOWN,
             };
         }
         UNKNOWN
     }
+
+    /// Resolve a participant name from a handle ID
+    fn resolve_participant(&self, handle_id: i32) -> Option<&Name> {
+        if let Some(internal_id) = self.real_participants.get(&handle_id) {
+            return self.participants.get(internal_id);
+        }
+        None
+    }
 }
 
+// MARK: Test Config
 #[cfg(test)]
 impl Config {
     pub fn fake_app(options: Options) -> Config {
-        let connection = get_connection(&options.db_path).unwrap();
+        let data_source = DataSource::from(&options).unwrap();
+
         Config {
             chatrooms: HashMap::new(),
             real_chatrooms: HashMap::new(),
@@ -834,9 +1010,10 @@ impl Config {
             participants: HashMap::new(),
             real_participants: HashMap::new(),
             tapbacks: HashMap::new(),
+            translated_messages: HashSet::new(),
             options,
             offset: get_offset(),
-            db: connection,
+            data_source,
         }
     }
 
@@ -872,7 +1049,7 @@ impl Config {
             num_attachments: 0,
             deleted_from: None,
             num_replies: 0,
-            components: None,
+            components: vec![],
             edited_parts: None,
         }
     }
@@ -893,15 +1070,19 @@ impl Config {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod filename_tests {
-    use crate::{app::runtime::MAX_LENGTH, Config, Options};
+    use crate::{
+        Config, Options,
+        app::{contacts::Name, runtime::MAX_LENGTH},
+    };
 
     use imessage_database::tables::chat::Chat;
 
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, path::PathBuf};
 
-    fn fake_chat() -> Chat {
+    pub fn fake_chat() -> Chat {
         Chat {
             rowid: 0,
             chat_identifier: "Default".to_string(),
@@ -925,8 +1106,10 @@ mod filename_tests {
         let mut app = Config::fake_app(options);
 
         // Create participant data
-        app.participants.insert(10, "Person 10".to_string());
-        app.participants.insert(11, "Person 11".to_string());
+        app.participants.insert(10, Name::fake_name("Person 10"));
+        app.participants.insert(11, Name::fake_name("Person 11"));
+        app.real_participants.insert(10, 10);
+        app.real_participants.insert(11, 11);
 
         // Add participants
         let mut people = BTreeSet::new();
@@ -943,40 +1126,49 @@ mod filename_tests {
     fn can_get_filename_long_multiple() {
         let options = Options::fake_options(crate::app::export_type::ExportType::Html);
         let mut app = Config::fake_app(options);
+        app.options.export_path = PathBuf::from("/tmp");
 
         // Create participant data
         app.participants.insert(
             10,
-            "Person With An Extremely and Excessively Long Name 10".to_string(),
+            Name::fake_name("Person With An Extremely and Excessively Long Name 10"),
         );
         app.participants.insert(
             11,
-            "Person With An Extremely and Excessively Long Name 11".to_string(),
+            Name::fake_name("Person With An Extremely and Excessively Long Name 11"),
         );
         app.participants.insert(
             12,
-            "Person With An Extremely and Excessively Long Name 12".to_string(),
+            Name::fake_name("Person With An Extremely and Excessively Long Name 12"),
         );
         app.participants.insert(
             13,
-            "Person With An Extremely and Excessively Long Name 13".to_string(),
+            Name::fake_name("Person With An Extremely and Excessively Long Name 13"),
         );
         app.participants.insert(
             14,
-            "Person With An Extremely and Excessively Long Name 14".to_string(),
+            Name::fake_name("Person With An Extremely and Excessively Long Name 14"),
         );
         app.participants.insert(
             15,
-            "Person With An Extremely and Excessively Long Name 15".to_string(),
+            Name::fake_name("Person With An Extremely and Excessively Long Name 15"),
         );
         app.participants.insert(
             16,
-            "Person With An Extremely and Excessively Long Name 16".to_string(),
+            Name::fake_name("Person With An Extremely and Excessively Long Name 16"),
         );
         app.participants.insert(
             17,
-            "Person With An Extremely and Excessively Long Name 17".to_string(),
+            Name::fake_name("Person With An Extremely and Excessively Long Name 17"),
         );
+        app.real_participants.insert(10, 10);
+        app.real_participants.insert(11, 11);
+        app.real_participants.insert(12, 12);
+        app.real_participants.insert(13, 13);
+        app.real_participants.insert(14, 14);
+        app.real_participants.insert(15, 15);
+        app.real_participants.insert(16, 16);
+        app.real_participants.insert(17, 17);
 
         // Add participants
         let mut people = BTreeSet::new();
@@ -991,7 +1183,7 @@ mod filename_tests {
 
         // Get filename
         let filename = app.filename_from_participants(&people);
-        assert_eq!(filename, "Person With An Extremely and Excessively Long Name 10, Person With An Extremely and Excessively Long Name 11, Person With An Extremely and Excessively Long Name 12, Person With An Extremely and Excessively Long Name 13, and 4 others".to_string());
+        assert_eq!(filename, "Person With An Extremely and Excessively Long Name 10, Person With An Extremely and Excessively Long Name 11, Person With An Extremely and Excessively Long Name 12, Person With An Extremely and Excessively Long Name , and 4 others".to_string());
         assert!(filename.len() <= MAX_LENGTH);
     }
 
@@ -999,9 +1191,11 @@ mod filename_tests {
     fn can_get_filename_single_long() {
         let options = Options::fake_options(crate::app::export_type::ExportType::Html);
         let mut app = Config::fake_app(options);
+        app.options.export_path = PathBuf::from("/tmp");
 
         // Create participant data
-        app.participants.insert(10, "He slipped his key into the lock, and we all very quietly entered the cell. The sleeper half turned, and then settled down once more into a deep slumber. Holmes stooped to the water-jug, moistened his sponge, and then rubbed it twice vigorously across and down the prisoner's face.".to_string());
+        app.participants.insert(10, Name::fake_name("He slipped his key into the lock, and we all very quietly entered the cell. The sleeper half turned, and then settled down once more into a deep slumber. Holmes stooped to the water-jug, moistened his sponge, and then rubbed it twice vigorously across and down the prisoner's face."));
+        app.real_participants.insert(10, 10);
 
         // Add 1 person
         let mut people = BTreeSet::new();
@@ -1009,14 +1203,42 @@ mod filename_tests {
 
         // Get filename
         let filename = app.filename_from_participants(&people);
-        assert_eq!(filename, "He slipped his key into the lock, and we all very quietly entered the cell. The sleeper half turned, and then settled down once more into a deep slumber. Holmes stooped to the water-jug, moistened his sponge, and then rubbed it twice v".to_string());
+        assert_eq!(filename, "He slipped his key into the lock, and we all very quietly entered the cell. The sleeper half turned, and then settled down once more into a deep slumber. Holmes stooped to the water-jug, moistened his sponge, and then rubbed it tw".to_string());
         assert!(filename.len() <= MAX_LENGTH);
+    }
+
+    #[test]
+    fn can_get_filename_respects_separator_length() {
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
+
+        let export_path_len = app.options.export_path.as_os_str().len();
+        let max_len = MAX_LENGTH.saturating_sub(export_path_len + 1);
+
+        // P + N = max_len - 1 passes the raw-bytes check; pushing ", " would overflow.
+        let first_len = max_len / 2;
+        let second_len = max_len - first_len - 1;
+        let first = "a".repeat(first_len);
+        let second = "b".repeat(second_len);
+
+        app.participants.insert(10, Name::fake_name(&first));
+        app.participants.insert(11, Name::fake_name(&second));
+        app.real_participants.insert(10, 10);
+        app.real_participants.insert(11, 11);
+
+        let mut people = BTreeSet::new();
+        people.insert(10);
+        people.insert(11);
+
+        let actual = app.filename_from_participants(&people);
+        assert!(actual.len() <= max_len);
     }
 
     #[test]
     fn can_get_filename_chat_display_name_long() {
         let options = Options::fake_options(crate::app::export_type::ExportType::Html);
-        let app = Config::fake_app(options);
+        let mut app = Config::fake_app(options);
+        app.options.export_path = PathBuf::from("/tmp");
 
         // Create chat
         let mut chat = fake_chat();
@@ -1026,7 +1248,7 @@ mod filename_tests {
         let filename = app.filename(&chat);
         assert_eq!(
             filename,
-            "Life is infinitely stranger than anything which the mind of man could invent. We would not dare to conceive the things which are really mere commonplaces of existence. If we could fly out of that window hand in hand, hover over this gr - 0.html"
+            "Life is infinitely stranger than anything which the mind of man could invent. We would not dare to conceive the things which are really mere commonplaces of existence. If we could fly out of that window hand in hand, hover over th - 0.html"
         );
     }
 
@@ -1067,8 +1289,10 @@ mod filename_tests {
         let chat = fake_chat();
 
         // Create participant data
-        app.participants.insert(10, "Person 10".to_string());
-        app.participants.insert(11, "Person 11".to_string());
+        app.participants.insert(10, Name::fake_name("Person 10"));
+        app.participants.insert(11, Name::fake_name("Person 11"));
+        app.real_participants.insert(10, 10);
+        app.real_participants.insert(11, 11);
 
         // Add participants
         let mut people = BTreeSet::new();
@@ -1093,21 +1317,97 @@ mod filename_tests {
         let filename = app.filename(&chat);
         assert_eq!(filename, "Default.html");
     }
+
+    #[test]
+    fn can_get_filename_chat_display_name_truncated_emoji() {
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let app = Config::fake_app(options);
+
+        // Create a display name that is exactly at the boundary with a multi-byte emoji
+        // Each 🤠 is 4 bytes. Fill enough to force truncation at an emoji boundary.
+        let emoji_name: String = "🤠".repeat(60); // 240 bytes, exceeds MAX_LENGTH
+        let mut chat = fake_chat();
+        chat.display_name = Some(emoji_name);
+
+        // Should not panic, and the result should be valid UTF-8
+        let filename = app.filename(&chat);
+        assert!(filename.len() <= MAX_LENGTH + 20); // suffix " - 0.html" adds some
+        // Verify it's valid UTF-8 (would fail to compile/run if not)
+        assert!(filename.ends_with(".html"));
+    }
+
+    #[test]
+    fn can_get_filename_single_long_emoji() {
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
+
+        // Create a participant with a name full of 4-byte emoji
+        let emoji_name: String = "🌍".repeat(60); // 240 bytes
+        app.participants.insert(10, Name::fake_name(&emoji_name));
+        app.real_participants.insert(10, 10);
+
+        let mut people = BTreeSet::new();
+        people.insert(10);
+
+        // Should not panic and should produce valid UTF-8
+        let filename = app.filename_from_participants(&people);
+        assert!(filename.len() <= MAX_LENGTH);
+        // Verify the truncation happened on a char boundary
+        for c in filename.chars() {
+            assert!(c == '🌍');
+        }
+    }
+
+    #[test]
+    fn can_get_filename_multiple_long_emoji() {
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
+
+        // Create participants with emoji names long enough to trigger the "and N others" truncation
+        for i in 10..18 {
+            let emoji_name: String = "🎵".repeat(30); // 120 bytes each
+            app.participants.insert(i, Name::fake_name(&emoji_name));
+            app.real_participants.insert(i, i);
+        }
+
+        let mut people = BTreeSet::new();
+        for i in 10..18 {
+            people.insert(i);
+        }
+
+        // Should not panic and should produce valid UTF-8 within the length limit
+        let filename = app.filename_from_participants(&people);
+        assert!(filename.len() <= MAX_LENGTH);
+    }
+
+    #[test]
+    fn can_get_filename_cjk_truncation() {
+        let options = Options::fake_options(crate::app::export_type::ExportType::Html);
+        let mut app = Config::fake_app(options);
+
+        // CJK characters are 3 bytes each; test truncation mid-character
+        let cjk_name: String = "你".repeat(80); // 240 bytes
+        app.participants.insert(10, Name::fake_name(&cjk_name));
+        app.real_participants.insert(10, 10);
+
+        let mut people = BTreeSet::new();
+        people.insert(10);
+
+        let filename = app.filename_from_participants(&people);
+        assert!(filename.len() <= MAX_LENGTH);
+        // All characters should be valid
+        for c in filename.chars() {
+            assert!(c == '你');
+        }
+    }
 }
 
 #[cfg(test)]
 mod who_tests {
-    use crate::{Config, Options};
-    use imessage_database::tables::chat::Chat;
-
-    fn fake_chat() -> Chat {
-        Chat {
-            rowid: 0,
-            chat_identifier: "Default".to_string(),
-            service_name: Some(String::new()),
-            display_name: None,
-        }
-    }
+    use crate::{
+        Config, Options,
+        app::{contacts::Name, runtime::filename_tests::fake_chat},
+    };
 
     #[test]
     fn can_get_who_them() {
@@ -1115,7 +1415,8 @@ mod who_tests {
         let mut app = Config::fake_app(options);
 
         // Create participant data
-        app.participants.insert(10, "Person 10".to_string());
+        app.participants.insert(10, Name::fake_name("Person 10"));
+        app.real_participants.insert(10, 10);
 
         // Get participant name
         let who = app.who(Some(10), false, &None);
@@ -1344,7 +1645,7 @@ mod directory_tests {
         // Create attachment
         let mut attachment = Config::fake_attachment();
         let mut full_path = PathBuf::from("/Users/ReagentX/exports/attachments");
-        full_path.push(attachment.filename());
+        full_path.push(attachment.filename().unwrap());
         attachment.copied_path = Some(full_path);
 
         let result = app.message_attachment_path(&attachment);
@@ -1374,7 +1675,10 @@ mod directory_tests {
 mod chat_filter_tests {
     use std::collections::BTreeSet;
 
-    use crate::{app::export_type::ExportType, Config, Options};
+    use crate::{
+        Config, Options,
+        app::{contacts::Name, export_type::ExportType},
+    };
 
     #[test]
     fn can_generate_filter_string_multiple() {
@@ -1384,10 +1688,15 @@ mod chat_filter_tests {
         let mut app = Config::fake_app(options);
 
         // Add some test data
-        app.participants.insert(10, "Person 10".to_string()); // Included
-        app.participants.insert(11, "Person 11".to_string()); // Included
-        app.participants.insert(12, "Person 12".to_string()); // Included
-        app.participants.insert(13, "Person 13".to_string()); // Excluded
+        app.participants.insert(10, Name::fake_name("Person 10")); // Included
+        app.participants.insert(11, Name::fake_name("Person 11")); // Included
+        app.participants.insert(12, Name::fake_name("Person 12")); // Included
+        app.participants.insert(13, Name::fake_name("Person 13")); // Excluded
+
+        // Set the chatroom participant IDs
+        for (id, participant) in app.participants.iter_mut() {
+            participant.handle_ids.insert(*id);
+        }
 
         // Chatroom 1: Included
         let mut chatroom_1 = BTreeSet::new();
@@ -1442,10 +1751,15 @@ mod chat_filter_tests {
         let mut app = Config::fake_app(options);
 
         // Add some test data
-        app.participants.insert(10, "Person 10".to_string()); // Excluded
-        app.participants.insert(11, "Person 11".to_string()); // Excluded
-        app.participants.insert(12, "Person 12".to_string()); // Excluded
-        app.participants.insert(13, "Person 13".to_string()); // Included
+        app.participants.insert(10, Name::fake_name("Person 10")); // Excluded
+        app.participants.insert(11, Name::fake_name("Person 11")); // Excluded
+        app.participants.insert(12, Name::fake_name("Person 12")); // Excluded
+        app.participants.insert(13, Name::fake_name("Person 13")); // Included
+
+        // Set the chatroom participant IDs
+        for (id, participant) in app.participants.iter_mut() {
+            participant.handle_ids.insert(*id);
+        }
 
         // Chatroom 1: Excluded
         let mut chatroom_1 = BTreeSet::new();

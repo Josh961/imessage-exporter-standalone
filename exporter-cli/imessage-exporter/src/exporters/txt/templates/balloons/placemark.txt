@@ -1,0 +1,13 @@
+{% if let Some(place_name) = place_name.get() %}{{ place_name }}
+{% endif %}{% if let Some(url) = url.get() %}{{ url }}
+{% endif %}{% if let Some(name) = name.get() %}{{ name }}
+{% endif %}{% if let Some(address) = address.get() %}{{ address }}
+{% endif %}{% if let Some(state) = state.get() %}{{ state }}
+{% endif %}{% if let Some(city) = city.get() %}{{ city }}
+{% endif %}{% if let Some(iso_country_code) = iso_country_code.get() %}{{ iso_country_code }}
+{% endif %}{% if let Some(postal_code) = postal_code.get() %}{{ postal_code }}
+{% endif %}{% if let Some(country) = country.get() %}{{ country }}
+{% endif %}{% if let Some(street) = street.get() %}{{ street }}
+{% endif %}{% if let Some(sub_administrative_area) = sub_administrative_area.get() %}{{ sub_administrative_area }}
+{% endif %}{% if let Some(sub_locality) = sub_locality.get() %}{{ sub_locality }}
+{% endif %}

@@ -1,0 +1,6 @@
+{% match body %}{% when PartBody::Empty %}{% when PartBody::Line { text } %}{% for line in text.lines() %}{{ line }}
+{% endfor %}{% when PartBody::Translated { translated, original } %}{{ translated }}
+Translated from:
+{{ original }}
+{% endmatch %}{% if let Some(expressive) = expressive %}{{ expressive }}
+{% endif %}{% if let Some(tapbacks) = tapbacks %}{{ tapbacks|safe }}{% endif %}{% if let Some(replies) = replies %}{{ replies|safe }}{% endif %}

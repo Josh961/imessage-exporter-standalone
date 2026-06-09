@@ -1,12 +1,36 @@
+//! Routines for working with `typedstream` data, focussing specifically on [`NSAttributedString`](https://developer.apple.com/documentation/foundation/nsattributedstring).
+
+use std::{
+    collections::{HashMap, HashSet},
+    sync::LazyLock,
+};
+
+use crabstep::{PropertyIterator, deserializer::iter::Property};
+
 use crate::{
     message_types::{
         edited::{EditStatus, EditedMessage},
         text_effects::{Animation, Style, TextEffect, Unit},
     },
     tables::messages::models::{AttachmentMeta, BubbleComponent, TextAttributes},
-    util::typedstream::models::{Archivable, OutputData},
+    util::typedstream::{
+        as_ns_dictionary, as_nsstring, as_nsurl, as_signed_integer, as_type_length_pair,
+    },
 };
 
+// MARK: Constants
+/// `NSDictionary` keys that are used to identify attachment metadata
+/// If any of these keys are present in the message body, it is considered an attachment
+/// and the `AttachmentMeta` struct will be populated with the relevant data.
+static ATTACHMENT_META_KEYS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    HashSet::from([
+        "__kIMFileTransferGUIDAttributeName",
+        "__kIMInlineMediaHeightAttributeName",
+        "__kIMFilenameAttributeName",
+        "__kIMInlineMediaWidthAttributeName",
+        "IMAudioTranscription",
+    ])
+});
 /// Character found in message body text that indicates attachment position
 const ATTACHMENT_CHAR: char = '\u{FFFC}';
 /// Character found in message body text that indicates app message position
@@ -14,69 +38,123 @@ const APP_CHAR: char = '\u{FFFD}';
 /// A collection of characters that represent non-text content within body text
 const REPLACEMENT_CHARS: [char; 2] = [ATTACHMENT_CHAR, APP_CHAR];
 
-pub enum BubbleResult<'a> {
-    New(BubbleComponent<'a>),
-    Continuation(TextAttributes<'a>),
+/// Indicates the outcome of parsing an attributed range: either an optional text effect or a style change.
+#[derive(Debug, PartialEq)]
+pub enum RangeResult {
+    Effect(Option<TextEffect>),
+    Style(Style),
 }
 
-/// Logic to use deserialized typedstream data to parse the message body
-pub(crate) fn parse_body_typedstream<'a>(
-    components: Option<&'a Vec<Archivable>>,
-    text: Option<&'a str>,
+/// The result of parsing a message body, containing its components and optional plain text.
+#[derive(Debug, PartialEq)]
+pub struct ParseResult {
+    pub components: Vec<BubbleComponent>,
+    pub text: Option<String>,
+}
+
+// MARK: Logic
+/// Logic to use deserialized `typedstream` data to parse the message body
+///
+/// Parses `typedstream` components and optional edited parts into message body components and text.
+///
+/// Takes an optional [`PropertyIterator`] over `typedstream` data and optional edited parts,
+/// returning `Some(ParseResult)` when parsing yields components, otherwise `None`.
+///
+/// # Parameters
+///
+/// - `components`: Iterator over `typedstream` properties representing an `NSAttributedString`.
+/// - `edited_parts`: Optional edited message parts to mark unsent components.
+///
+/// # Returns
+///
+/// `Option<ParseResult>` containing parsed components and text, or `None` if no components found.
+pub fn parse_body_typedstream<'a>(
+    components: Option<PropertyIterator<'a, 'a>>,
     edited_parts: Option<&'a EditedMessage>,
-) -> Option<Vec<BubbleComponent<'a>>> {
+) -> Option<ParseResult> {
     // Create the output data
-    let mut out_v = vec![];
+    let mut message_text = None;
+    let mut out_v = Vec::with_capacity(4);
+
+    // Format ranges are only stored once and then referenced by order of appearance (starting at 1),
+    // so we need cache them to properly apply styles and attributes.
+    // The key is the range ID, and the value is the location of the original formatting data
+    // in the `out_v` vector.
+    let mut format_range_cache: HashMap<i64, BubbleComponent> = HashMap::with_capacity(4);
 
     // Start to iterate over the ranges
-    if let Some(components) = components {
-        // The first item is the text itself, so skip over it when iterating
-        let mut idx = 1;
-        let mut current_start;
-        let mut current_end = 0;
+    let mut current_range_id;
+    let mut current_start;
+    let mut current_end = 0;
 
-        // We want to index into the message text, so we need a table to align
-        // Apple's indexes with the actual chars, not the bytes
-        let char_index_table: Vec<usize> = text.as_ref()?.char_indices().map(|(a, _)| a).collect();
+    if let Some(mut components) = components {
+        // The first component is the text itself
+        if let Some(text) = components.next().as_mut().and_then(as_nsstring) {
+            message_text = Some(text.to_string());
+            // We want to index into the message text, so we need a table to align
+            // Apple's indexes with the actual chars, not the bytes
+            let utf16_to_byte: Vec<usize> = build_utf16_to_byte_map(text);
 
-        while idx < components.len() {
-            // The first part of the range sometimes indicates the part number, but not always
-            if let Some((_, length)) = get_range(components.get(idx)?) {
-                current_start = current_end;
-                current_end += *length as usize;
-            } else {
-                idx += 1;
-                continue;
-            }
+            while let Some(mut property) = components.next() {
+                // The first part of the range represents the index in the format cache
+                // the second part is the length of the range in UTF-16 code units
+                if let Some(range) = as_type_length_pair(&mut property) {
+                    current_start = current_end;
+                    current_end += range.length as usize;
+                    current_range_id = range.type_index;
 
-            // The range is followed by a dictionary of attributes that map to that range
-            idx += 1;
-            let num_attrs = get_attribute_dict_length(components.get(idx));
+                    let new_bubble = format_range_cache
+                        .get(&current_range_id)
+                        .cloned()
+                        // Try to reuse an existing bubble
+                        .and_then(|mut bubble| {
+                            if let BubbleComponent::Text(attrs) = &mut bubble {
+                                let start = utf16_idx(text, current_start, &utf16_to_byte);
+                                let end = utf16_idx(text, current_end, &utf16_to_byte);
+                                for attr in attrs {
+                                    attr.start = start;
+                                    attr.end = end;
+                                }
+                                return Some(bubble);
+                            }
+                            None
+                        })
+                        // If that failed, try to build a new one
+                        .or_else(|| {
+                            components
+                                .next()
+                                .as_mut()
+                                .and_then(as_ns_dictionary)
+                                .and_then(|dict| {
+                                    get_bubble_type(
+                                        dict,
+                                        Some(text),
+                                        current_start,
+                                        current_end,
+                                        &utf16_to_byte,
+                                    )
+                                    .inspect(|bubble| {
+                                        format_range_cache.insert(current_range_id, bubble.clone());
+                                    })
+                                })
+                        });
 
-            // The next set of values alternate between key and value pairs for the dictionary, if there are any
-            if num_attrs > 0 {
-                idx += 1;
-            }
-
-            // If there are no attributes, the default bubble will be applied
-            // Otherwise, determine the bubble based on the attributes
-            let slice: &[Archivable] = get_n_dict_objects(components, idx, num_attrs);
-
-            // Determine the type of the bubble and add it to the body parts vec
-            if let Some(bubble) =
-                get_bubble_type(slice, text, current_start, current_end, &char_index_table)
-            {
-                match bubble {
-                    BubbleResult::New(item) => out_v.push(item),
-                    BubbleResult::Continuation(effect) => match out_v.last_mut() {
-                        Some(BubbleComponent::Text(attrs)) => attrs.push(effect),
-                        _ => out_v.push(BubbleComponent::Text(vec![effect])),
-                    },
+                    match (out_v.last_mut(), new_bubble) {
+                        (
+                            Some(BubbleComponent::Text(attrs)),
+                            Some(BubbleComponent::Text(current)),
+                        ) => {
+                            // last is Text and new bubble is Text: merge
+                            attrs.extend(current);
+                        }
+                        (_, Some(b)) => {
+                            // everything else: push the new bubble
+                            out_v.push(b);
+                        }
+                        _ => {}
+                    }
                 }
             }
-
-            // Advance the iterator by the number of attributes we just consumed
-            idx += slice.len();
         }
     }
 
@@ -87,156 +165,142 @@ pub(crate) fn parse_body_typedstream<'a>(
                 if idx >= out_v.len() {
                     out_v.push(BubbleComponent::Retracted);
                 } else {
-                    out_v.insert(idx, BubbleComponent::Retracted)
+                    out_v.insert(idx, BubbleComponent::Retracted);
                 }
             }
         }
     }
-    (!out_v.is_empty()).then_some(out_v)
+    // Return None only when nothing useful was extracted. `Some("")` is a
+    // valid result.
+    (!out_v.is_empty() || message_text.is_some()).then_some(ParseResult {
+        components: out_v,
+        text: message_text,
+    })
 }
 
-fn get_range(component: &Archivable) -> Option<(&i64, &u64)> {
-    if let Archivable::Data(items) = component {
-        if items.len() == 2 {
-            if let (OutputData::SignedInteger(item), OutputData::UnsignedInteger(end)) =
-                (items.first()?, items.get(1)?)
-            {
-                return Some((item, end));
-            }
+/// Build a table so that `utf16_to_byte[n]` gives the byte offset
+/// that corresponds to the *n*-th UTF-16 code-unit of `s`.
+fn build_utf16_to_byte_map(s: &str) -> Vec<usize> {
+    let mut map = Vec::with_capacity(s.len() + 1);
+    let mut byte = 0;
+    for ch in s.chars() {
+        // how many UTF-16 units does this scalar use (1 or 2)
+        let units = ch.len_utf16();
+        for _ in 0..units {
+            map.push(byte);
         }
+        byte += ch.len_utf8();
     }
-    None
+    map.push(byte);
+    map
 }
 
-/// Given the attributedBody range indexes, get the substring from the Rust representations `char_indices()`
-fn get_char_idx(text: &str, idx: usize, char_indices: &[usize]) -> usize {
-    char_indices.get(idx).map_or(text.len(), |i| *i)
+/// Given the `attributedBody` range indexes, get the substring indexes from the `UTF-16` representation.
+fn utf16_idx(text: &str, idx: usize, map: &[usize]) -> usize {
+    *map.get(idx).unwrap_or(&text.len())
 }
 
-/// Get the number of key/value object pairs in a NSDictionary
-fn get_attribute_dict_length(component: Option<&Archivable>) -> usize {
-    if let Some(Archivable::Object(class, data)) = component {
-        if class.name == "NSDictionary" {
-            if let Some(OutputData::SignedInteger(length)) = data.first() {
-                return (length * 2) as usize;
-            }
-        }
-    }
-    0
-}
-
-/// Get a specific number of objects that represent the content of a dictionary
-fn get_n_dict_objects(components: &[Archivable], idx: usize, num_objects: usize) -> &[Archivable] {
-    if num_objects == 0 {
-        return &[];
-    }
-    let mut final_idx = idx + num_objects;
-    for (idx, component) in components.iter().enumerate().skip(idx) {
-        // Break the loop if we encounter a new range, which indicates we should move on to the next part
-        if get_range(component).is_some() {
-            break;
-        }
-        final_idx = idx;
-    }
-    components.get(idx..final_idx + 1).unwrap_or(&[])
-}
-
-/// Determine the type of bubble the current range represents
+/// Determines the type of bubble component for a given typedstream range.
 ///
-/// App messages are handled in [`body()`](crate::tables::table::AttributedBody); they are detected by the presence of data in the `balloon_bundle_id` column.
+/// This inspects typedstream properties to classify a range as text, attachment, or app content,
+/// returning `Some(BubbleComponent)` when a valid component is detected.
 fn get_bubble_type<'a>(
-    components: &'a [Archivable],
+    components: &'a mut PropertyIterator<'a, 'a>,
     text: Option<&str>,
     start: usize,
     end: usize,
-    char_indices: &[usize],
-) -> Option<BubbleResult<'a>> {
-    let range_start = get_char_idx(text.as_ref()?, start, char_indices);
-    let range_end = get_char_idx(text.as_ref()?, end, char_indices);
-    for (idx, key) in components.iter().enumerate() {
-        if let Some(key_name) = key.as_nsstring() {
-            match key_name {
-                "__kIMFileTransferGUIDAttributeName" => {
-                    return Some(BubbleResult::New(BubbleComponent::Attachment(
-                        AttachmentMeta::from_components(components)?,
-                    )));
-                }
-                "__kIMMentionConfirmedMention" => {
-                    return Some(BubbleResult::Continuation(TextAttributes::new(
-                        range_start,
-                        range_end,
-                        TextEffect::Mention(components.get(idx + 1)?.as_nsstring().unwrap_or("")),
-                    )));
-                }
-                "__kIMLinkAttributeName" => {
-                    return Some(BubbleResult::Continuation(TextAttributes::new(
-                        range_start,
-                        range_end,
-                        TextEffect::Link(components.get(idx + 2)?.as_nsstring().unwrap_or("#")),
-                    )));
-                }
-                "__kIMOneTimeCodeAttributeName" => {
-                    return Some(BubbleResult::Continuation(TextAttributes::new(
-                        range_start,
-                        range_end,
-                        TextEffect::OTP,
-                    )));
-                }
-                "__kIMCalendarEventAttributeName" => {
-                    return Some(BubbleResult::Continuation(TextAttributes::new(
-                        range_start,
-                        range_end,
-                        TextEffect::Conversion(Unit::Timezone),
-                    )));
-                }
-                // Any number of text styles can be applied to a message
-                "__kIMTextBoldAttributeName"
-                | "__kIMTextUnderlineAttributeName"
-                | "__kIMTextItalicAttributeName"
-                | "__kIMTextStrikethroughAttributeName" => {
-                    return Some(BubbleResult::Continuation(TextAttributes::new(
-                        range_start,
-                        range_end,
-                        TextEffect::Styles(resolve_styles(components)),
-                    )));
-                }
-                "__kIMTextEffectAttributeName" => {
-                    return Some(BubbleResult::Continuation(TextAttributes::new(
-                        range_start,
-                        range_end,
-                        TextEffect::Animated(Animation::from_id(
-                            *components.get(idx + 1)?.as_nsnumber_int().unwrap_or(&0),
-                        )),
-                    )));
-                }
-                _ => {}
-            }
+    utf16_to_byte: &[usize],
+) -> Option<BubbleComponent> {
+    // The first item in `components` is the number of key/value pairs in the `NSDictionary`
+    let num_objects = components.next().as_ref().and_then(as_signed_integer)?;
+    let mut found_effects = Vec::with_capacity(num_objects as usize);
+    let mut found_styles = Vec::with_capacity(num_objects as usize);
+
+    // The start and end indexes are based on the `UTF-16` char indexes of the text, so we need to convert them
+    let range_start = utf16_idx(text.as_ref()?, start, utf16_to_byte);
+    let range_end = utf16_idx(text.as_ref()?, end, utf16_to_byte);
+
+    // Iterate over the key/value pairs in the `NSDictionary` data
+    for _ in 0..num_objects {
+        let mut key = components.next()?;
+
+        // Convert the key to a string
+        let key_name = as_nsstring(&mut key)?;
+
+        // Early exit for attachment components
+        if ATTACHMENT_META_KEYS.contains(key_name) {
+            return Some(BubbleComponent::Attachment(
+                AttachmentMeta::from_components(key_name, components),
+            ));
+        }
+
+        let mut value = components.next()?;
+
+        // Determine the text effects or styles based on the key name
+        let effect = get_text_effects(key_name, &mut value);
+        match effect {
+            RangeResult::Effect(Some(text_effect)) => found_effects.push(text_effect),
+            RangeResult::Style(style) => found_styles.push(style),
+            _ => {}
         }
     }
-    Some(BubbleResult::Continuation(TextAttributes::new(
-        range_start,
-        range_end,
-        TextEffect::Default,
-    )))
+
+    // If no effects or styles were found, we still need to create a text bubble with the default effect
+    let mut attributes = if found_effects.is_empty() && found_styles.is_empty() {
+        TextAttributes::new(range_start, range_end, vec![TextEffect::Default])
+    } else {
+        TextAttributes::new(range_start, range_end, found_effects)
+    };
+
+    // If we found any styles, we need to add them to the text attributes
+    if !found_styles.is_empty() {
+        let format_styles = TextEffect::Styles(found_styles);
+        attributes.effects.push(format_styles);
+    }
+
+    Some(BubbleComponent::Text(vec![attributes]))
 }
 
-/// Extract text styles from a range of key-value pairs
-fn resolve_styles(components: &[Archivable]) -> Vec<Style> {
-    let mut styles = vec![];
-    for key in components.iter() {
-        if let Some(key_name) = key.as_nsstring() {
-            match key_name {
-                "__kIMTextBoldAttributeName" => styles.push(Style::Bold),
-                "__kIMTextUnderlineAttributeName" => styles.push(Style::Underline),
-                "__kIMTextItalicAttributeName" => styles.push(Style::Italic),
-                "__kIMTextStrikethroughAttributeName" => styles.push(Style::Strikethrough),
-                _ => {}
+/// Collect all text effects from the component attributes
+fn get_text_effects<'a>(key_name: &'a str, value: &'a mut Property<'a, 'a>) -> RangeResult {
+    match key_name {
+        "__kIMMentionConfirmedMention" => {
+            if let Some(mention_value) = as_nsstring(value) {
+                return RangeResult::Effect(Some(TextEffect::Mention(mention_value.to_string())));
             }
         }
+        "__kIMLinkAttributeName" => {
+            if let Some(url) = as_nsurl(value) {
+                return RangeResult::Effect(Some(TextEffect::Link(url.to_string())));
+            }
+        }
+        "__kIMOneTimeCodeAttributeName" => {
+            return RangeResult::Effect(Some(TextEffect::OTP));
+        }
+        "__kIMCalendarEventAttributeName" => {
+            return RangeResult::Effect(Some(TextEffect::Conversion(Unit::Timezone)));
+        }
+        "__kIMTextEffectAttributeName" => {
+            if let Some(effect_id) = as_signed_integer(value) {
+                return RangeResult::Effect(Some(TextEffect::Animated(Animation::from_id(
+                    effect_id,
+                ))));
+            }
+        }
+        // Collect style attributes for later processing
+        "__kIMTextBoldAttributeName" => return RangeResult::Style(Style::Bold),
+        "__kIMTextUnderlineAttributeName" => return RangeResult::Style(Style::Underline),
+        "__kIMTextItalicAttributeName" => return RangeResult::Style(Style::Italic),
+        "__kIMTextStrikethroughAttributeName" => {
+            return RangeResult::Style(Style::Strikethrough);
+        }
+        _ => {}
     }
-    styles
+
+    RangeResult::Effect(None)
 }
 
+// MARK: Fallback
 /// Fallback logic to parse the body from the message string content
 pub(crate) fn parse_body_legacy(text: &Option<String>) -> Vec<BubbleComponent> {
     let mut out_v = vec![];
@@ -252,18 +316,18 @@ pub(crate) fn parse_body_legacy(text: &Option<String>) -> Vec<BubbleComponent> {
                         out_v.push(BubbleComponent::Text(vec![TextAttributes::new(
                             start,
                             idx,
-                            TextEffect::Default,
+                            vec![TextEffect::Default],
                         )]));
                     }
                     start = idx + 1;
                     end = idx;
                     match char {
                         ATTACHMENT_CHAR => {
-                            out_v.push(BubbleComponent::Attachment(AttachmentMeta::default()))
+                            out_v.push(BubbleComponent::Attachment(AttachmentMeta::default()));
                         }
                         APP_CHAR => out_v.push(BubbleComponent::App),
                         _ => {}
-                    };
+                    }
                 } else {
                     if start > end {
                         start = idx;
@@ -275,7 +339,7 @@ pub(crate) fn parse_body_legacy(text: &Option<String>) -> Vec<BubbleComponent> {
                 out_v.push(BubbleComponent::Text(vec![TextAttributes::new(
                     start,
                     text.len(),
-                    TextEffect::Default,
+                    vec![TextEffect::Default],
                 )]));
             }
             out_v
@@ -284,9 +348,12 @@ pub(crate) fn parse_body_legacy(text: &Option<String>) -> Vec<BubbleComponent> {
     }
 }
 
+// MARK: TS Test
 #[cfg(test)]
 mod typedstream_tests {
     use std::{env::current_dir, fs::File, io::Read};
+
+    use crabstep::TypedStreamDeserializer;
 
     use crate::{
         message_types::{
@@ -298,7 +365,6 @@ mod typedstream_tests {
             body::parse_body_typedstream,
             models::{AttachmentMeta, BubbleComponent, TextAttributes},
         },
-        util::typedstream::parser::TypedStreamReader,
     };
 
     #[test]
@@ -314,20 +380,16 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 10,
-                TextEffect::Default
+                vec![TextEffect::Default]
             )])]
         );
     }
@@ -345,18 +407,14 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Attachment(AttachmentMeta {
-                guid: Some("F0B18A15-E9A5-4B18-A38F-685B7B3FF037"),
+                guid: Some("F0B18A15-E9A5-4B18-A38F-685B7B3FF037".to_string()),
                 transcription: None,
                 height: None,
                 width: None,
@@ -378,20 +436,16 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 6,
-                TextEffect::Default
+                vec![TextEffect::Default]
             )])]
         );
     }
@@ -404,46 +458,42 @@ mod typedstream_tests {
         let typedstream_path = current_dir()
             .unwrap()
             .as_path()
-            .join("test_data/typedstream/Multipart");
+            .join("test_data/typedstream/MultiPart");
         let mut file = File::open(typedstream_path).unwrap();
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("at_0_F0668F79-20C2-49C9-A87F-1B007ABB0CED"),
+                    guid: Some("at_0_F0668F79-20C2-49C9-A87F-1B007ABB0CED".to_string()),
                     transcription: None,
                     height: None,
                     width: None,
                     name: None
                 }),
-                BubbleComponent::Text(vec![TextAttributes::new(3, 9, TextEffect::Default)]),
+                BubbleComponent::Text(vec![TextAttributes::new(3, 9, vec![TextEffect::Default])]),
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("at_2_F0668F79-20C2-49C9-A87F-1B007ABB0CED"),
+                    guid: Some("at_2_F0668F79-20C2-49C9-A87F-1B007ABB0CED".to_string()),
                     transcription: None,
                     height: None,
                     width: None,
                     name: None
                 }),
-                BubbleComponent::Text(vec![TextAttributes::new(12, 19, TextEffect::Default)]),
+                BubbleComponent::Text(vec![TextAttributes::new(12, 19, vec![TextEffect::Default])]),
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("at_4_F0668F79-20C2-49C9-A87F-1B007ABB0CED"),
+                    guid: Some("at_4_F0668F79-20C2-49C9-A87F-1B007ABB0CED".to_string()),
                     transcription: None,
                     height: None,
                     width: None,
                     name: None
                 }),
-                BubbleComponent::Text(vec![TextAttributes::new(22, 28, TextEffect::Default)]),
+                BubbleComponent::Text(vec![TextAttributes::new(22, 28, vec![TextEffect::Default])]),
             ]
         );
     }
@@ -454,6 +504,26 @@ mod typedstream_tests {
         m.text = Some(
             "From arbitrary byte stream:\r\u{FFFC}To native Rust data structures:\r".to_string(),
         );
+        m.edited_parts = Some(EditedMessage {
+            parts: vec![
+                EditedMessagePart {
+                    status: EditStatus::Original,
+                    edit_history: vec![],
+                },
+                EditedMessagePart {
+                    status: EditStatus::Original,
+                    edit_history: vec![],
+                },
+                EditedMessagePart {
+                    status: EditStatus::Original,
+                    edit_history: vec![],
+                },
+                EditedMessagePart {
+                    status: EditStatus::Unsent,
+                    edit_history: vec![],
+                },
+            ],
+        });
 
         let typedstream_path = current_dir()
             .unwrap()
@@ -463,26 +533,23 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![
-                BubbleComponent::Text(vec![TextAttributes::new(0, 28, TextEffect::Default)]),
+                BubbleComponent::Text(vec![TextAttributes::new(0, 28, vec![TextEffect::Default])]),
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("D0551D89-4E11-43D0-9A0E-06F19704E97B"),
+                    guid: Some("D0551D89-4E11-43D0-9A0E-06F19704E97B".to_string()),
                     transcription: None,
                     height: None,
                     width: None,
                     name: None
                 }),
-                BubbleComponent::Text(vec![TextAttributes::new(31, 63, TextEffect::Default)]),
+                BubbleComponent::Text(vec![TextAttributes::new(31, 63, vec![TextEffect::Default])]),
+                BubbleComponent::Retracted
             ]
         );
     }
@@ -502,8 +569,8 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
         m.edited_parts = Some(EditedMessage {
             parts: vec![
@@ -520,14 +587,14 @@ mod typedstream_tests {
                     edit_history: vec![
                         EditedEvent::new(
                             743907435000000000,
-                            Some("Second test".to_string()),
-                            None,
+                            "Second test".to_string(),
+                            vec![],
                             None,
                         ),
                         EditedEvent::new(
                             743907448000000000,
-                            Some("Second test was edited!".to_string()),
-                            None,
+                            "Second test was edited!".to_string(),
+                            vec![],
                             None,
                         ),
                     ],
@@ -539,25 +606,107 @@ mod typedstream_tests {
             ],
         });
 
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![
-                BubbleComponent::Text(vec![TextAttributes::new(0, 28, TextEffect::Default)]),
+                BubbleComponent::Text(vec![TextAttributes::new(0, 28, vec![TextEffect::Default])]),
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("D0551D89-4E11-43D0-9A0E-06F19704E97B"),
+                    guid: Some("D0551D89-4E11-43D0-9A0E-06F19704E97B".to_string()),
                     transcription: None,
                     height: None,
                     width: None,
                     name: None
                 }),
-                BubbleComponent::Text(vec![TextAttributes::new(31, 63, TextEffect::Default)]),
+                BubbleComponent::Text(vec![TextAttributes::new(31, 63, vec![TextEffect::Default])]),
                 BubbleComponent::Retracted,
             ]
+        );
+    }
+
+    #[test]
+    fn can_get_message_body_fully_unsent() {
+        let mut m = Message::blank();
+        m.text = Some(
+            "From arbitrary byte stream:\r\u{FFFC}To native Rust data structures:\r".to_string(),
+        );
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/typedstream/Blank");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
+
+        m.edited_parts = Some(EditedMessage {
+            parts: vec![EditedMessagePart {
+                status: EditStatus::Unsent,
+                edit_history: vec![],
+            }],
+        });
+
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
+        assert_eq!(parsed.components, vec![BubbleComponent::Retracted,]);
+    }
+
+    #[test]
+    fn can_get_message_body_edited_with_formatting() {
+        let mut m = Message::blank();
+        m.text = Some(
+            "From arbitrary byte stream:\r\u{FFFC}To native Rust data structures:\r".to_string(),
+        );
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/typedstream/EditedWithFormatting");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
+
+        m.edited_parts = Some(EditedMessage {
+            parts: vec![EditedMessagePart {
+                status: EditStatus::Edited,
+                edit_history: vec![
+                    EditedEvent {
+                        date: 758573156000000000,
+                        text: "Test".to_string(),
+                        components: vec![BubbleComponent::Text(vec![TextAttributes {
+                            start: 0,
+                            end: 4,
+                            effects: vec![TextEffect::Default],
+                        }])],
+                        guid: None,
+                    },
+                    EditedEvent {
+                        date: 758573166000000000,
+                        text: "Test".to_string(),
+                        components: vec![BubbleComponent::Text(vec![TextAttributes {
+                            start: 0,
+                            end: 4,
+                            effects: vec![TextEffect::Styles(vec![Style::Strikethrough])],
+                        }])],
+                        guid: Some("76A466B8-D21E-4A20-AF62-FF2D3A20D31C".to_string()),
+                    },
+                ],
+            }],
+        });
+
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
+        assert_eq!(
+            parsed.components,
+            vec![BubbleComponent::Text(vec![TextAttributes::new(
+                0,
+                4,
+                vec![TextEffect::Styles(vec![Style::Strikethrough])]
+            )]),]
         );
     }
 
@@ -577,25 +726,21 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("at_0_2E5F12C3-E649-48AA-954D-3EA67C016BCC"),
+                    guid: Some("at_0_2E5F12C3-E649-48AA-954D-3EA67C016BCC".to_string()),
                     transcription: None,
-                    height: Some(&1139.0),
-                    width: Some(&952.0),
-                    name: Some("Messages Image(785748029).png")
+                    height: Some(1139.0),
+                    width: Some(952.0),
+                    name: Some("Messages Image(785748029).png".to_string())
                 }),
-                BubbleComponent::Text(vec![TextAttributes::new(3, 80, TextEffect::Default)]),
+                BubbleComponent::Text(vec![TextAttributes::new(3, 80, vec![TextEffect::Default])]),
             ]
         );
     }
@@ -613,22 +758,18 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Attachment(AttachmentMeta {
-                guid: Some("at_0_BE588799-C4BC-47DF-A56D-7EE90C74911D"),
+                guid: Some("at_0_BE588799-C4BC-47DF-A56D-7EE90C74911D".to_string()),
                 transcription: None,
                 height: None,
                 width: None,
-                name: Some("brilliant-kids-test-answers-32-93042.jpeg")
+                name: Some("brilliant-kids-test-answers-32-93042.jpeg".to_string())
             })]
         );
     }
@@ -646,27 +787,18 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        m.components
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 56,
-                TextEffect::Link("https://twitter.com/xxxxxxxxx/status/0000223300009216128")
+                vec![TextEffect::Link(
+                    "https://twitter.com/xxxxxxxxx/status/0000223300009216128".to_string()
+                )]
             )]),]
         );
     }
@@ -684,28 +816,17 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        m.components
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![
-                TextAttributes::new(0, 5, TextEffect::Default),
-                TextAttributes::new(5, 8, TextEffect::Mention("+15558675309")),
-                TextAttributes::new(8, 9, TextEffect::Default)
-            ])]
+                TextAttributes::new(0, 5, vec![TextEffect::Default]),
+                TextAttributes::new(5, 8, vec![TextEffect::Mention("+15558675309".to_string())]),
+                TextAttributes::new(8, 9, vec![TextEffect::Default])
+            ]),]
         );
     }
 
@@ -722,27 +843,16 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        m.components
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![
-                TextAttributes::new(0, 6, TextEffect::OTP),
-                TextAttributes::new(6, 52, TextEffect::Default),
-            ])]
+                TextAttributes::new(0, 6, vec![TextEffect::OTP]),
+                TextAttributes::new(6, 52, vec![TextEffect::Default])
+            ]),]
         );
     }
 
@@ -759,27 +869,16 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        m.components
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![
-                TextAttributes::new(0, 11, TextEffect::Default),
-                TextAttributes::new(11, 21, TextEffect::Link("tel:0000000000")),
-            ])]
+                TextAttributes::new(0, 11, vec![TextEffect::Default]),
+                TextAttributes::new(11, 21, vec![TextEffect::Link("tel:0000000000".to_string())])
+            ]),]
         );
     }
 
@@ -796,26 +895,19 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        m.components
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![
-                TextAttributes::new(0, 20, TextEffect::Link("mailto:asdfghjklq@gmail.com")),
-                TextAttributes::new(20, 31, TextEffect::Default),
+                TextAttributes::new(
+                    0,
+                    20,
+                    vec![TextEffect::Link("mailto:asdfghjklq@gmail.com".to_string())],
+                ),
+                TextAttributes::new(20, 31, vec![TextEffect::Default])
             ])]
         );
     }
@@ -833,35 +925,24 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        m.components
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![
-                TextAttributes::new(0, 17, TextEffect::Default),
-                TextAttributes::new(17, 25, TextEffect::Conversion(Unit::Timezone)),
-                TextAttributes::new(25, 26, TextEffect::Default),
-            ])]
+                TextAttributes::new(0, 17, vec![TextEffect::Default]),
+                TextAttributes::new(17, 25, vec![TextEffect::Conversion(Unit::Timezone)]),
+                TextAttributes::new(25, 26, vec![TextEffect::Default])
+            ]),]
         );
     }
 
     #[test]
     fn can_get_message_body_custom_tapback() {
         let mut m = Message::blank();
-        m.text = Some("".to_string());
+        m.text = Some(String::new());
 
         let typedstream_path = current_dir()
             .unwrap()
@@ -871,27 +952,16 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        m.components
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![
-                BubbleComponent::Text(vec![TextAttributes::new(0, 0, TextEffect::Default)]),
+                BubbleComponent::Text(vec![TextAttributes::new(0, 79, vec![TextEffect::Default])]),
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("41C4376E-397E-4C42-84E2-B16F7801F638"),
+                    guid: Some("41C4376E-397E-4C42-84E2-B16F7801F638".to_string()),
                     transcription: None,
                     height: None,
                     width: None,
@@ -912,13 +982,10 @@ mod typedstream_tests {
         });
 
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
-            vec![BubbleComponent::Retracted,]
+            parse_body_typedstream(None, m.edited_parts.as_ref())
+                .unwrap()
+                .components,
+            vec![BubbleComponent::Retracted]
         );
     }
 
@@ -935,43 +1002,32 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        m.components
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![
-                TextAttributes::new(0, 4, TextEffect::Styles(vec![Style::Bold])),
-                TextAttributes::new(4, 5, TextEffect::Default),
-                TextAttributes::new(5, 14, TextEffect::Styles(vec![Style::Underline])),
-                TextAttributes::new(14, 15, TextEffect::Default),
-                TextAttributes::new(15, 21, TextEffect::Styles(vec![Style::Italic])),
-                TextAttributes::new(21, 22, TextEffect::Default),
-                TextAttributes::new(22, 35, TextEffect::Styles(vec![Style::Strikethrough])),
-                TextAttributes::new(35, 40, TextEffect::Default),
+                TextAttributes::new(0, 4, vec![TextEffect::Styles(vec![Style::Bold])]),
+                TextAttributes::new(4, 5, vec![TextEffect::Default]),
+                TextAttributes::new(5, 14, vec![TextEffect::Styles(vec![Style::Underline])]),
+                TextAttributes::new(14, 15, vec![TextEffect::Default]),
+                TextAttributes::new(15, 21, vec![TextEffect::Styles(vec![Style::Italic])]),
+                TextAttributes::new(21, 22, vec![TextEffect::Default]),
+                TextAttributes::new(22, 35, vec![TextEffect::Styles(vec![Style::Strikethrough])]),
+                TextAttributes::new(35, 40, vec![TextEffect::Default]),
                 TextAttributes::new(
                     40,
                     44,
-                    TextEffect::Styles(vec![
+                    vec![TextEffect::Styles(vec![
                         Style::Bold,
                         Style::Strikethrough,
                         Style::Underline,
                         Style::Italic
-                    ])
-                ),
-            ]),]
+                    ])]
+                )
+            ]),],
         );
     }
 
@@ -988,38 +1044,27 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        m.components
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![
-                TextAttributes::new(0, 3, TextEffect::Animated(Animation::Big)),
-                TextAttributes::new(3, 4, TextEffect::Default),
-                TextAttributes::new(4, 10, TextEffect::Animated(Animation::Small)),
-                TextAttributes::new(10, 15, TextEffect::Animated(Animation::Shake)),
-                TextAttributes::new(15, 16, TextEffect::Default),
-                TextAttributes::new(16, 19, TextEffect::Animated(Animation::Nod)),
-                TextAttributes::new(19, 20, TextEffect::Default),
-                TextAttributes::new(20, 28, TextEffect::Animated(Animation::Explode)),
-                TextAttributes::new(28, 34, TextEffect::Animated(Animation::Ripple)),
-                TextAttributes::new(34, 35, TextEffect::Default),
-                TextAttributes::new(35, 40, TextEffect::Animated(Animation::Bloom)),
-                TextAttributes::new(40, 41, TextEffect::Default),
-                TextAttributes::new(41, 47, TextEffect::Animated(Animation::Jitter)),
-            ]),]
+                TextAttributes::new(0, 3, vec![TextEffect::Animated(Animation::Big)]),
+                TextAttributes::new(3, 4, vec![TextEffect::Default]),
+                TextAttributes::new(4, 10, vec![TextEffect::Animated(Animation::Small)]),
+                TextAttributes::new(10, 15, vec![TextEffect::Animated(Animation::Shake)]),
+                TextAttributes::new(15, 16, vec![TextEffect::Animated(Animation::Small)]),
+                TextAttributes::new(16, 19, vec![TextEffect::Animated(Animation::Nod)]),
+                TextAttributes::new(19, 20, vec![TextEffect::Animated(Animation::Small)]),
+                TextAttributes::new(20, 28, vec![TextEffect::Animated(Animation::Explode)]),
+                TextAttributes::new(28, 34, vec![TextEffect::Animated(Animation::Ripple)]),
+                TextAttributes::new(34, 35, vec![TextEffect::Animated(Animation::Explode)]),
+                TextAttributes::new(35, 40, vec![TextEffect::Animated(Animation::Bloom)]),
+                TextAttributes::new(40, 41, vec![TextEffect::Animated(Animation::Explode)]),
+                TextAttributes::new(41, 47, vec![TextEffect::Animated(Animation::Jitter)])
+            ]),],
         );
     }
 
@@ -1036,29 +1081,50 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        m.components
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![
-                TextAttributes::new(0, 9, TextEffect::Styles(vec![Style::Underline])),
-                TextAttributes::new(9, 17, TextEffect::Default),
-                TextAttributes::new(17, 23, TextEffect::Animated(Animation::Jitter)),
-                TextAttributes::new(23, 30, TextEffect::Default),
-            ]),]
+                TextAttributes::new(0, 9, vec![TextEffect::Styles(vec![Style::Underline])]),
+                TextAttributes::new(9, 17, vec![TextEffect::Default]),
+                TextAttributes::new(17, 23, vec![TextEffect::Animated(Animation::Jitter)]),
+                TextAttributes::new(23, 30, vec![TextEffect::Default])
+            ]),],
+        );
+    }
+
+    #[test]
+    fn can_get_message_body_text_effects_styles_single_range() {
+        let mut m = Message::blank();
+        m.text = Some("Everything".to_string());
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/typedstream/TextStylesSingleRange");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
+
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
+        assert_eq!(
+            parsed.components,
+            vec![BubbleComponent::Text(vec![TextAttributes::new(
+                0,
+                10,
+                vec![TextEffect::Styles(vec![
+                    Style::Bold,
+                    Style::Strikethrough,
+                    Style::Underline,
+                    Style::Italic
+                ])]
+            )])],
         );
     }
 
@@ -1075,26 +1141,15 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        m.components
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, item)| println!("\t{idx}: {item:?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Attachment(AttachmentMeta {
-                guid: Some("4C339597-EBBB-4978-9B87-521C0471A848"),
-                transcription: Some("This is a test"),
+                guid: Some("4C339597-EBBB-4978-9B87-521C0471A848".to_string()),
+                transcription: Some("This is a test".to_string()),
                 height: None,
                 width: None,
                 name: None
@@ -1115,33 +1170,19 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
-        parse_body_typedstream(
-            m.components.as_ref(),
-            m.text.as_deref(),
-            m.edited_parts.as_ref(),
-        )
-        .unwrap()
-        .iter()
-        .enumerate()
-        .for_each(|(idx, item)| println!("\t{idx}: {item:#?}"));
-
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap(),
+            parsed.components,
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
-                3,
-                TextEffect::Link(
-                    "https://music.apple.com/us/lyrics/1329891623?ts=11.108&te=16.031&l=en&tk=2.v1.VsuX9f%2BaT1PyrgMgIT7ANQ%3D%3D&itsct=sharing_msg_lyrics&itscg=50401"
-                )
-            ),])]
+                145,
+                vec![TextEffect::Link(
+                    "https://music.apple.com/us/lyrics/1329891623?ts=11.108&te=16.031&l=en&tk=2.v1.VsuX9f%2BaT1PyrgMgIT7ANQ%3D%3D&itsct=sharing_msg_lyrics&itscg=50401".to_string()
+                )]
+            )],)]
         );
     }
 
@@ -1158,57 +1199,44 @@ mod typedstream_tests {
         let mut bytes = vec![];
         file.read_to_end(&mut bytes).unwrap();
 
-        let mut parser = TypedStreamReader::from(&bytes);
-        m.components = parser.parse().ok();
-
-        parse_body_typedstream(
-            m.components.as_ref(),
-            m.text.as_deref(),
-            m.edited_parts.as_ref(),
-        )
-        .unwrap()
-        .iter()
-        .enumerate()
-        .for_each(|(idx, item)| println!("\t{idx}: {item:#?}"));
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
 
         assert_eq!(
-            parse_body_typedstream(
-                m.components.as_ref(),
-                m.text.as_deref(),
-                m.edited_parts.as_ref()
-            )
-            .unwrap()[..5],
+            parse_body_typedstream(Some(iter), m.edited_parts.as_ref())
+                .unwrap()
+                .components[..5],
             vec![
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("at_0_48B9C973-3466-438C-BE72-E5B498D30772"),
+                    guid: Some("at_0_48B9C973-3466-438C-BE72-E5B498D30772".to_string()),
                     transcription: None,
                     height: None,
                     width: None,
                     name: None
                 }),
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("at_1_48B9C973-3466-438C-BE72-E5B498D30772"),
+                    guid: Some("at_1_48B9C973-3466-438C-BE72-E5B498D30772".to_string()),
                     transcription: None,
                     height: None,
                     width: None,
                     name: None
                 }),
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("at_2_48B9C973-3466-438C-BE72-E5B498D30772"),
+                    guid: Some("at_2_48B9C973-3466-438C-BE72-E5B498D30772".to_string()),
                     transcription: None,
                     height: None,
                     width: None,
                     name: None
                 }),
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("at_3_48B9C973-3466-438C-BE72-E5B498D30772"),
+                    guid: Some("at_3_48B9C973-3466-438C-BE72-E5B498D30772".to_string()),
                     transcription: None,
                     height: None,
                     width: None,
                     name: None
                 }),
                 BubbleComponent::Attachment(AttachmentMeta {
-                    guid: Some("at_4_48B9C973-3466-438C-BE72-E5B498D30772"),
+                    guid: Some("at_4_48B9C973-3466-438C-BE72-E5B498D30772".to_string()),
                     transcription: None,
                     height: None,
                     width: None,
@@ -1217,8 +1245,342 @@ mod typedstream_tests {
             ]
         );
     }
+
+    #[test]
+    fn can_get_message_body_text_styled_plain_link() {
+        let mut m = Message::blank();
+        m.text = Some("https://github.com/ReagentX/imessage-exporter/discussions/553".to_string());
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/typedstream/StyledLink");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
+
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
+        assert_eq!(
+            parsed.components,
+            vec![BubbleComponent::Text(vec![TextAttributes::new(
+                0,
+                61,
+                vec![
+                    TextEffect::Animated(Animation::Big),
+                    TextEffect::Link(
+                        "https://github.com/ReagentX/imessage-exporter/discussions/553".to_string()
+                    )
+                ]
+            )]),]
+        );
+    }
+
+    #[test]
+    fn can_get_message_body_text_emoji() {
+        let mut m = Message::blank();
+        m.text = Some("🅱️Bold_Underline".to_string());
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/typedstream/EmojiBoldUnderline");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
+
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
+        assert_eq!(
+            parsed.components,
+            vec![BubbleComponent::Text(vec![
+                TextAttributes::new(0, 7, vec![TextEffect::Default]),
+                TextAttributes::new(7, 11, vec![TextEffect::Styles(vec![Style::Bold])]),
+                TextAttributes::new(11, 12, vec![TextEffect::Default]),
+                TextAttributes::new(12, 21, vec![TextEffect::Styles(vec![Style::Underline])])
+            ]),],
+        );
+    }
+
+    #[test]
+    fn can_get_message_body_text_overlapping_format_ranges() {
+        let mut m = Message::blank();
+        m.text = Some("8:00 pm".to_string());
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/typedstream/OverlappingFormat");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
+
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
+        assert_eq!(
+            parsed.components,
+            vec![BubbleComponent::Text(vec![
+                TextAttributes::new(
+                    0,
+                    1,
+                    vec![
+                        TextEffect::Conversion(Unit::Timezone),
+                        TextEffect::Styles(vec![Style::Bold])
+                    ]
+                ),
+                TextAttributes::new(1, 2, vec![TextEffect::Conversion(Unit::Timezone)]),
+                TextAttributes::new(
+                    2,
+                    4,
+                    vec![
+                        TextEffect::Conversion(Unit::Timezone),
+                        TextEffect::Styles(vec![Style::Underline])
+                    ]
+                ),
+                TextAttributes::new(4, 5, vec![TextEffect::Conversion(Unit::Timezone)]),
+                TextAttributes::new(
+                    5,
+                    7,
+                    vec![
+                        TextEffect::Conversion(Unit::Timezone),
+                        TextEffect::Styles(vec![Style::Italic])
+                    ]
+                )
+            ],),]
+        );
+    }
+
+    #[test]
+    fn can_get_message_body_text_overlapping_format_ranges_short() {
+        let mut m = Message::blank();
+        m.text = Some("8:00 pm".to_string());
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/typedstream/0123456789");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
+
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
+        assert_eq!(
+            parsed.components,
+            vec![BubbleComponent::Text(vec![
+                TextAttributes::new(
+                    0,
+                    6,
+                    vec![
+                        TextEffect::Link("tel:0123456789".to_string()),
+                        TextEffect::Styles(vec![Style::Strikethrough])
+                    ]
+                ),
+                TextAttributes::new(
+                    6,
+                    10,
+                    vec![
+                        TextEffect::Link("tel:0123456789".to_string()),
+                        TextEffect::Styles(vec![Style::Italic])
+                    ]
+                )
+            ]),]
+        );
+    }
+
+    #[test]
+    fn can_get_message_body_text_overlapping_format_ranges_long() {
+        let mut m = Message::blank();
+        m.text = Some("8:00 pm".to_string());
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/typedstream/35123");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
+
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
+        assert_eq!(
+            parsed.components,
+            vec![BubbleComponent::Text(vec![
+                TextAttributes {
+                    start: 0,
+                    end: 5,
+                    effects: vec![
+                        TextEffect::Link("tel:0123456789".to_string()),
+                        TextEffect::Styles(vec![Style::Underline])
+                    ]
+                },
+                TextAttributes {
+                    start: 5,
+                    end: 7,
+                    effects: vec![
+                        TextEffect::Link("tel:0123456789".to_string()),
+                        TextEffect::Styles(vec![Style::Underline, Style::Strikethrough])
+                    ]
+                },
+                TextAttributes {
+                    start: 7,
+                    end: 10,
+                    effects: vec![
+                        TextEffect::Link("tel:0123456789".to_string()),
+                        TextEffect::Styles(vec![Style::Strikethrough])
+                    ]
+                },
+                TextAttributes {
+                    start: 10,
+                    end: 16,
+                    effects: vec![TextEffect::Styles(vec![Style::Bold])]
+                },
+                TextAttributes {
+                    start: 16,
+                    end: 24,
+                    effects: vec![TextEffect::Styles(vec![Style::Bold, Style::Italic])]
+                },
+                TextAttributes {
+                    start: 24,
+                    end: 34,
+                    effects: vec![TextEffect::Styles(vec![
+                        Style::Bold,
+                        Style::Underline,
+                        Style::Italic
+                    ])]
+                },
+                TextAttributes {
+                    start: 34,
+                    end: 47,
+                    effects: vec![TextEffect::Styles(vec![
+                        Style::Italic,
+                        Style::Bold,
+                        Style::Strikethrough,
+                        Style::Underline
+                    ])]
+                },
+                TextAttributes {
+                    start: 47,
+                    end: 51,
+                    effects: vec![TextEffect::Default]
+                },
+                TextAttributes {
+                    start: 51,
+                    end: 55,
+                    effects: vec![TextEffect::Animated(Animation::Big)]
+                },
+                TextAttributes {
+                    start: 55,
+                    end: 60,
+                    effects: vec![TextEffect::Animated(Animation::Small)]
+                },
+                TextAttributes {
+                    start: 60,
+                    end: 61,
+                    effects: vec![TextEffect::Default]
+                },
+                TextAttributes {
+                    start: 61,
+                    end: 66,
+                    effects: vec![TextEffect::Animated(Animation::Shake)]
+                },
+                TextAttributes {
+                    start: 66,
+                    end: 67,
+                    effects: vec![TextEffect::Default]
+                },
+                TextAttributes {
+                    start: 67,
+                    end: 70,
+                    effects: vec![TextEffect::Animated(Animation::Nod)]
+                },
+                TextAttributes {
+                    start: 70,
+                    end: 71,
+                    effects: vec![TextEffect::Default]
+                },
+                TextAttributes {
+                    start: 71,
+                    end: 78,
+                    effects: vec![TextEffect::Animated(Animation::Explode)]
+                },
+                TextAttributes {
+                    start: 78,
+                    end: 79,
+                    effects: vec![TextEffect::Default]
+                },
+                TextAttributes {
+                    start: 79,
+                    end: 85,
+                    effects: vec![TextEffect::Animated(Animation::Ripple)]
+                },
+                TextAttributes {
+                    start: 85,
+                    end: 86,
+                    effects: vec![TextEffect::Default]
+                },
+                TextAttributes {
+                    start: 86,
+                    end: 91,
+                    effects: vec![TextEffect::Animated(Animation::Bloom)]
+                },
+                TextAttributes {
+                    start: 91,
+                    end: 92,
+                    effects: vec![TextEffect::Default]
+                },
+                TextAttributes {
+                    start: 92,
+                    end: 98,
+                    effects: vec![TextEffect::Animated(Animation::Jitter)]
+                }
+            ]),]
+        );
+    }
+
+    #[test]
+    fn can_get_message_body_text_single_link() {
+        let mut m = Message::blank();
+        m.text = Some("8:00 pm".to_string());
+
+        let typedstream_path = current_dir()
+            .unwrap()
+            .as_path()
+            .join("test_data/typedstream/SingleLink");
+        let mut file = File::open(typedstream_path).unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
+
+        let mut parser = TypedStreamDeserializer::new(&bytes);
+        let iter = parser.iter_root().unwrap();
+
+        let parsed = parse_body_typedstream(Some(iter), m.edited_parts.as_ref()).unwrap();
+        assert_eq!(
+            parsed.components,
+            vec![BubbleComponent::Text(vec![
+                TextAttributes::new(
+                    0,
+                    84,
+                    vec![
+                        TextEffect::Link("https://www.ghacks.net/2020/01/23/lastpass-no-longer-listed-on-the-chrome-web-store/".to_string()),
+                    ]
+                ),
+            ]),]
+        );
+    }
 }
 
+// MARK: Legacy Test
 #[cfg(test)]
 mod legacy_tests {
     use crate::{
@@ -1239,8 +1601,8 @@ mod legacy_tests {
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 4,
-                TextEffect::Default
-            ),])]
+                vec![TextEffect::Default]
+            )],)]
         );
     }
 
@@ -1253,8 +1615,8 @@ mod legacy_tests {
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 12,
-                TextEffect::Default
-            ),])]
+                vec![TextEffect::Default]
+            )],)]
         );
     }
 
@@ -1267,8 +1629,8 @@ mod legacy_tests {
             vec![BubbleComponent::Text(vec![TextAttributes::new(
                 0,
                 11,
-                TextEffect::Default
-            ),])]
+                vec![TextEffect::Default]
+            )],)]
         );
     }
 
@@ -1280,7 +1642,7 @@ mod legacy_tests {
             parse_body_legacy(&m.text),
             vec![
                 BubbleComponent::Attachment(AttachmentMeta::default()),
-                BubbleComponent::Text(vec![TextAttributes::new(3, 14, TextEffect::Default),])
+                BubbleComponent::Text(vec![TextAttributes::new(3, 14, vec![TextEffect::Default])])
             ]
         );
     }
@@ -1293,7 +1655,7 @@ mod legacy_tests {
             parse_body_legacy(&m.text),
             vec![
                 BubbleComponent::App,
-                BubbleComponent::Text(vec![TextAttributes::new(3, 14, TextEffect::Default),])
+                BubbleComponent::Text(vec![TextAttributes::new(3, 14, vec![TextEffect::Default])])
             ]
         );
     }
@@ -1305,14 +1667,14 @@ mod legacy_tests {
         assert_eq!(
             parse_body_legacy(&m.text),
             vec![
-                BubbleComponent::Text(vec![TextAttributes::new(0, 3, TextEffect::Default),]),
+                BubbleComponent::Text(vec![TextAttributes::new(0, 3, vec![TextEffect::Default])]),
                 BubbleComponent::App,
                 BubbleComponent::Attachment(AttachmentMeta::default()),
-                BubbleComponent::Text(vec![TextAttributes::new(9, 12, TextEffect::Default),]),
+                BubbleComponent::Text(vec![TextAttributes::new(9, 12, vec![TextEffect::Default])]),
                 BubbleComponent::Attachment(AttachmentMeta::default()),
-                BubbleComponent::Text(vec![TextAttributes::new(15, 20, TextEffect::Default),]),
+                BubbleComponent::Text(vec![TextAttributes::new(15, 20, vec![TextEffect::Default])]),
                 BubbleComponent::Attachment(AttachmentMeta::default()),
-                BubbleComponent::Text(vec![TextAttributes::new(23, 27, TextEffect::Default),]),
+                BubbleComponent::Text(vec![TextAttributes::new(23, 27, vec![TextEffect::Default])]),
             ]
         );
     }
@@ -1326,9 +1688,9 @@ mod legacy_tests {
             vec![
                 BubbleComponent::App,
                 BubbleComponent::Attachment(AttachmentMeta::default()),
-                BubbleComponent::Text(vec![TextAttributes::new(6, 9, TextEffect::Default),]),
+                BubbleComponent::Text(vec![TextAttributes::new(6, 9, vec![TextEffect::Default])]),
                 BubbleComponent::Attachment(AttachmentMeta::default()),
-                BubbleComponent::Text(vec![TextAttributes::new(12, 17, TextEffect::Default),]),
+                BubbleComponent::Text(vec![TextAttributes::new(12, 17, vec![TextEffect::Default])]),
                 BubbleComponent::Attachment(AttachmentMeta::default()),
             ]
         );

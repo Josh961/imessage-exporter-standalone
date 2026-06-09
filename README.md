@@ -62,3 +62,19 @@ Use `./release 4.1.0 --no-push` to create the version commit and tag locally wit
 ## Exporter CLI
 
 The Exporter CLI is a command-line tool built in rust that provides a more advanced interface for exporting iMessage chats. The electron app is built on top of this CLI tool. The original repository for this project [can be found here](https://github.com/ReagentX/imessage-exporter).
+
+### Syncing upstream CLI changes
+
+Refresh the vendored CLI from the latest upstream release and reapply the Electron app patch series:
+
+```bash
+./sync-cli latest
+```
+
+Windows wrappers are also available:
+
+```powershell
+.\sync-cli.ps1 latest
+```
+
+See [CLI Upstream Sync](./docs/cli-upstream-sync.md) for the full workflow, patch refresh command, and required Electron CLI contract.

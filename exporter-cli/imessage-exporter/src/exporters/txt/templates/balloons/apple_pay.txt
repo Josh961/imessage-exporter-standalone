@@ -1,0 +1,1 @@
+{% if let Some(caption) = caption.get() %}{{ caption }} transaction: {% endif %}{% if let Some(ldtext) = ldtext.get() %}{{ ldtext }}{% else %}unknown amount{% endif %}

@@ -1,0 +1,10 @@
+{%- match kind -%}
+{%- when StickerDecoration::GenmojiPrompt(prompt) %}
+<div class="genmoji_prompt">Genmoji prompt: {{ prompt }}</div>
+{%- when StickerDecoration::Memoji %}
+<div class="sticker_name">App: Memoji</div>
+{%- when StickerDecoration::Effect(effect) %}
+<div class="sticker_effect">Sent with {{ effect }} effect</div>
+{%- when StickerDecoration::AppName(name) %}
+<div class="sticker_name">App: {{ name }}</div>
+{%- endmatch -%}

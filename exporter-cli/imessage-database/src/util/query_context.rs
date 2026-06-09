@@ -130,6 +130,7 @@ impl QueryContext {
     /// context.set_start("2023-01-01");
     /// assert!(context.has_filters());
     /// ```
+    #[must_use]
     pub fn has_filters(&self) -> bool {
         self.start.is_some()
             || self.end.is_some()
@@ -168,7 +169,7 @@ mod use_tests {
         .naive_utc();
         let local = Local.from_utc_datetime(&from_timestamp);
 
-        assert_eq!(format(&Ok(local)), "Jan 01, 2020 12:00:00 AM");
+        assert_eq!(format(&local), "Jan 01, 2020 12:00:00 AM");
         assert!(context.start.is_some());
         assert!(context.end.is_none());
         assert!(context.has_filters());
@@ -185,7 +186,7 @@ mod use_tests {
                 .naive_utc();
         let local = Local.from_utc_datetime(&from_timestamp);
 
-        assert_eq!(format(&Ok(local)), "Jan 01, 2020 12:00:00 AM");
+        assert_eq!(format(&local), "Jan 01, 2020 12:00:00 AM");
         assert!(context.start.is_none());
         assert!(context.end.is_some());
         assert!(context.has_filters());
@@ -211,8 +212,8 @@ mod use_tests {
                 .naive_utc();
         let local_end = Local.from_utc_datetime(&from_timestamp);
 
-        assert_eq!(format(&Ok(local_start)), "Jan 01, 2020 12:00:00 AM");
-        assert_eq!(format(&Ok(local_end)), "Feb 02, 2020 12:00:00 AM");
+        assert_eq!(format(&local_start), "Jan 01, 2020 12:00:00 AM");
+        assert_eq!(format(&local_end), "Feb 02, 2020 12:00:00 AM");
         assert!(context.start.is_some());
         assert!(context.end.is_some());
         assert!(context.has_filters());

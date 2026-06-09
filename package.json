@@ -1,0 +1,13 @@
+{
+  "name": "imessage-exporter-standalone",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix electron-app run build",
+    "format": "npm --prefix electron-app run format",
+    "format:check": "npm --prefix electron-app run format:check",
+    "lint": "npm --prefix electron-app run lint",
+    "react:doctor": "npm --prefix electron-app run react:doctor",
+    "test": "npm --prefix electron-app run test",
+    "verify": "npm --prefix electron-app run verify"
+  }
+}

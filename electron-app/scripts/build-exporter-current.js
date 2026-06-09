@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { spawnSync } from 'child_process';
+import { spawnSync } from "child_process";
 
 const scriptByPlatform = {
-  darwin: 'build-exporter-mac',
-  win32: 'build-exporter-win',
+  darwin: "build-exporter-mac",
+  win32: "build-exporter-win",
 };
 
 const script = scriptByPlatform[process.platform];
@@ -15,9 +15,9 @@ if (!script) {
   process.exit(1);
 }
 
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const result = spawnSync(npmCommand, ['run', script], {
-  stdio: 'inherit',
+const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const result = spawnSync(npmCommand, ["run", script], {
+  stdio: "inherit",
 });
 
 if (result.error) {

@@ -17,12 +17,16 @@ export function ProgressBar({ percentage, text }: ProgressBarProps) {
         <div
           className="absolute inset-0 animate-[stripe_1s_linear_infinite]"
           style={{
-            backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(209, 213, 219, 0.5) 10px, rgba(209, 213, 219, 0.5) 20px)',
-            backgroundSize: '28px 28px',
+            backgroundImage:
+              "repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(209, 213, 219, 0.5) 10px, rgba(209, 213, 219, 0.5) 20px)",
+            backgroundSize: "28px 28px",
           }}
         />
         {/* Progress fill */}
-        <div className="relative h-full rounded-full bg-sky-500 transition-all duration-300 ease-out" style={{ width: `${pct}%` }} />
+        <div
+          className="relative h-full rounded-full bg-sky-500 transition-all duration-300 ease-out"
+          style={{ width: `${pct}%` }}
+        />
       </div>
     </div>
   );

@@ -1,20 +1,20 @@
-import fs from 'fs';
-import path from 'path';
+import fs from "fs";
+import path from "path";
 
 export function getAppVersion(scriptDir) {
-  const packageJsonPath = path.join(scriptDir, '..', 'package.json');
-  return JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')).version;
+  const packageJsonPath = path.join(scriptDir, "..", "package.json");
+  return JSON.parse(fs.readFileSync(packageJsonPath, "utf8")).version;
 }
 
 export async function withCargoPackageVersions(scriptDir, version, callback) {
-  const repoRoot = path.join(scriptDir, '..', '..');
+  const repoRoot = path.join(scriptDir, "..", "..");
   const cargoFiles = [
-    path.join(repoRoot, 'exporter-cli', 'Cargo.lock'),
-    path.join(repoRoot, 'exporter-cli', 'imessage-database', 'Cargo.toml'),
-    path.join(repoRoot, 'exporter-cli', 'imessage-exporter', 'Cargo.toml'),
+    path.join(repoRoot, "exporter-cli", "Cargo.lock"),
+    path.join(repoRoot, "exporter-cli", "imessage-database", "Cargo.toml"),
+    path.join(repoRoot, "exporter-cli", "imessage-exporter", "Cargo.toml"),
   ];
   const snapshots = new Map(
-    cargoFiles.filter(fs.existsSync).map((file) => [file, fs.readFileSync(file, 'utf8')])
+    cargoFiles.filter(fs.existsSync).map((file) => [file, fs.readFileSync(file, "utf8")]),
   );
   let restored = false;
 
@@ -30,8 +30,8 @@ export async function withCargoPackageVersions(scriptDir, version, callback) {
 
   const signalHandlers = new Map();
   for (const [signal, exitCode] of [
-    ['SIGINT', 130],
-    ['SIGTERM', 143],
+    ["SIGINT", 130],
+    ["SIGTERM", 143],
   ]) {
     const handler = () => {
       restoreSnapshots();
@@ -42,7 +42,7 @@ export async function withCargoPackageVersions(scriptDir, version, callback) {
   }
 
   try {
-    for (const file of cargoFiles.filter((file) => file.endsWith('Cargo.toml'))) {
+    for (const file of cargoFiles.filter((cargoFile) => cargoFile.endsWith("Cargo.toml"))) {
       if (!snapshots.has(file)) {
         throw new Error(`Missing Cargo manifest: ${file}`);
       }

@@ -1,22 +1,22 @@
 #!/usr/bin/env node
-import { spawnSync } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { spawnSync } from "child_process";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const appDir = path.resolve(scriptDir, '..');
-const repoRoot = path.resolve(appDir, '..');
+const appDir = path.resolve(scriptDir, "..");
+const repoRoot = path.resolve(appDir, "..");
 
 const paths = {
-  packageJson: path.join(appDir, 'package.json'),
-  packageLock: path.join(appDir, 'package-lock.json'),
+  packageJson: path.join(appDir, "package.json"),
+  packageLock: path.join(appDir, "package-lock.json"),
 };
 
 const releaseAssets = [
-  'imessage-exporter.dmg',
-  'imessage-exporter-x86.dmg',
-  'imessage-exporter.exe',
+  "imessage-exporter.dmg",
+  "imessage-exporter-x86.dmg",
+  "imessage-exporter.exe",
 ];
 
 const usage = `Usage:
@@ -42,7 +42,7 @@ What this command does:
   3. Creates an annotated release tag.
   4. Pushes the current branch and tag to origin.
   5. Lets GitHub Actions build and publish the stable release assets:
-     ${releaseAssets.join('\n     ')}
+     ${releaseAssets.join("\n     ")}
 
 Apple signing and notarization belong in GitHub Actions secrets. The Windows installer is intentionally unsigned.
 `;
@@ -54,7 +54,7 @@ function main() {
     return;
   }
 
-  ensureCommand('git');
+  ensureCommand("git");
   ensureCleanTree();
   fetchTags();
 
@@ -68,7 +68,7 @@ function main() {
   console.log(`Preparing ${tagName}`);
   console.log(`Current app version: ${currentVersion}`);
   console.log(`Next app version:    ${nextVersion}`);
-  console.log(`Release assets:      ${releaseAssets.join(', ')}`);
+  console.log(`Release assets:      ${releaseAssets.join(", ")}`);
 
   const snapshots = snapshotFiles(Object.values(paths).filter(fs.existsSync));
   let versionFilesFinalized = false;
@@ -87,11 +87,11 @@ function main() {
     }
 
     ensureOnBranch();
-    run('git', ['push', 'origin', 'HEAD'], { cwd: repoRoot });
-    run('git', ['push', 'origin', tagName], { cwd: repoRoot });
+    run("git", ["push", "origin", "HEAD"], { cwd: repoRoot });
+    run("git", ["push", "origin", tagName], { cwd: repoRoot });
 
     console.log(`Pushed ${tagName}. GitHub Actions will build and publish the release.`);
-    console.log('Stable download paths after the workflow finishes:');
+    console.log("Stable download paths after the workflow finishes:");
     for (const asset of releaseAssets) {
       console.log(`  /releases/latest/download/${asset}`);
     }
@@ -113,15 +113,15 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     switch (arg) {
-      case '--help':
-      case '-h':
+      case "--help":
+      case "-h":
         options.help = true;
         break;
-      case '--no-push':
+      case "--no-push":
         options.noPush = true;
         break;
       default:
-        if (arg.startsWith('--')) {
+        if (arg.startsWith("--")) {
           throw new Error(`Unknown option: ${arg}\n\n${usage}`);
         }
         if (options.versionArg) {
@@ -139,11 +139,11 @@ function parseArgs(argv) {
 }
 
 function resolveVersion(input, currentVersion) {
-  if (['major', 'minor', 'patch'].includes(input)) {
+  if (["major", "minor", "patch"].includes(input)) {
     return bumpVersion(currentVersion, input);
   }
 
-  const version = input.replace(/^v\.?/, '');
+  const version = input.replace(/^v\.?/, "");
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
     throw new Error(`Invalid version: ${input}`);
   }
@@ -157,11 +157,11 @@ function bumpVersion(currentVersion, part) {
   }
 
   let [, major, minor, patch] = match.map(Number);
-  if (part === 'major') {
+  if (part === "major") {
     major += 1;
     minor = 0;
     patch = 0;
-  } else if (part === 'minor') {
+  } else if (part === "minor") {
     minor += 1;
     patch = 0;
   } else {
@@ -171,43 +171,45 @@ function bumpVersion(currentVersion, part) {
 }
 
 function ensureCommand(command) {
-  const result = spawnSync(command, ['--version'], { stdio: 'ignore' });
-  if (result.error && result.error.code === 'ENOENT') {
+  const result = spawnSync(command, ["--version"], { stdio: "ignore" });
+  if (result.error && result.error.code === "ENOENT") {
     throw new Error(`Required command not found: ${command}`);
   }
 }
 
 function ensureCleanTree() {
-  const status = capture('git', ['status', '--porcelain'], { cwd: repoRoot });
+  const status = capture("git", ["status", "--porcelain"], { cwd: repoRoot });
   if (status.trim()) {
     throw new Error(`Working tree must be clean before releasing:\n${status}`);
   }
 }
 
 function ensureOnBranch() {
-  const result = spawnSync('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+  const result = spawnSync("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
     cwd: repoRoot,
-    encoding: 'utf8',
+    encoding: "utf8",
   });
   if (result.status !== 0 || !result.stdout.trim()) {
-    throw new Error('Cannot push from a detached HEAD. Check out a branch or rerun with --no-push.');
+    throw new Error(
+      "Cannot push from a detached HEAD. Check out a branch or rerun with --no-push.",
+    );
   }
 }
 
 function fetchTags() {
-  run('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot });
+  run("git", ["fetch", "--tags", "origin"], { cwd: repoRoot });
 }
 
 function ensureTagDoesNotExist(tagName) {
-  const local = spawnSync('git', ['rev-parse', '-q', '--verify', `refs/tags/${tagName}`], {
+  const local = spawnSync("git", ["rev-parse", "-q", "--verify", `refs/tags/${tagName}`], {
     cwd: repoRoot,
-    stdio: 'ignore',
+    stdio: "ignore",
   });
   if (local.status === 0) {
     throw new Error(`Tag already exists locally: ${tagName}`);
   }
 
-  const remote = capture('git', ['ls-remote', '--tags', 'origin', tagName], { cwd: repoRoot });
+  const remote = capture("git", ["ls-remote", "--tags", "origin", tagName], { cwd: repoRoot });
   if (remote.trim()) {
     throw new Error(`Tag already exists on origin: ${tagName}`);
   }
@@ -221,8 +223,8 @@ function updateAppVersion(version) {
   if (fs.existsSync(paths.packageLock)) {
     const packageLock = readJson(paths.packageLock);
     packageLock.version = version;
-    if (packageLock.packages && packageLock.packages['']) {
-      packageLock.packages[''].version = version;
+    if (packageLock.packages && packageLock.packages[""]) {
+      packageLock.packages[""].version = version;
     }
     writeJson(paths.packageLock, packageLock);
   }
@@ -234,18 +236,18 @@ function commitReleaseFiles(tagName) {
     path.relative(repoRoot, paths.packageLock),
   ];
 
-  run('git', ['add', ...releaseFiles], { cwd: repoRoot });
-  const staged = capture('git', ['diff', '--cached', '--name-only'], { cwd: repoRoot });
+  run("git", ["add", ...releaseFiles], { cwd: repoRoot });
+  const staged = capture("git", ["diff", "--cached", "--name-only"], { cwd: repoRoot });
   if (!staged.trim()) {
-    console.log('No version file changes to commit; tagging the current commit.');
+    console.log("No version file changes to commit; tagging the current commit.");
     return;
   }
 
-  run('git', ['commit', '-m', `Release ${tagName}`], { cwd: repoRoot });
+  run("git", ["commit", "-m", `Release ${tagName}`], { cwd: repoRoot });
 }
 
 function createTag(tagName) {
-  run('git', ['tag', '-a', tagName, '-m', `Release ${tagName}`], { cwd: repoRoot });
+  run("git", ["tag", "-a", tagName, "-m", `Release ${tagName}`], { cwd: repoRoot });
 }
 
 function snapshotFiles(filePaths) {
@@ -263,7 +265,7 @@ function restoreFiles(snapshots) {
 }
 
 function readJson(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
 function writeJson(filePath, value) {
@@ -271,11 +273,11 @@ function writeJson(filePath, value) {
 }
 
 function run(command, args, options = {}) {
-  console.log(`> ${[command, ...args].join(' ')}`);
+  console.log(`> ${[command, ...args].join(" ")}`);
   const result = spawnSync(command, args, {
     cwd: options.cwd || repoRoot,
     env: options.env || process.env,
-    stdio: 'inherit',
+    stdio: "inherit",
   });
 
   if (result.error) {
@@ -290,14 +292,16 @@ function capture(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd || repoRoot,
     env: options.env || process.env,
-    encoding: 'utf8',
+    encoding: "utf8",
   });
 
   if (result.error) {
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} exited with status ${result.status}\n${result.stderr}`);
+    throw new Error(
+      `${command} ${args.join(" ")} exited with status ${result.status}\n${result.stderr}`,
+    );
   }
   return result.stdout.trim();
 }

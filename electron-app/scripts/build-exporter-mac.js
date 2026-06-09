@@ -1,53 +1,69 @@
-import { execFileSync } from 'child_process';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
-import { getAppVersion, withCargoPackageVersions } from './build-utils.mjs';
+import { execFileSync } from "child_process";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+import { getAppVersion, withCargoPackageVersions } from "./build-utils.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appVersion = getAppVersion(__dirname);
 
 // Change to the exporter-cli directory
-const exporterDir = path.join(__dirname, '..', '..', 'exporter-cli');
+const exporterDir = path.join(__dirname, "..", "..", "exporter-cli");
 process.chdir(exporterDir);
 
 console.log(`Building macOS exporter ${appVersion}...`);
 try {
   await withCargoPackageVersions(__dirname, appVersion, async () => {
     // Build for Apple Silicon (aarch64)
-    console.log('Building for Apple Silicon...');
-    execFileSync('cargo', ['build', '--target', 'aarch64-apple-darwin', '--release'], { stdio: 'inherit' });
+    console.log("Building for Apple Silicon...");
+    execFileSync("cargo", ["build", "--target", "aarch64-apple-darwin", "--release"], {
+      stdio: "inherit",
+    });
 
     // Build for Intel (x86_64)
-    console.log('Building for Intel macOS...');
-    execFileSync('cargo', ['build', '--target', 'x86_64-apple-darwin', '--release'], { stdio: 'inherit' });
+    console.log("Building for Intel macOS...");
+    execFileSync("cargo", ["build", "--target", "x86_64-apple-darwin", "--release"], {
+      stdio: "inherit",
+    });
   });
 
   // Create resources directory if it doesn't exist
-  const resourcesDir = path.join(__dirname, '..', 'resources');
+  const resourcesDir = path.join(__dirname, "..", "resources");
   if (!fs.existsSync(resourcesDir)) {
     fs.mkdirSync(resourcesDir, { recursive: true });
   }
 
   // Copy both binaries separately
-  const aarch64Source = path.join(exporterDir, 'target', 'aarch64-apple-darwin', 'release', 'imessage-exporter');
-  const aarch64Dest = path.join(resourcesDir, 'imessage-exporter-mac-arm64');
+  const aarch64Source = path.join(
+    exporterDir,
+    "target",
+    "aarch64-apple-darwin",
+    "release",
+    "imessage-exporter",
+  );
+  const aarch64Dest = path.join(resourcesDir, "imessage-exporter-mac-arm64");
 
-  const x86_64Source = path.join(exporterDir, 'target', 'x86_64-apple-darwin', 'release', 'imessage-exporter');
-  const x86_64Dest = path.join(resourcesDir, 'imessage-exporter-mac-x64');
+  const x86_64Source = path.join(
+    exporterDir,
+    "target",
+    "x86_64-apple-darwin",
+    "release",
+    "imessage-exporter",
+  );
+  const x86_64Dest = path.join(resourcesDir, "imessage-exporter-mac-x64");
 
-  console.log('Copying Apple Silicon binary...');
+  console.log("Copying Apple Silicon binary...");
   fs.copyFileSync(aarch64Source, aarch64Dest);
   fs.chmodSync(aarch64Dest, 0o755);
   console.log(`✅ Copied to ${aarch64Dest}`);
 
-  console.log('Copying Intel binary...');
+  console.log("Copying Intel binary...");
   fs.copyFileSync(x86_64Source, x86_64Dest);
   fs.chmodSync(x86_64Dest, 0o755);
   console.log(`✅ Copied to ${x86_64Dest}`);
 
-  console.log('Build complete!');
+  console.log("Build complete!");
 } catch (error) {
-  console.error('Build failed:', error.message);
+  console.error("Build failed:", error.message);
   process.exit(1);
 }

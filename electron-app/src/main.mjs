@@ -1,12 +1,12 @@
-import archiver from 'archiver';
-import { execFile, spawn } from 'child_process';
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
-import Store from 'electron-store';
-import { createWriteStream } from 'fs';
-import fs, { rm } from 'fs/promises';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import archiver from "archiver";
+import { execFile, spawn } from "child_process";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import Store from "electron-store";
+import { createWriteStream } from "fs";
+import fs, { rm } from "fs/promises";
+import os from "os";
+import path from "path";
+import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -14,10 +14,10 @@ const store = new Store();
 
 // Utility functions for filtering
 function normalizeIdentifier(identifier) {
-  let normalized = identifier.replace(/[\+\s\(\)\-\.]/g, '');
+  let normalized = identifier.replace(/[+\s().-]/g, "");
 
   // For emails, convert to lowercase for case-insensitive matching
-  if (normalized.includes('@')) {
+  if (normalized.includes("@")) {
     normalized = normalized.toLowerCase();
   }
 
@@ -31,10 +31,8 @@ function identifiersMatch(filter, handle) {
   }
 
   // For phone numbers (both long and short), try intelligent matching
-  const bothAreNumeric = !handle.includes('@') &&
-    !filter.includes('@') &&
-    /^\d+$/.test(handle) &&
-    /^\d+$/.test(filter);
+  const bothAreNumeric =
+    !handle.includes("@") && !filter.includes("@") && /^\d+$/.test(handle) && /^\d+$/.test(filter);
 
   if (bothAreNumeric) {
     // For long phone numbers (10+ digits), use suffix matching
@@ -59,15 +57,15 @@ function identifiersMatch(filter, handle) {
 
 function extractIdentifiersFromFilename(filename) {
   // Remove .txt extension
-  const nameWithoutExt = filename.replace(/\.txt$/, '');
+  const nameWithoutExt = filename.replace(/\.txt$/, "");
 
   // Split by common separators and clean up
-  const parts = nameWithoutExt.split(/[_\-\s,]+/).filter(part => part.length > 0);
+  const parts = nameWithoutExt.split(/[_\-\s,]+/).filter((part) => part.length > 0);
 
   const identifiers = [];
   for (const part of parts) {
     // Check if it looks like an email
-    if (part.includes('@')) {
+    if (part.includes("@")) {
       identifiers.push(part);
     }
     // Check if it looks like a phone number (5+ digits)
@@ -75,7 +73,7 @@ function extractIdentifiersFromFilename(filename) {
       // Extract the numeric part
       const numbers = part.match(/\d+/g);
       if (numbers) {
-        identifiers.push(...numbers.filter(num => num.length >= 5));
+        identifiers.push(...numbers.filter((num) => num.length >= 5));
       }
     }
   }
@@ -88,23 +86,23 @@ let mainWindow;
 // Define executables for different platforms and architectures
 const EXECUTABLES = {
   darwin: {
-    arm64: 'imessage-exporter-mac-arm64',
-    x64: 'imessage-exporter-mac-x64'
+    arm64: "imessage-exporter-mac-arm64",
+    x64: "imessage-exporter-mac-x64",
   },
-  win32: 'imessage-exporter-win.exe'
+  win32: "imessage-exporter-win.exe",
 };
 
 // Application lifecycle
 app.whenReady().then(() => {
   createWindow();
 
-  app.on('activate', function () {
+  app.on("activate", function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
 });
 
 function createWindow() {
@@ -112,7 +110,7 @@ function createWindow() {
     width: 1200,
     height: 950,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -124,32 +122,31 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   } else {
     // In production, load from dist folder (relative to app root)
-    const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
+    const indexPath = path.join(__dirname, "..", "dist", "index.html");
     mainWindow.loadFile(indexPath);
   }
 
-  mainWindow.webContents.on('did-finish-load', () => {
+  mainWindow.webContents.on("did-finish-load", () => {
     checkFullDiskAccess();
   });
 }
 
-
 async function checkFullDiskAccess() {
   const hasAccess = await checkFullDiskAccessPermission();
   if (!hasAccess) {
-    mainWindow.webContents.send('show-permissions-modal');
+    mainWindow.webContents.send("show-permissions-modal");
   }
 }
 
 async function checkFullDiskAccessPermission() {
-  if (process.platform === 'darwin') {
+  if (process.platform === "darwin") {
     const protectedDirs = [
-      path.join(app.getPath('home'), 'Library', 'Messages'),
-      path.join(app.getPath('home'), 'Library', 'Mail'),
-      path.join(app.getPath('home'), 'Library', 'Safari'),
-      path.join(app.getPath('home'), 'Library', 'Cookies'),
-      path.join(app.getPath('home'), 'Library', 'HomeKit'),
-      path.join(app.getPath('home'), 'Library', 'IdentityServices')
+      path.join(app.getPath("home"), "Library", "Messages"),
+      path.join(app.getPath("home"), "Library", "Mail"),
+      path.join(app.getPath("home"), "Library", "Safari"),
+      path.join(app.getPath("home"), "Library", "Cookies"),
+      path.join(app.getPath("home"), "Library", "HomeKit"),
+      path.join(app.getPath("home"), "Library", "IdentityServices"),
     ];
 
     for (const dir of protectedDirs) {
@@ -157,7 +154,8 @@ async function checkFullDiskAccessPermission() {
         await fs.readdir(dir);
         return true; // If we can read any directory, we have full disk access
       } catch (err) {
-        if (err.code !== 'ENOENT') { // Ignore "no such file or directory" errors
+        if (err.code !== "ENOENT") {
+          // Ignore "no such file or directory" errors
           console.log(`Access denied to ${dir}`);
         }
         // Continue checking other directories
@@ -170,34 +168,34 @@ async function checkFullDiskAccessPermission() {
 
 // IPC Handlers
 // System information
-ipcMain.handle('get-platform', () => {
+ipcMain.handle("get-platform", () => {
   return process.platform;
 });
 
-ipcMain.handle('open-system-preferences', () => {
-  shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles');
+ipcMain.handle("open-system-preferences", () => {
+  shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles");
 });
 
-ipcMain.handle('check-full-disk-access', checkFullDiskAccessPermission);
+ipcMain.handle("check-full-disk-access", checkFullDiskAccessPermission);
 
-ipcMain.handle('restart-app', () => {
+ipcMain.handle("restart-app", () => {
   app.relaunch();
   app.exit(0);
 });
 
 // File and folder operations
-ipcMain.handle('open-external-link', (event, url) => shell.openExternal(url));
-ipcMain.handle('show-item-in-folder', (event, filePath) => shell.showItemInFolder(filePath));
+ipcMain.handle("open-external-link", (event, url) => shell.openExternal(url));
+ipcMain.handle("show-item-in-folder", (event, filePath) => shell.showItemInFolder(filePath));
 
-ipcMain.handle('expand-path', async (event, inputPath) => {
-  if (process.platform === 'win32') {
+ipcMain.handle("expand-path", async (event, inputPath) => {
+  if (process.platform === "win32") {
     return inputPath.replace(/%([^%]+)%/g, (_, n) => process.env[n]);
   } else {
     return inputPath.replace(/^~/, os.homedir());
   }
 });
 
-ipcMain.handle('check-path-exists', async (event, checkPath) => {
+ipcMain.handle("check-path-exists", async (event, checkPath) => {
   try {
     await fs.access(checkPath);
     return true;
@@ -206,78 +204,82 @@ ipcMain.handle('check-path-exists', async (event, checkPath) => {
   }
 });
 
-ipcMain.handle('get-nested-folders', async (event, folderPath) => {
+ipcMain.handle("get-nested-folders", async (event, folderPath) => {
   try {
     const entries = await fs.readdir(folderPath, { withFileTypes: true });
     return entries
-      .filter(entry => entry.isDirectory())
-      .map(entry => path.join(folderPath, entry.name));
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(folderPath, entry.name));
   } catch (error) {
-    console.error('Error getting nested folders:', error);
+    console.error("Error getting nested folders:", error);
     return [];
   }
 });
 
-ipcMain.handle('get-documents-folder', () => app.getPath('documents'));
+ipcMain.handle("get-documents-folder", () => app.getPath("documents"));
 
-ipcMain.handle('select-folder', async (event, currentPath, type) => {
-  let defaultPath = app.getPath('documents');
+ipcMain.handle("select-folder", async (event, currentPath, type) => {
+  let defaultPath = app.getPath("documents");
 
   if (currentPath) {
     try {
       await fs.access(currentPath);
       defaultPath = currentPath;
-    } catch (error) {
+    } catch {
       console.error(`Current path does not exist: ${currentPath}`);
     }
-  } else if (type === 'input') {
-    defaultPath = store.get('lastInputFolder', defaultPath);
-  } else if (type === 'output') {
-    defaultPath = store.get('lastOutputFolder', defaultPath);
+  } else if (type === "input") {
+    defaultPath = store.get("lastInputFolder", defaultPath);
+  } else if (type === "output") {
+    defaultPath = store.get("lastOutputFolder", defaultPath);
   }
 
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory'],
-    defaultPath: defaultPath
+    properties: ["openDirectory"],
+    defaultPath: defaultPath,
   });
 
   if (result.canceled) {
     return null;
   } else {
     const selectedPath = result.filePaths[0];
-    if (type === 'input') {
-      store.set('lastInputFolder', selectedPath);
-    } else if (type === 'output') {
-      store.set('lastOutputFolder', selectedPath);
+    if (type === "input") {
+      store.set("lastInputFolder", selectedPath);
+    } else if (type === "output") {
+      store.set("lastOutputFolder", selectedPath);
     }
     return selectedPath;
   }
 });
 
 // Store operations
-ipcMain.handle('get-last-input-folder', () => store.get('lastInputFolder', ''));
-ipcMain.handle('get-last-output-folder', () => store.get('lastOutputFolder', app.getPath('documents')));
-ipcMain.handle('save-last-input-folder', (event, folder) => store.set('lastInputFolder', folder));
-ipcMain.handle('save-last-output-folder', (event, folder) => store.set('lastOutputFolder', folder));
+ipcMain.handle("get-last-input-folder", () => store.get("lastInputFolder", ""));
+ipcMain.handle("get-last-output-folder", () =>
+  store.get("lastOutputFolder", app.getPath("documents")),
+);
+ipcMain.handle("save-last-input-folder", (event, folder) => store.set("lastInputFolder", folder));
+ipcMain.handle("save-last-output-folder", (event, folder) => store.set("lastOutputFolder", folder));
 
 // Backup folder operations
-ipcMain.handle('get-default-messages-folder', () => {
-  if (process.platform === 'darwin') {
-    return path.join(app.getPath('home'), 'Library', 'Messages');
+ipcMain.handle("get-default-messages-folder", () => {
+  if (process.platform === "darwin") {
+    return path.join(app.getPath("home"), "Library", "Messages");
   }
-  return '';
+  return "";
 });
 
-ipcMain.handle('scan-iphone-backups', async () => {
+ipcMain.handle("scan-iphone-backups", async () => {
   const backupPaths = [];
 
-  if (process.platform === 'darwin') {
-    backupPaths.push(path.join(app.getPath('home'), 'Library', 'Application Support', 'MobileSync', 'Backup'));
-  } else if (process.platform === 'win32') {
+  if (process.platform === "darwin") {
+    backupPaths.push(
+      path.join(app.getPath("home"), "Library", "Application Support", "MobileSync", "Backup"),
+    );
+  } else if (process.platform === "win32") {
     // Apple Devices app / iTunes from Microsoft Store
-    backupPaths.push(path.join(app.getPath('home'), 'Apple', 'MobileSync', 'Backup'));
+    backupPaths.push(path.join(app.getPath("home"), "Apple", "MobileSync", "Backup"));
     // Classic iTunes desktop installer (from apple.com)
-    backupPaths.push(path.join(app.getPath('appData'), 'Apple Computer', 'MobileSync', 'Backup'));
+    backupPaths.push(path.join(app.getPath("appData"), "Apple Computer", "MobileSync", "Backup"));
   } else {
     return { success: false, backups: [] };
   }
@@ -291,7 +293,7 @@ ipcMain.handle('scan-iphone-backups', async () => {
         await fs.access(backupPath);
 
         const entries = await fs.readdir(backupPath, { withFileTypes: true });
-        const backupDirs = entries.filter(entry => entry.isDirectory());
+        const backupDirs = entries.filter((entry) => entry.isDirectory());
 
         for (const entry of backupDirs) {
           // Deduplicate by folder name in case both paths point to the same backup
@@ -305,7 +307,7 @@ ipcMain.handle('scan-iphone-backups', async () => {
             id: entry.name,
             path: fullPath,
             folderName: entry.name,
-            backupDate: stats.birthtime
+            backupDate: stats.birthtime,
           });
         }
       } catch {
@@ -314,31 +316,40 @@ ipcMain.handle('scan-iphone-backups', async () => {
     }
 
     // Sort by creation date, newest first
-    backups.sort((a, b) => b.backupDate - a.backupDate);
+    const sortedBackups = backups.toSorted((a, b) => b.backupDate - a.backupDate);
 
-    return { success: true, backups };
+    return { success: true, backups: sortedBackups };
   } catch (error) {
     return { success: false, backups: [], error: error.message };
   }
 });
 
 // iMessage exporter operations
-ipcMain.handle('list-contacts', async (event, inputFolder) => {
+ipcMain.handle("list-contacts", async (event, inputFolder) => {
   const executablePath = getResourcePath();
   const chatDbPath = getChatDbPath(inputFolder);
 
   return new Promise((resolve) => {
-    execFile(executablePath, ['-b', '-p', chatDbPath, '-n'], (error, stdout, stderr) => {
+    execFile(executablePath, ["-b", "-p", chatDbPath, "-n"], (error, stdout, stderr) => {
       if (error) {
         resolve({ success: false, error: stderr || error.message });
       } else {
-        const contacts = stdout.split('\n')
-          .filter(line => line.trim().length > 0)
-          .map(line => {
-            const parts = line.split('|');
-            if (parts[0] === 'CONTACT') {
+        const contacts = stdout
+          .split("\n")
+          .filter((line) => line.trim().length > 0)
+          .map((line) => {
+            const parts = line.split("|");
+            if (parts[0] === "CONTACT") {
               // CONTACT format: CONTACT|contact_id|message_count|first_date|last_date|chat_ids|display_name
-              const [type, contact, messageCount, firstMessageDate, lastMessageDate, chatIds, displayName] = parts;
+              const [
+                type,
+                contact,
+                messageCount,
+                firstMessageDate,
+                lastMessageDate,
+                chatIds,
+                displayName,
+              ] = parts;
               return {
                 type,
                 contact,
@@ -346,11 +357,19 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
                 firstMessageDate,
                 lastMessageDate,
                 chatIds,
-                displayName: displayName || undefined
+                displayName: displayName || undefined,
               };
-            } else if (parts[0] === 'GROUP') {
+            } else if (parts[0] === "GROUP") {
               // GROUP format: GROUP|name|message_count|first_date|last_date|participants|chat_ids
-              const [type, contact, messageCount, firstMessageDate, lastMessageDate, participants, chatIds] = parts;
+              const [
+                type,
+                contact,
+                messageCount,
+                firstMessageDate,
+                lastMessageDate,
+                participants,
+                chatIds,
+              ] = parts;
               return {
                 type,
                 contact,
@@ -358,15 +377,15 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
                 firstMessageDate,
                 lastMessageDate,
                 participants,
-                chatIds
+                chatIds,
               };
             } else {
               // Skip any other lines (like Total DMs, Total Group Chats, etc.)
               return null;
             }
           })
-          .filter(contact => contact !== null)
-          .sort((a, b) => {
+          .filter((contact) => contact !== null)
+          .toSorted((a, b) => {
             const dateA = new Date(a.lastMessageDate).getTime() || 0;
             const dateB = new Date(b.lastMessageDate).getTime() || 0;
             return dateB - dateA;
@@ -377,8 +396,19 @@ ipcMain.handle('list-contacts', async (event, inputFolder) => {
   });
 });
 
-ipcMain.handle('run-exporter', async (event, exportParams) => {
-  const { inputFolder, outputFolder, startDate, endDate, selectedContacts, selectedChatIds, includeVideos = true, debugMode, isFullExport, isFilteredExport } = exportParams;
+ipcMain.handle("run-exporter", async (event, exportParams) => {
+  const {
+    inputFolder,
+    outputFolder,
+    startDate,
+    endDate,
+    selectedContacts,
+    selectedChatIds,
+    includeVideos = true,
+    debugMode,
+    isFullExport,
+    isFilteredExport,
+  } = exportParams;
 
   try {
     const uniqueTempFolder = await createUniqueFolder(outputFolder);
@@ -387,115 +417,149 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
     const chatDbPath = getChatDbPath(inputFolder);
 
     let params = [];
-    params.push('-f', 'txt', '-c', 'basic', '-b');
-    if (!includeVideos) params.push('-v');
-    params.push('-p', chatDbPath, '-o', uniqueTempFolder);
-    if (startDate) params.push('-s', startDate);
-    if (endDate) params.push('-e', endDate);
+    params.push("-f", "txt", "-c", "basic", "-b");
+    if (!includeVideos) params.push("-v");
+    params.push("-p", chatDbPath, "-o", uniqueTempFolder);
+    if (startDate) params.push("-s", startDate);
+    if (endDate) params.push("-e", endDate);
 
     if (!isFullExport && selectedChatIds && selectedChatIds.length > 0) {
-      params.push('--chat-ids', selectedChatIds.join(','));
-    } else if (!isFullExport && !isFilteredExport && selectedContacts && selectedContacts.length > 0) {
-      const contactsString = selectedContacts.map(contact =>
-        contact.includes(',') ? `"${contact}"` : contact
-      ).join(';');
-      params.push('-t', contactsString);
+      params.push("--chat-ids", selectedChatIds.join(","));
+    } else if (
+      !isFullExport &&
+      !isFilteredExport &&
+      selectedContacts &&
+      selectedContacts.length > 0
+    ) {
+      const contactsString = selectedContacts
+        .map((contact) => (contact.includes(",") ? `"${contact}"` : contact))
+        .join(";");
+      params.push("-t", contactsString);
     }
 
     return new Promise((resolve) => {
       const exportProcess = spawn(executablePath, params);
-      let stdout = '';
-      let stderr = '';
+      let stdout = "";
+      let stderr = "";
 
       // Listen for progress updates from the Rust exporter
-      exportProcess.stdout.on('data', (data) => {
+      exportProcess.stdout.on("data", (data) => {
         const output = data.toString();
         stdout += output;
 
         // Parse progress updates
-        const lines = output.split('\n');
+        const lines = output.split("\n");
         for (const line of lines) {
-          if (line.startsWith('PROGRESS_JSON: ')) {
+          if (line.startsWith("PROGRESS_JSON: ")) {
             try {
-              const progressData = JSON.parse(line.substring('PROGRESS_JSON: '.length));
+              const progressData = JSON.parse(line.substring("PROGRESS_JSON: ".length));
               // Send progress update to renderer
               if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('export-progress', progressData);
+                mainWindow.webContents.send("export-progress", progressData);
               }
-            } catch (e) {
+            } catch {
               // Ignore JSON parse errors
             }
           }
         }
       });
 
-      exportProcess.stderr.on('data', (data) => {
+      exportProcess.stderr.on("data", (data) => {
         const output = data.toString();
         stderr += output;
 
         // Also check stderr for progress updates (Rust might write there)
-        const lines = output.split('\n');
+        const lines = output.split("\n");
         for (const line of lines) {
-          if (line.startsWith('PROGRESS_JSON: ')) {
+          if (line.startsWith("PROGRESS_JSON: ")) {
             try {
-              const progressData = JSON.parse(line.substring('PROGRESS_JSON: '.length));
+              const progressData = JSON.parse(line.substring("PROGRESS_JSON: ".length));
               // Send progress update to renderer
               if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('export-progress', progressData);
+                mainWindow.webContents.send("export-progress", progressData);
               }
-            } catch (e) {
+            } catch {
               // Ignore JSON parse errors
             }
           }
         }
       });
 
-      exportProcess.on('close', async (code) => {
+      exportProcess.on("close", async (code) => {
         const error = code !== 0 ? new Error(`Process exited with code ${code}`) : null;
-        const command = `"${executablePath}" ${params.join(' ')}`;
-        const debugLogContent = debugMode ?
-          `Command: ${command}\n\nOutput:\n${stdout}\n\nErrors:\n${stderr}${error ? '\n\nError:\n' + error.message : ''}` :
-          null;
+        const command = `"${executablePath}" ${params.join(" ")}`;
+        const debugLogContent = debugMode
+          ? `Command: ${command}\n\nOutput:\n${stdout}\n\nErrors:\n${stderr}${error ? "\n\nError:\n" + error.message : ""}`
+          : null;
 
         if (error) {
           if (debugMode) {
-            const { fullPath: debugLogPath } = await createUniqueName(outputFolder, 'debug', '.log');
+            const { fullPath: debugLogPath } = await createUniqueName(
+              outputFolder,
+              "debug",
+              ".log",
+            );
             await fs.writeFile(debugLogPath, debugLogContent);
           }
           await deleteTempFolder(uniqueTempFolder);
-          resolve({ success: false, error: error.message + (debugMode ? ' Debug log has been written to the export folder.' : '') });
+          resolve({
+            success: false,
+            error:
+              error.message +
+              (debugMode ? " Debug log has been written to the export folder." : ""),
+          });
         } else {
           try {
             // Keep progress bar at 100% during post-processing (zipping, filtering)
             if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('export-progress', { phase: 'complete', current: 0, total: 0, percentage: 100, message: 'Finalizing...' });
+              mainWindow.webContents.send("export-progress", {
+                phase: "complete",
+                current: 0,
+                total: 0,
+                percentage: 100,
+                message: "Finalizing...",
+              });
             }
 
-            if (stdout.includes('No chatrooms were found with the supplied contacts.')) {
+            if (stdout.includes("No chatrooms were found with the supplied contacts.")) {
               if (debugMode) {
-                const { fullPath: debugLogPath } = await createUniqueName(outputFolder, 'debug', '.log');
+                const { fullPath: debugLogPath } = await createUniqueName(
+                  outputFolder,
+                  "debug",
+                  ".log",
+                );
                 await fs.writeFile(debugLogPath, debugLogContent);
               }
               await deleteTempFolder(uniqueTempFolder);
-              resolve({ success: false, error: 'No chats were found with the supplied contacts.' + (debugMode ? ' Debug log has been written to the export folder.' : '') });
+              resolve({
+                success: false,
+                errorCode: "NO_CHAT_MATCH",
+                error:
+                  "No chats were found with the supplied contacts." +
+                  (debugMode ? " Debug log has been written to the export folder." : ""),
+              });
               return;
             }
 
             await sanitizeFileNames(uniqueTempFolder);
 
-            let filteringLog = '';
+            let filteringLog = "";
             if (isFilteredExport && selectedContacts && selectedContacts.length > 0) {
               filteringLog = await filterExportedFiles(uniqueTempFolder, selectedContacts);
             }
 
             if (debugMode) {
-              const fullDebugContent = debugLogContent + (filteringLog ? '\n\n=== FILTERING LOG ===\n' + filteringLog : '');
-              await fs.writeFile(path.join(uniqueTempFolder, 'debug.log'), fullDebugContent);
+              const fullDebugContent =
+                debugLogContent +
+                (filteringLog ? "\n\n=== FILTERING LOG ===\n" + filteringLog : "");
+              await fs.writeFile(path.join(uniqueTempFolder, "debug.log"), fullDebugContent);
             }
 
             // Check if we actually exported any messages (excluding orphaned.txt)
             const files = await fs.readdir(uniqueTempFolder);
-            const txtFiles = files.filter(file => file.endsWith('.txt') && file !== 'orphaned.txt');
+            const txtFiles = files.filter(
+              (file) => file.endsWith(".txt") && file !== "orphaned.txt",
+            );
             const hasMessages = txtFiles.length > 0;
 
             if (!hasMessages) {
@@ -509,11 +573,20 @@ ipcMain.handle('run-exporter', async (event, exportParams) => {
             resolve({ success: true, zipPath: finalZipPath, hasMessages });
           } catch (err) {
             if (debugMode) {
-              const { fullPath: debugLogPath } = await createUniqueName(outputFolder, 'debug', '.log');
+              const { fullPath: debugLogPath } = await createUniqueName(
+                outputFolder,
+                "debug",
+                ".log",
+              );
               await fs.writeFile(debugLogPath, debugLogContent);
             }
             await deleteTempFolder(uniqueTempFolder);
-            resolve({ success: false, error: err.message + (debugMode ? ' Debug log has been written to the export folder.' : '') });
+            resolve({
+              success: false,
+              error:
+                err.message +
+                (debugMode ? " Debug log has been written to the export folder." : ""),
+            });
           }
         }
       });
@@ -528,11 +601,11 @@ function getResourcePath() {
   const executableName = getExecutableName();
   return app.isPackaged
     ? path.join(process.resourcesPath, executableName)
-    : path.join(__dirname, '..', 'resources', executableName);
+    : path.join(__dirname, "..", "resources", executableName);
 }
 
 function getExecutableName() {
-  if (process.platform === 'darwin') {
+  if (process.platform === "darwin") {
     // Detect CPU architecture for macOS
     const arch = process.arch; // Will be 'arm64' for Apple Silicon or 'x64' for Intel
     return EXECUTABLES.darwin[arch] || EXECUTABLES.darwin.x64; // Default to x64 if arch not recognized
@@ -541,17 +614,17 @@ function getExecutableName() {
 }
 
 async function createUniqueFolder(basePath) {
-  const { fullPath } = await createUniqueName(basePath, 'imessage-export-temp');
+  const { fullPath } = await createUniqueName(basePath, "imessage-export-temp");
   await fs.mkdir(fullPath, { recursive: true });
   return fullPath;
 }
 
 async function getUniqueZipPath(basePath) {
-  const { fullPath } = await createUniqueName(basePath, 'imessage-export', '.zip');
+  const { fullPath } = await createUniqueName(basePath, "imessage-export", ".zip");
   return fullPath;
 }
 
-async function createUniqueName(basePath, prefix, extension = '') {
+async function createUniqueName(basePath, prefix, extension = "") {
   let counter = 2; // Start at 2
   let uniqueName = prefix;
   let fullPath = path.join(basePath, uniqueName + extension);
@@ -582,8 +655,11 @@ async function createUniqueName(basePath, prefix, extension = '') {
 }
 
 function getChatDbPath(inputPath) {
-  if (process.platform === 'darwin' && (inputPath.endsWith('Library/Messages') || inputPath.endsWith('Library/Messages/'))) {
-    return path.join(inputPath, 'chat.db');
+  if (
+    process.platform === "darwin" &&
+    (inputPath.endsWith("Library/Messages") || inputPath.endsWith("Library/Messages/"))
+  ) {
+    return path.join(inputPath, "chat.db");
   }
   return inputPath;
 }
@@ -592,7 +668,7 @@ async function sanitizeFileNames(directory) {
   try {
     const files = await fs.readdir(directory);
     for (const file of files) {
-      if (file.endsWith('.txt')) {
+      if (file.endsWith(".txt")) {
         const oldPath = path.join(directory, file);
         const newFileName = sanitizeFileName(file);
         const newPath = path.join(directory, newFileName);
@@ -603,34 +679,34 @@ async function sanitizeFileNames(directory) {
       }
     }
   } catch (error) {
-    console.error('Error sanitizing file names:', error);
+    console.error("Error sanitizing file names:", error);
   }
 }
 
 function sanitizeFileName(fileName) {
   // Remove emoji and special characters, replace spaces with underscores
   return fileName
-    .replace(/[\u{1F600}-\u{1F64F}]/gu, '') // Remove emoji
-    .replace(/[\u{1F300}-\u{1F5FF}]/gu, '') // Remove symbols & pictographs
-    .replace(/[\u{1F680}-\u{1F6FF}]/gu, '') // Remove transport & map symbols
-    .replace(/[\u{2600}-\u{26FF}]/gu, '')   // Remove miscellaneous symbols
-    .replace(/[\u{2700}-\u{27BF}]/gu, '')   // Remove dingbats
-    .replace(/_+/g, '_')                    // Replace multiple underscores with a single one
-    .replace(/^_|_$/g, '')                  // Remove leading and trailing underscores
-    .replace(/^\.+|\.+$/g, '')              // Remove leading and trailing dots
-    .replace(/\.{2,}/g, '.');               // Replace multiple dots with a single one
+    .replace(/[\u{1F600}-\u{1F64F}]/gu, "") // Remove emoji
+    .replace(/[\u{1F300}-\u{1F5FF}]/gu, "") // Remove symbols & pictographs
+    .replace(/[\u{1F680}-\u{1F6FF}]/gu, "") // Remove transport & map symbols
+    .replace(/[\u{2600}-\u{26FF}]/gu, "") // Remove miscellaneous symbols
+    .replace(/[\u{2700}-\u{27BF}]/gu, "") // Remove dingbats
+    .replace(/_+/g, "_") // Replace multiple underscores with a single one
+    .replace(/^_|_$/g, "") // Remove leading and trailing underscores
+    .replace(/^\.+|\.+$/g, "") // Remove leading and trailing dots
+    .replace(/\.{2,}/g, "."); // Replace multiple dots with a single one
 }
 
 async function zipFolder(folderPath, zipPath) {
   const output = createWriteStream(zipPath);
-  const archive = archiver('zip');
+  const archive = archiver("zip");
 
   return new Promise((resolve, reject) => {
-    output.on('close', async () => {
+    output.on("close", async () => {
       await deleteTempFolder(folderPath);
       resolve(zipPath);
     });
-    archive.on('error', reject);
+    archive.on("error", reject);
 
     archive.pipe(output);
     archive.directory(folderPath, false);
@@ -642,7 +718,7 @@ async function deleteTempFolder(folderPath) {
   try {
     await rm(folderPath, { recursive: true, force: true });
   } catch (error) {
-    console.error('Error deleting temp folder:', error);
+    console.error("Error deleting temp folder:", error);
   }
 }
 
@@ -651,7 +727,7 @@ async function filterExportedFiles(tempFolder, selectedContacts) {
 
   try {
     const files = await fs.readdir(tempFolder);
-    const txtFiles = files.filter(file => file.endsWith('.txt'));
+    const txtFiles = files.filter((file) => file.endsWith(".txt"));
 
     logMessages.push(`Starting filtered export cleanup...`);
     logMessages.push(`Found ${txtFiles.length} conversation files to process`);
@@ -666,9 +742,11 @@ async function filterExportedFiles(tempFolder, selectedContacts) {
       const normalizedSelected = selectedContact.map(normalizeIdentifier);
 
       // Check if all selected contacts have a match in the filename
-      return normalizedSelected.every(selectedId =>
-        normalizedFilename.some(filenameId => identifiersMatch(selectedId, filenameId))
-      ) && normalizedSelected.length === normalizedFilename.length;
+      return (
+        normalizedSelected.every((selectedId) =>
+          normalizedFilename.some((filenameId) => identifiersMatch(selectedId, filenameId)),
+        ) && normalizedSelected.length === normalizedFilename.length
+      );
     };
 
     // Helper function to check if an individual contact matches EXACTLY (no group chats)
@@ -680,8 +758,9 @@ async function filterExportedFiles(tempFolder, selectedContacts) {
       const normalizedSelected = normalizeIdentifier(selectedContact);
 
       // For individual contacts, the file should contain EXACTLY one identifier that matches
-      const result = normalizedFilename.length === 1 &&
-        normalizedFilename.some(filenameId => identifiersMatch(normalizedSelected, filenameId));
+      const result =
+        normalizedFilename.length === 1 &&
+        normalizedFilename.some((filenameId) => identifiersMatch(normalizedSelected, filenameId));
 
       return result;
     };
@@ -691,7 +770,7 @@ async function filterExportedFiles(tempFolder, selectedContacts) {
 
     logMessages.push(`\nAnalyzing conversation files...`);
     for (const txtFile of txtFiles) {
-      const shouldKeep = selectedContacts.some(selectedContact => {
+      const shouldKeep = selectedContacts.some((selectedContact) => {
         if (Array.isArray(selectedContact)) {
           return isGroupMatch(txtFile, selectedContact);
         } else {
@@ -702,7 +781,7 @@ async function filterExportedFiles(tempFolder, selectedContacts) {
       if (shouldKeep) {
         filesToKeep.add(txtFile);
         // Log which contact type matched
-        const matchingContact = selectedContacts.find(selectedContact => {
+        const matchingContact = selectedContacts.find((selectedContact) => {
           if (Array.isArray(selectedContact)) {
             return isGroupMatch(txtFile, selectedContact);
           } else {
@@ -711,9 +790,13 @@ async function filterExportedFiles(tempFolder, selectedContacts) {
         });
 
         if (Array.isArray(matchingContact)) {
-          logMessages.push(`✓ Keeping group chat file: ${txtFile} (matches ${matchingContact.join(', ')})`);
+          logMessages.push(
+            `✓ Keeping group chat file: ${txtFile} (matches ${matchingContact.join(", ")})`,
+          );
         } else {
-          logMessages.push(`✓ Keeping individual chat file: ${txtFile} (matches ${matchingContact})`);
+          logMessages.push(
+            `✓ Keeping individual chat file: ${txtFile} (matches ${matchingContact})`,
+          );
         }
       } else {
         logMessages.push(`✗ Will delete unmatched file: ${txtFile}`);
@@ -731,7 +814,7 @@ async function filterExportedFiles(tempFolder, selectedContacts) {
     }
 
     // Handle attachments folder - only keep attachments referenced by kept files
-    const attachmentsFolder = path.join(tempFolder, 'attachments');
+    const attachmentsFolder = path.join(tempFolder, "attachments");
     try {
       await fs.access(attachmentsFolder);
 
@@ -741,16 +824,16 @@ async function filterExportedFiles(tempFolder, selectedContacts) {
       logMessages.push(`\nScanning kept files for attachment references...`);
       for (const keptFile of filesToKeep) {
         const filePath = path.join(tempFolder, keptFile);
-        const content = await fs.readFile(filePath, 'utf8');
-        const lines = content.split('\n');
+        const content = await fs.readFile(filePath, "utf8");
+        const lines = content.split("\n");
         let attachmentCount = 0;
 
         for (const line of lines) {
           const trimmedLine = line.trim();
           // Check if line looks like an attachment path (starts with "attachments\" or "attachments/")
-          if (trimmedLine.startsWith('attachments\\') || trimmedLine.startsWith('attachments/')) {
+          if (trimmedLine.startsWith("attachments\\") || trimmedLine.startsWith("attachments/")) {
             // Normalize path separators and add to referenced set
-            const normalizedPath = trimmedLine.replace(/\\/g, '/');
+            const normalizedPath = trimmedLine.replace(/\\/g, "/");
             referencedAttachmentPaths.add(normalizedPath);
             attachmentCount++;
           }
@@ -764,12 +847,14 @@ async function filterExportedFiles(tempFolder, selectedContacts) {
       logMessages.push(`Total unique attachments referenced: ${referencedAttachmentPaths.size}`);
 
       // Recursively process attachments folder to delete unreferenced files and empty folders
-      const attachmentLog = await cleanupAttachmentsFolder(attachmentsFolder, referencedAttachmentPaths, tempFolder);
+      const attachmentLog = await cleanupAttachmentsFolder(
+        attachmentsFolder,
+        referencedAttachmentPaths,
+      );
       logMessages.push(...attachmentLog);
-
-    } catch (error) {
+    } catch {
       // Attachments folder doesn't exist, which is fine
-      logMessages.push('No attachments folder found');
+      logMessages.push("No attachments folder found");
     }
 
     logMessages.push(`\n=== FILTERING SUMMARY ===`);
@@ -777,23 +862,24 @@ async function filterExportedFiles(tempFolder, selectedContacts) {
     logMessages.push(`Deleted ${txtFiles.length - filesToKeep.size} conversation files`);
     logMessages.push(`Filtered export cleanup complete`);
 
-    return logMessages.join('\n');
-
+    return logMessages.join("\n");
   } catch (error) {
     logMessages.push(`ERROR during filtering: ${error.message}`);
     logMessages.push(`Stack trace: ${error.stack}`);
-    return logMessages.join('\n');
+    return logMessages.join("\n");
   }
 }
 
-async function cleanupAttachmentsFolder(attachmentsFolder, referencedAttachmentPaths, tempFolder) {
+async function cleanupAttachmentsFolder(attachmentsFolder, referencedAttachmentPaths) {
   const logMessages = [];
 
   try {
     // Get all subdirectories in attachments folder (like "25", "26", etc.)
     const attachmentSubdirs = await fs.readdir(attachmentsFolder, { withFileTypes: true });
 
-    logMessages.push(`\nProcessing attachments folder with ${attachmentSubdirs.length} subdirectories...`);
+    logMessages.push(
+      `\nProcessing attachments folder with ${attachmentSubdirs.length} subdirectories...`,
+    );
 
     for (const subdir of attachmentSubdirs) {
       if (subdir.isDirectory()) {
@@ -818,7 +904,9 @@ async function cleanupAttachmentsFolder(attachmentsFolder, referencedAttachmentP
           }
         }
 
-        logMessages.push(`Subdirectory ${subdir.name}: kept ${keptCount}, deleted ${deletedCount} files`);
+        logMessages.push(
+          `Subdirectory ${subdir.name}: kept ${keptCount}, deleted ${deletedCount} files`,
+        );
 
         // If no files are left in the subdirectory, delete the subdirectory
         if (!hasReferencedFiles) {
@@ -838,14 +926,13 @@ async function cleanupAttachmentsFolder(attachmentsFolder, referencedAttachmentP
       const remainingItems = await fs.readdir(attachmentsFolder);
       if (remainingItems.length === 0) {
         await fs.rmdir(attachmentsFolder);
-        logMessages.push('Deleted empty attachments folder');
+        logMessages.push("Deleted empty attachments folder");
       } else {
         logMessages.push(`Attachments folder still contains ${remainingItems.length} items`);
       }
     } catch (error) {
       logMessages.push(`Could not delete attachments folder: ${error.message}`);
     }
-
   } catch (error) {
     logMessages.push(`ERROR cleaning up attachments folder: ${error.message}`);
   }

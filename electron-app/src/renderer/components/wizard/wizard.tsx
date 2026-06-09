@@ -1,9 +1,9 @@
-import { useWizard } from '../../context/wizard-context';
-import { Step1BackupSource } from './step-1-backup-source';
-import { Step2ContactSelection } from './step-2-contact-selection';
-import { Step3DateRange } from './step-3-date-range';
-import { Step4Export } from './step-4-export';
-import { StepIndicator } from './step-indicator';
+import { useWizard } from "../../context/wizard-context";
+import { Step1BackupSource } from "./step-1-backup-source";
+import { Step2ContactSelection } from "./step-2-contact-selection";
+import { Step3DateRange } from "./step-3-date-range";
+import { Step4Export } from "./step-4-export";
+import { StepIndicator } from "./step-indicator";
 
 interface WizardProps {
   platform: string;

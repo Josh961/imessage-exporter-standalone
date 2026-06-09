@@ -1,7 +1,7 @@
-export type BackupSource = 'mac-messages' | 'iphone-backup';
+export type BackupSource = "mac-messages" | "iphone-backup";
 
 export interface Contact {
-  type: 'CONTACT' | 'GROUP';
+  type: "CONTACT" | "GROUP";
   contact: string;
   messageCount: number;
   firstMessageDate: string;
@@ -19,7 +19,7 @@ export interface IPhoneBackup {
 }
 
 export interface ExportProgress {
-  phase: 'scanning' | 'exporting' | 'copying-attachments' | 'complete';
+  phase: "scanning" | "exporting" | "copying-attachments" | "complete";
   current: number;
   total: number;
   percentage: number;
@@ -31,6 +31,7 @@ export interface ExportResult {
   zipPath?: string;
   hasMessages?: boolean;
   error?: string;
+  errorCode?: "NO_CHAT_MATCH";
 }
 
 export interface ExportParams {
@@ -57,7 +58,7 @@ export interface WizardState {
   selectedContact: Contact | null;
   startDate: string;
   endDate: string;
-  exportStatus: 'idle' | 'exporting' | 'success' | 'error';
+  exportStatus: "idle" | "exporting" | "success" | "error";
   exportProgress: ExportProgress | null;
   exportError: string | null;
   exportZipPath: string | null;
@@ -75,15 +76,17 @@ export interface ElectronAPI {
   checkPathExists: (checkPath: string) => Promise<boolean>;
   getNestedFolders: (folderPath: string) => Promise<string[]>;
   getDocumentsFolder: () => Promise<string>;
-  selectFolder: (currentPath: string, type: 'input' | 'output') => Promise<string | null>;
+  selectFolder: (currentPath: string, type: "input" | "output") => Promise<string | null>;
   showItemInFolder: (filePath: string) => Promise<void>;
   getLastInputFolder: () => Promise<string>;
   getLastOutputFolder: () => Promise<string>;
   saveLastInputFolder: (folder: string) => Promise<void>;
   saveLastOutputFolder: (folder: string) => Promise<void>;
   getDefaultMessagesFolder: () => Promise<string>;
-  scanIphoneBackups: () => Promise<{ success: boolean; backups: IPhoneBackup[]; error?: string; }>;
-  listContacts: (inputFolder: string) => Promise<{ success: boolean; contacts: Contact[]; error?: string; }>;
+  scanIphoneBackups: () => Promise<{ success: boolean; backups: IPhoneBackup[]; error?: string }>;
+  listContacts: (
+    inputFolder: string,
+  ) => Promise<{ success: boolean; contacts: Contact[]; error?: string }>;
   runExporter: (exportParams: ExportParams) => Promise<ExportResult>;
   onExportProgress: (callback: (data: ExportProgress) => void) => () => void;
 }

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { useWizard } from '../../context/wizard-context';
-import type { IPhoneBackup } from '../../types';
+import { useEffect, useState } from "react";
+import { useWizard } from "../../context/wizard-context";
+import type { IPhoneBackup } from "../../types";
 
 interface Step1BackupSourceProps {
   platform: string;
@@ -15,7 +15,7 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
   const [showBackupModal, setShowBackupModal] = useState(false);
   const [showNoBackupsModal, setShowNoBackupsModal] = useState(false);
 
-  const isMac = platform === 'darwin';
+  const isMac = platform === "darwin";
 
   // Scan for backups on mount
   useEffect(() => {
@@ -40,13 +40,13 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
     try {
       const defaultFolder = await window.electronAPI.getDefaultMessagesFolder();
       if (defaultFolder) {
-        setBackupSource('mac-messages');
+        setBackupSource("mac-messages");
         setInputFolder(defaultFolder);
         await window.electronAPI.saveLastInputFolder(defaultFolder);
         await loadContacts(defaultFolder);
       }
     } catch {
-      setError('Failed to access Mac Messages');
+      setError("Failed to access Mac Messages");
     } finally {
       setLoading(false);
     }
@@ -70,12 +70,12 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
     setLoading(true);
     setError(null);
     try {
-      setBackupSource('iphone-backup');
+      setBackupSource("iphone-backup");
       setInputFolder(backup.path);
       await window.electronAPI.saveLastInputFolder(backup.path);
       await loadContacts(backup.path);
     } catch {
-      setError('Failed to load backup');
+      setError("Failed to load backup");
       setLoading(false);
     }
   };
@@ -85,7 +85,7 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
     if (result.success) {
       const filteredContacts = result.contacts.filter((c) => c.contact && c.messageCount >= 20);
       if (filteredContacts.length === 0) {
-        setError('No contacts found with enough messages. Please check your backup.');
+        setError("No contacts found with enough messages. Please check your backup.");
         setLoading(false);
         return;
       }
@@ -93,18 +93,18 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
       setLoading(false);
       nextStep();
     } else {
-      setError(result.error || 'Failed to load contacts');
+      setError(result.error || "Failed to load contacts");
       setLoading(false);
     }
   };
 
   const formatDate = (date: Date) => {
-    return new Date(date).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
+    return new Date(date).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
   };
 
@@ -132,17 +132,33 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
   return (
     <>
       <div className="rounded-3xl bg-white p-8 shadow-md ring-1 ring-slate-950/5">
-        <h2 className="mb-4 text-center text-2xl font-semibold text-slate-800">Choose backup source</h2>
-        <p className="mb-8 text-center text-slate-600">Select where to export your messages from.</p>
+        <h2 className="mb-4 text-center text-2xl font-semibold text-slate-800">
+          Choose backup source
+        </h2>
+        <p className="mb-8 text-center text-slate-600">
+          Select where to export your messages from.
+        </p>
 
-        {error && <div className="mb-6 rounded-xl bg-red-50 p-4 text-center text-red-700">{error}</div>}
+        {error && (
+          <div className="mb-6 rounded-xl bg-red-50 p-4 text-center text-red-700">{error}</div>
+        )}
 
         {loading ? (
           <div className="space-y-4">
             <div className="h-11 w-full animate-pulse rounded-xl bg-slate-200" />
             <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-200">
-              {[...Array(6)].map((_, i) => (
-                <div key={i} className="flex items-center justify-between border-b border-slate-100 px-4 py-3 last:border-b-0">
+              {[
+                "skeleton-1",
+                "skeleton-2",
+                "skeleton-3",
+                "skeleton-4",
+                "skeleton-5",
+                "skeleton-6",
+              ].map((key) => (
+                <div
+                  key={key}
+                  className="flex items-center justify-between border-b border-slate-100 px-4 py-3 last:border-b-0"
+                >
                   <div className="space-y-2">
                     <div className="h-4 w-32 animate-pulse rounded bg-slate-200" />
                     <div className="h-3 w-48 animate-pulse rounded bg-slate-100" />
@@ -153,13 +169,19 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
             </div>
           </div>
         ) : (
-          <div className={`grid gap-4 ${isMac ? 'sm:grid-cols-2' : ''}`}>
+          <div className={`grid gap-4 ${isMac ? "sm:grid-cols-2" : ""}`}>
             {isMac && (
               <button
                 onClick={handleMacMessages}
                 disabled={loading}
-                className="flex flex-col items-center rounded-xl border-2 border-slate-200 px-6 py-8 transition-all hover:border-sky-500 hover:bg-sky-50 disabled:opacity-50">
-                <svg className="mb-4 h-12 w-12 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                className="flex flex-col items-center rounded-xl border-2 border-slate-200 px-6 py-8 transition-all hover:border-sky-500 hover:bg-sky-50 disabled:opacity-50"
+              >
+                <svg
+                  className="mb-4 h-12 w-12 text-slate-600"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
                   <path
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -175,17 +197,32 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
             <button
               onClick={handleIphoneBackup}
               disabled={loading || !backupScanComplete}
-              className="flex flex-col items-center rounded-xl border-2 border-slate-200 px-6 py-8 transition-all hover:border-sky-500 hover:bg-sky-50 disabled:opacity-50">
-              <svg className="mb-4 h-12 w-12 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+              className="flex flex-col items-center rounded-xl border-2 border-slate-200 px-6 py-8 transition-all hover:border-sky-500 hover:bg-sky-50 disabled:opacity-50"
+            >
+              <svg
+                className="mb-4 h-12 w-12 text-slate-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
+                />
               </svg>
-              <span className="text-lg font-semibold text-slate-800">{isMac ? 'iPhone backup' : 'iTunes backup'}</span>
+              <span className="text-lg font-semibold text-slate-800">
+                {isMac ? "iPhone backup" : "iTunes backup"}
+              </span>
               {!backupScanComplete ? (
                 <span className="mt-2 text-sm text-slate-400">Scanning...</span>
               ) : backups.length === 0 ? (
                 <span className="mt-2 text-sm text-slate-500">No backups found</span>
               ) : backups.length === 1 ? (
-                <span className="mt-2 text-sm text-slate-500">{formatDate(backups[0].backupDate)}</span>
+                <span className="mt-2 text-sm text-slate-500">
+                  {formatDate(backups[0].backupDate)}
+                </span>
               ) : (
                 <span className="mt-2 text-sm text-sky-600">{backups.length} backups found</span>
               )}
@@ -196,8 +233,14 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
 
       {/* Multiple backups modal */}
       {showBackupModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowBackupModal(false)}>
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShowBackupModal(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h2 className="mb-6 text-xl font-semibold text-slate-800">Select iPhone backup</h2>
             <div className="max-h-80 space-y-3 overflow-y-auto p-1">
               {backups.map((backup, index) => (
@@ -205,15 +248,25 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
                   key={backup.id}
                   onClick={() => selectBackup(backup)}
                   className={`flex w-full items-center justify-between rounded-xl border px-5 py-4 text-left transition-all hover:border-sky-500 hover:bg-sky-50 ${
-                    index === 0 ? 'border-sky-300 bg-sky-50/50 ring-1 ring-sky-200' : 'border-slate-200'
-                  }`}>
+                    index === 0
+                      ? "border-sky-300 bg-sky-50/50 ring-1 ring-sky-200"
+                      : "border-slate-200"
+                  }`}
+                >
                   <div className="text-sm text-slate-700">{formatDate(backup.backupDate)}</div>
-                  {index === 0 && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700">Latest</span>}
+                  {index === 0 && (
+                    <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700">
+                      Latest
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
             <div className="mt-6 flex justify-end">
-              <button onClick={() => setShowBackupModal(false)} className="rounded-lg border border-slate-300 px-6 py-2 font-medium text-slate-700 hover:bg-slate-50">
+              <button
+                onClick={() => setShowBackupModal(false)}
+                className="rounded-lg border border-slate-300 px-6 py-2 font-medium text-slate-700 hover:bg-slate-50"
+              >
                 Cancel
               </button>
             </div>
@@ -223,13 +276,23 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
 
       {/* No backups found modal */}
       {showNoBackupsModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowNoBackupsModal(false)}>
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShowNoBackupsModal(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h2 className="mb-4 text-xl font-semibold text-slate-800">No iPhone backups found</h2>
-            <p className="mb-6 text-slate-600">To export messages from your iPhone, you'll need to create a local backup first.</p>
+            <p className="mb-6 text-slate-600">
+              To export messages from your iPhone, you'll need to create a local backup first.
+            </p>
 
             <div className="rounded-xl bg-slate-50 p-5">
-              <h3 className="mb-3 font-semibold text-slate-800">{isMac ? 'How to create a backup on Mac:' : 'How to create a backup:'}</h3>
+              <h3 className="mb-3 font-semibold text-slate-800">
+                {isMac ? "How to create a backup on Mac:" : "How to create a backup:"}
+              </h3>
               {isMac ? (
                 <ol className="list-inside list-decimal space-y-2 text-sm text-slate-700">
                   <li>Connect your iPhone to your Mac with a cable</li>
@@ -241,7 +304,8 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
                     Select <span className="font-semibold">"Back up all data to this Mac"</span>
                     <div className="ml-5 mt-1">
                       <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-slate-700">
-                        "Encrypt local backup" must be <span className="font-semibold">unchecked</span>
+                        "Encrypt local backup" must be{" "}
+                        <span className="font-semibold">unchecked</span>
                       </span>
                     </div>
                   </li>
@@ -261,7 +325,8 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
                     <div className="ml-5 mt-1 space-y-1 text-xs">
                       <div>Save locally (not iCloud)</div>
                       <span className="rounded bg-amber-100 px-2 py-0.5 text-slate-700">
-                        "Encrypt local backup" must be <span className="font-semibold">unchecked</span>
+                        "Encrypt local backup" must be{" "}
+                        <span className="font-semibold">unchecked</span>
                       </span>
                     </div>
                   </li>
@@ -269,13 +334,21 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
               )}
             </div>
 
-            <p className="mt-4 text-center text-sm text-slate-500">After creating a backup, click "Check again" below.</p>
+            <p className="mt-4 text-center text-sm text-slate-500">
+              After creating a backup, click "Check again" below.
+            </p>
 
             <div className="mt-6 flex justify-end gap-3">
-              <button onClick={() => setShowNoBackupsModal(false)} className="rounded-lg border border-slate-300 px-6 py-2 font-medium text-slate-700 hover:bg-slate-50">
+              <button
+                onClick={() => setShowNoBackupsModal(false)}
+                className="rounded-lg border border-slate-300 px-6 py-2 font-medium text-slate-700 hover:bg-slate-50"
+              >
                 Cancel
               </button>
-              <button onClick={handleCheckAgain} className="rounded-lg bg-sky-500 px-6 py-2 font-medium text-white hover:bg-sky-600">
+              <button
+                onClick={handleCheckAgain}
+                className="rounded-lg bg-sky-500 px-6 py-2 font-medium text-white hover:bg-sky-600"
+              >
                 Check again
               </button>
             </div>

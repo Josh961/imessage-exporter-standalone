@@ -14,7 +14,7 @@
     "format:check": "oxfmt . --check",
     "lint": "oxlint . --tsconfig tsconfig.json --react-plugin --jsx-a11y-plugin --vitest-plugin --import-plugin --node-plugin && tsc --noEmit",
     "lint:fix": "oxlint . --tsconfig tsconfig.json --react-plugin --jsx-a11y-plugin --vitest-plugin --import-plugin --node-plugin --fix",
-    "react:doctor": "npx --yes react-doctor@latest . --yes --no-score --blocking error",
+    "react:doctor": "npx --yes --package react-doctor@latest -- react-doctor . --yes --no-score --blocking error",
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "npm run format:check && npm run lint && npm run cli:check && npm run check-exporter-resources && npm run react:doctor && npm run test && npm run build",
@@ -43,7 +43,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@types/node": "^25.9.2",
+    "@types/node": "^24.13.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
@@ -63,6 +63,9 @@
     "vite": "^6.0.3",
     "vitest": "^4.1.8",
     "wait-on": "^9.0.3"
+  },
+  "engines": {
+    "node": ">=24 <25"
   },
   "build": {
     "appId": "com.imessageexporter.standalone",

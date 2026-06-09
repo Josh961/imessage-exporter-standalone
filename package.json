@@ -1,6 +1,9 @@
 {
   "name": "imessage-exporter-standalone",
   "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "build": "npm --prefix electron-app run build",
     "format": "npm --prefix electron-app run format",

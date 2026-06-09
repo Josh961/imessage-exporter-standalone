@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { DevControls } from "./components/dev-controls";
 import { Header } from "./components/header";
 import { InfoModal } from "./components/modals/info-modal";
 import { PermissionsModal } from "./components/modals/permissions-modal";
@@ -42,6 +43,7 @@ export default function App() {
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
       {showInfo && <InfoModal onClose={() => setShowInfo(false)} />}
       {showPermissions && <PermissionsModal />}
+      <DevControls />
     </WizardProvider>
   );
 }

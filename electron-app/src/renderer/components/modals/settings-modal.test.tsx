@@ -77,13 +77,12 @@ describe("SettingsModal", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("stores the development fallback simulation toggle", async () => {
+  it("does not include development-only fallback controls", async () => {
     const user = userEvent.setup();
     renderSettings();
 
     await user.click(screen.getByRole("button", { name: "Advanced settings" }));
-    await user.click(screen.getByRole("button", { name: "Simulate fallback while enabled" }));
 
-    expect(localStorage.getItem("simulateNoChatMatch")).toBe("true");
+    expect(screen.queryByText("Simulate fallback while enabled")).not.toBeInTheDocument();
   });
 });

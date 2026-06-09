@@ -16,14 +16,9 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
     resetToContactSelect,
   } = useWizard();
   const [debugMode, setDebugMode] = useLocalStorage("debugMode", false);
-  const [simulateNoChatMatch, setSimulateNoChatMatch] = useLocalStorage(
-    "simulateNoChatMatch",
-    false,
-  );
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [loadingContacts, setLoadingContacts] = useState(false);
   const [contactsError, setContactsError] = useState<string | null>(null);
-  const isDevelopment = import.meta.env.DEV;
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -186,31 +181,6 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                   </div>
                   {contactsError && <p className="mt-2 text-xs text-red-600">{contactsError}</p>}
                 </div>
-
-                {isDevelopment && (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                    <div className="flex items-center justify-between gap-4">
-                      <div>
-                        <div className="text-sm font-medium text-amber-900">
-                          Simulate fallback while enabled
-                        </div>
-                        <p className="text-xs text-amber-700">
-                          Development only. Forces the no-chat recovery screen for each export
-                          attempt.
-                        </p>
-                      </div>
-                      <button
-                        aria-label="Simulate fallback while enabled"
-                        onClick={() => setSimulateNoChatMatch(!simulateNoChatMatch)}
-                        className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${simulateNoChatMatch ? "bg-amber-500" : "bg-slate-300"}`}
-                      >
-                        <span
-                          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${simulateNoChatMatch ? "left-[22px]" : "left-0.5"}`}
-                        />
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </div>

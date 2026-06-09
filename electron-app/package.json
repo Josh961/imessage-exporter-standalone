@@ -11,11 +11,12 @@
     "dev:electron": "wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "build": "vite build",
     "package": "npm run build && electron-builder build",
-    "package:mac": "npm run build && electron-builder build --mac --arm64 && node -e \"const p=require('./package.json'),f='dist-build/imessage-exporter-v'+p.version;require('fs').renameSync(f+'.dmg',f+'-arm64.tmp.dmg')\" && electron-builder build --mac --x64 && node -e \"const fs=require('fs'),p=require('./package.json'),f='dist-build/imessage-exporter-v'+p.version;fs.renameSync(f+'.dmg',f+'-x86.dmg');fs.renameSync(f+'-arm64.tmp.dmg',f+'.dmg')\"",
-    "package:win": "npm run build && electron-builder build --win",
+    "package:mac": "npm run build && electron-builder build --mac --arm64 && node -e \"const fs=require('fs'),f='dist-build/imessage-exporter';fs.renameSync(f+'.dmg',f+'-arm64.tmp.dmg');fs.rmSync(f+'.dmg.blockmap',{force:true})\" && electron-builder build --mac --x64 && node -e \"const fs=require('fs'),f='dist-build/imessage-exporter';fs.renameSync(f+'.dmg',f+'-x86.dmg');fs.renameSync(f+'-arm64.tmp.dmg',f+'.dmg');fs.rmSync(f+'.dmg.blockmap',{force:true})\"",
+    "package:win": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder build --win",
     "postinstall": "electron-builder install-app-deps",
     "build-exporter-win": "node scripts/build-exporter-win.js",
-    "build-exporter-mac": "node scripts/build-exporter-mac.js"
+    "build-exporter-mac": "node scripts/build-exporter-mac.js",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "archiver": "^7.0.1",
@@ -66,10 +67,15 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "entitlements.mac.plist",
-      "entitlementsInherit": "entitlements.mac.plist"
+      "entitlementsInherit": "entitlements.mac.plist",
+      "notarize": true,
+      "binaries": [
+        "Contents/Resources/imessage-exporter-mac-arm64",
+        "Contents/Resources/imessage-exporter-mac-x64"
+      ]
     },
     "dmg": {
-      "artifactName": "imessage-exporter-v${version}.${ext}",
+      "artifactName": "imessage-exporter.${ext}",
       "contents": [
         {
           "x": 130,
@@ -94,7 +100,7 @@
       ]
     },
     "nsis": {
-      "artifactName": "imessage-exporter-v${version}.${ext}",
+      "artifactName": "imessage-exporter.${ext}",
       "include": "installer.nsh",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,

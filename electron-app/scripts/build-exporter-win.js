@@ -1,21 +1,27 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { getAppVersion, withCargoPackageVersions } from './build-utils.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const appVersion = getAppVersion(__dirname);
+const windowsTarget =
+  process.env.WINDOWS_RUST_TARGET || (process.platform === 'win32' ? 'x86_64-pc-windows-msvc' : 'x86_64-pc-windows-gnu');
 
 // Change to the exporter-cli directory
 const exporterDir = path.join(__dirname, '..', '..', 'exporter-cli');
 process.chdir(exporterDir);
 
-console.log('Building Windows exporter...');
+console.log(`Building Windows exporter ${appVersion} for ${windowsTarget}...`);
 try {
-  // Build the exporter
-  execSync('cargo build --target x86_64-pc-windows-gnu --release', { stdio: 'inherit' });
+  await withCargoPackageVersions(__dirname, appVersion, async () => {
+    // Build the exporter
+    execFileSync('cargo', ['build', '--target', windowsTarget, '--release'], { stdio: 'inherit' });
+  });
 
   // Copy the built executable
-  const source = path.join(exporterDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'imessage-exporter.exe');
+  const source = path.join(exporterDir, 'target', windowsTarget, 'release', 'imessage-exporter.exe');
   const dest = path.join(__dirname, '..', 'resources', 'imessage-exporter-win.exe');
 
   console.log(`Copying from: ${source}`);

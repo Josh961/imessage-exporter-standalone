@@ -1,14 +1,48 @@
 appId: com.imessageexporter.standalone
 productName: iMessage Exporter
 directories:
-  output: dist
-  buildResources: public
+  output: dist-build
 files:
   - dist/**/*
+  - src/main.mjs
+  - src/preload.js
   - package.json
+extraResources:
+  - from: resources
+    to: .
 mac:
   category: public.app-category.utilities
+  target: dmg
+  icon: assets/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: entitlements.mac.plist
+  entitlementsInherit: entitlements.mac.plist
+  notarize: true
+  binaries:
+    - Contents/Resources/imessage-exporter-mac-arm64
+    - Contents/Resources/imessage-exporter-mac-x64
+dmg:
+  artifactName: imessage-exporter.${ext}
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
 win:
   target: nsis
-linux:
-  target: AppImage
+  icon: assets/icon.ico
+  extraFiles:
+    - from: resources/ImageMagick-7.1.1-35-Q16-HDRI-x64-dll.exe
+      to: ImageMagick-installer.exe
+nsis:
+  artifactName: imessage-exporter.${ext}
+  include: installer.nsh
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  runAfterFinish: true
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
+  installerHeaderIcon: assets/icon.ico

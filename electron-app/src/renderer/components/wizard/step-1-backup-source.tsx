@@ -1,38 +1,81 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useWizard } from "../../context/wizard-context";
+import { useLocalStorage } from "../../hooks/use-local-storage";
 import type { IPhoneBackup } from "../../types";
+import { BackupPasswordModal } from "../modals/backup-password-modal";
 
 interface Step1BackupSourceProps {
   platform: string;
 }
 
+const DEV_BACKUP_ID = "__dev_iphone_backup__";
+
+function isDevBackup(backup: IPhoneBackup) {
+  return backup.id === DEV_BACKUP_ID;
+}
+
 export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
-  const { setBackupSource, setInputFolder, setContacts, nextStep } = useWizard();
+  const { setBackupSource, setInputFolder, setBackupPassword, setContacts, nextStep } = useWizard();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [backups, setBackups] = useState<IPhoneBackup[]>([]);
   const [backupScanComplete, setBackupScanComplete] = useState(false);
   const [showBackupModal, setShowBackupModal] = useState(false);
   const [showNoBackupsModal, setShowNoBackupsModal] = useState(false);
+  const [encryptedBackup, setEncryptedBackup] = useState<IPhoneBackup | null>(null);
+  const [backupPasswordError, setBackupPasswordError] = useState<string | null>(null);
+  const [unlockingBackup, setUnlockingBackup] = useState(false);
+  const [simulateEncryptedBackup] = useLocalStorage("simulateEncryptedBackup", false);
 
   const isMac = platform === "darwin";
+  const isDevelopment = import.meta.env.DEV;
+  const shouldAddDevBackup = isDevelopment && isMac;
+
+  const addDevBackup = useCallback(
+    async (scannedBackups: IPhoneBackup[]) => {
+      if (!shouldAddDevBackup || scannedBackups.some(isDevBackup)) {
+        return scannedBackups;
+      }
+
+      const defaultFolder = await window.electronAPI.getDefaultMessagesFolder();
+      if (!defaultFolder) {
+        return scannedBackups;
+      }
+
+      return [
+        ...scannedBackups,
+        {
+          id: DEV_BACKUP_ID,
+          path: defaultFolder,
+          folderName: "Dev iPhone backup",
+          backupDate: new Date("2024-01-01T12:00:00Z"),
+        },
+      ];
+    },
+    [shouldAddDevBackup],
+  );
 
   // Scan for backups on mount
   useEffect(() => {
+    if (!platform) return;
+
     const scanBackups = async () => {
+      let scannedBackups: IPhoneBackup[] = [];
       try {
         const result = await window.electronAPI.scanIphoneBackups();
-        if (result.success && result.backups.length > 0) {
-          setBackups(result.backups);
+        if (result.success) {
+          scannedBackups = result.backups;
         }
       } catch {
         // Silently fail - will show "No backups found"
       } finally {
+        const backupsWithDevBackup = await addDevBackup(scannedBackups);
+        setBackups(backupsWithDevBackup);
         setBackupScanComplete(true);
       }
     };
     scanBackups();
-  }, []);
+  }, [addDevBackup, platform]);
 
   const handleMacMessages = async () => {
     setLoading(true);
@@ -42,6 +85,7 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
       if (defaultFolder) {
         setBackupSource("mac-messages");
         setInputFolder(defaultFolder);
+        setBackupPassword(null);
         await window.electronAPI.saveLastInputFolder(defaultFolder);
         await loadContacts(defaultFolder);
       }
@@ -56,6 +100,8 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
     if (backups.length === 0) {
       // No backups found - show help modal
       setShowNoBackupsModal(true);
+    } else if (backups.some(isDevBackup)) {
+      setShowBackupModal(true);
     } else if (backups.length === 1) {
       // Only one backup - select it directly
       await selectBackup(backups[0]);
@@ -72,29 +118,94 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
     try {
       setBackupSource("iphone-backup");
       setInputFolder(backup.path);
+      setBackupPassword(null);
       await window.electronAPI.saveLastInputFolder(backup.path);
-      await loadContacts(backup.path);
+      await loadContacts(backup.path, undefined, backup);
     } catch {
       setError("Failed to load backup");
       setLoading(false);
     }
   };
 
-  const loadContacts = async (folder: string) => {
-    const result = await window.electronAPI.listContacts(folder);
-    if (result.success) {
-      const filteredContacts = result.contacts.filter((c) => c.contact && c.messageCount >= 20);
-      if (filteredContacts.length === 0) {
-        setError("No contacts found with enough messages. Please check your backup.");
+  const callListContacts = (folder: string, backupPassword?: string) => {
+    return backupPassword
+      ? window.electronAPI.listContacts(folder, { backupPassword })
+      : window.electronAPI.listContacts(folder);
+  };
+
+  const loadContacts = async (folder: string, backupPassword?: string, backup?: IPhoneBackup) => {
+    try {
+      const result =
+        isDevelopment && simulateEncryptedBackup && backup && !backupPassword
+          ? {
+              success: false as const,
+              errorCode: "ENCRYPTED_BACKUP_PASSWORD_REQUIRED" as const,
+              error: "This iPhone backup is encrypted. Enter the backup password to continue.",
+            }
+          : await callListContacts(folder, backupPassword);
+      if (result.success) {
+        const filteredContacts = result.contacts.filter((c) => c.contact && c.messageCount >= 20);
+        if (filteredContacts.length === 0) {
+          if (backupPassword && backup) {
+            setEncryptedBackup(null);
+            setBackupPasswordError(null);
+          }
+          setError("No contacts found with enough messages. Please check your backup.");
+          setLoading(false);
+          return false;
+        }
+        setContacts(filteredContacts);
+        setBackupPassword(backupPassword || null);
         setLoading(false);
-        return;
+        nextStep();
+        return true;
       }
-      setContacts(filteredContacts);
+
+      if (result.errorCode === "ENCRYPTED_BACKUP_PASSWORD_REQUIRED" && backup) {
+        setEncryptedBackup(backup);
+        setBackupPasswordError(null);
+        setLoading(false);
+        return false;
+      }
+
+      if (result.errorCode === "INVALID_BACKUP_PASSWORD" && backup) {
+        setEncryptedBackup(backup);
+        setBackupPasswordError(result.error || "That backup password was not accepted. Try again.");
+        setLoading(false);
+        return false;
+      } else {
+        if (backupPassword && backup) {
+          setEncryptedBackup(backup);
+          setBackupPasswordError(result.error || "Failed to unlock this backup. Try again.");
+        } else {
+          setError(result.error || "Failed to load contacts");
+        }
+        setLoading(false);
+        return false;
+      }
+    } catch {
+      if (backupPassword && backup) {
+        setEncryptedBackup(backup);
+        setBackupPasswordError("Failed to unlock this backup. Try again.");
+      } else {
+        setError("Failed to load contacts");
+      }
       setLoading(false);
-      nextStep();
-    } else {
-      setError(result.error || "Failed to load contacts");
-      setLoading(false);
+      return false;
+    }
+  };
+
+  const handleUnlockEncryptedBackup = async (password: string) => {
+    if (!encryptedBackup) return;
+    setUnlockingBackup(true);
+    setBackupPasswordError(null);
+    try {
+      const loaded = await loadContacts(encryptedBackup.path, password, encryptedBackup);
+      if (loaded) {
+        setEncryptedBackup(null);
+      }
+    } finally {
+      setUnlockingBackup(false);
     }
   };
 
@@ -113,11 +224,12 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
     setBackupScanComplete(false);
     try {
       const result = await window.electronAPI.scanIphoneBackups();
-      if (result.success && result.backups.length > 0) {
-        setBackups(result.backups);
+      if (result.success) {
+        const backupsWithDevBackup = await addDevBackup(result.backups);
+        setBackups(backupsWithDevBackup);
         // If backups now found, select single or show modal
-        if (result.backups.length === 1) {
-          await selectBackup(result.backups[0]);
+        if (backupsWithDevBackup.length === 1 && !isDevBackup(backupsWithDevBackup[0])) {
+          await selectBackup(backupsWithDevBackup[0]);
         } else {
           setShowBackupModal(true);
         }
@@ -219,6 +331,8 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
                 <span className="mt-2 text-sm text-slate-400">Scanning...</span>
               ) : backups.length === 0 ? (
                 <span className="mt-2 text-sm text-slate-500">No backups found</span>
+              ) : backups.length === 1 && isDevBackup(backups[0]) ? (
+                <span className="mt-2 text-sm text-amber-600">Dev backup available</span>
               ) : backups.length === 1 ? (
                 <span className="mt-2 text-sm text-slate-500">
                   {formatDate(backups[0].backupDate)}
@@ -253,12 +367,27 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
                       : "border-slate-200"
                   }`}
                 >
-                  <div className="text-sm text-slate-700">{formatDate(backup.backupDate)}</div>
-                  {index === 0 && (
-                    <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700">
-                      Latest
-                    </span>
-                  )}
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-slate-700">
+                      {isDevBackup(backup) ? "Dev iPhone backup" : formatDate(backup.backupDate)}
+                    </div>
+                    <div className="mt-1 truncate text-xs text-slate-500">
+                      {isDevBackup(backup)
+                        ? "Uses Mac Messages data in dev"
+                        : backup.folderName || backup.path}
+                    </div>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+                      isDevBackup(backup)
+                        ? "bg-amber-100 text-amber-800"
+                        : index === 0
+                          ? "bg-sky-100 text-sky-700"
+                          : "hidden"
+                    }`}
+                  >
+                    {isDevBackup(backup) ? "DEV" : "Latest"}
+                  </span>
                 </button>
               ))}
             </div>
@@ -304,8 +433,7 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
                     Select <span className="font-semibold">"Back up all data to this Mac"</span>
                     <div className="ml-5 mt-1">
                       <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-slate-700">
-                        "Encrypt local backup" must be{" "}
-                        <span className="font-semibold">unchecked</span>
+                        If encrypted, keep the password handy
                       </span>
                     </div>
                   </li>
@@ -325,8 +453,7 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
                     <div className="ml-5 mt-1 space-y-1 text-xs">
                       <div>Save locally (not iCloud)</div>
                       <span className="rounded bg-amber-100 px-2 py-0.5 text-slate-700">
-                        "Encrypt local backup" must be{" "}
-                        <span className="font-semibold">unchecked</span>
+                        If encrypted, keep the password handy
                       </span>
                     </div>
                   </li>
@@ -354,6 +481,19 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {encryptedBackup && (
+        <BackupPasswordModal
+          backupName={encryptedBackup.folderName || "this iPhone backup"}
+          error={backupPasswordError}
+          loading={unlockingBackup}
+          onCancel={() => {
+            setEncryptedBackup(null);
+            setBackupPasswordError(null);
+          }}
+          onSubmit={handleUnlockEncryptedBackup}
+        />
       )}
     </>
   );

@@ -45,13 +45,22 @@ export function Step4Export() {
     return contact.displayName || contact.contact;
   };
 
+  const callListContacts = useCallback(
+    (folder: string) => {
+      return state.backupPassword
+        ? window.electronAPI.listContacts(folder, { backupPassword: state.backupPassword })
+        : window.electronAPI.listContacts(folder);
+    },
+    [state.backupPassword],
+  );
+
   const findFallbackCandidates = useCallback(
     async (selected: Contact) => {
       setFallbackStatus("loading");
       setFallbackCandidates([]);
 
       try {
-        const result = await window.electronAPI.listContacts(state.inputFolder);
+        const result = await callListContacts(state.inputFolder);
         if (!result.success) {
           setFallbackStatus("error");
           return;
@@ -70,7 +79,7 @@ export function Step4Export() {
         setFallbackStatus("error");
       }
     },
-    [setContacts, state.inputFolder],
+    [callListContacts, setContacts, state.inputFolder],
   );
 
   const getDateRangeText = (): string => {
@@ -156,6 +165,7 @@ export function Step4Export() {
           endDate: state.endDate || "",
           selectedContacts,
           selectedChatIds,
+          ...(state.backupPassword ? { backupPassword: state.backupPassword } : {}),
           includeVideos: true, // Always include videos in simplified version
           debugMode,
           isFullExport: false,
@@ -194,6 +204,7 @@ export function Step4Export() {
       state.outputFolder,
       state.startDate,
       state.endDate,
+      state.backupPassword,
       debugMode,
       isDevelopment,
       simulateNoChatMatch,

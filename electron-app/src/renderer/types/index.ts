@@ -31,7 +31,7 @@ export interface ExportResult {
   zipPath?: string;
   hasMessages?: boolean;
   error?: string;
-  errorCode?: "NO_CHAT_MATCH";
+  errorCode?: ExporterErrorCode;
 }
 
 export interface ExportParams {
@@ -41,11 +41,25 @@ export interface ExportParams {
   endDate?: string;
   selectedContacts: (string | string[])[];
   selectedChatIds?: string[];
+  backupPassword?: string;
   includeVideos: boolean;
   debugMode: boolean;
   isFullExport?: boolean;
   isFilteredExport?: boolean;
 }
+
+export type ExporterErrorCode =
+  | "NO_CHAT_MATCH"
+  | "ENCRYPTED_BACKUP_PASSWORD_REQUIRED"
+  | "INVALID_BACKUP_PASSWORD";
+
+export interface ListContactsOptions {
+  backupPassword?: string;
+}
+
+export type ListContactsResult =
+  | { success: true; contacts: Contact[] }
+  | { success: false; contacts?: never; error?: string; errorCode?: ExporterErrorCode };
 
 export type WizardStep = 1 | 2 | 3 | 4;
 
@@ -53,6 +67,7 @@ export interface WizardState {
   currentStep: WizardStep;
   backupSource: BackupSource | null;
   inputFolder: string;
+  backupPassword: string | null;
   outputFolder: string;
   contacts: Contact[];
   selectedContact: Contact | null;
@@ -84,9 +99,7 @@ export interface ElectronAPI {
   saveLastOutputFolder: (folder: string) => Promise<void>;
   getDefaultMessagesFolder: () => Promise<string>;
   scanIphoneBackups: () => Promise<{ success: boolean; backups: IPhoneBackup[]; error?: string }>;
-  listContacts: (
-    inputFolder: string,
-  ) => Promise<{ success: boolean; contacts: Contact[]; error?: string }>;
+  listContacts: (inputFolder: string, options?: ListContactsOptions) => Promise<ListContactsResult>;
   runExporter: (exportParams: ExportParams) => Promise<ExportResult>;
   onExportProgress: (callback: (data: ExportProgress) => void) => () => void;
 }

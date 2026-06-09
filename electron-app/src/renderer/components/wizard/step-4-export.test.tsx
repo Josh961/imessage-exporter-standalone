@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, type ReactNode } from "react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WizardProvider, useWizard } from "../../context/wizard-context";
 import { installMockElectronAPI, type MockElectronAPI } from "../../test/mock-electron-api";
 import type { Contact } from "../../types";
@@ -39,9 +39,16 @@ const unrelatedChat: Contact = {
 
 let electronAPI: MockElectronAPI;
 
-function SeedWizard({ children }: { children: ReactNode }) {
+function SeedWizard({
+  children,
+  backupPassword = null,
+}: {
+  children: ReactNode;
+  backupPassword?: string | null;
+}) {
   const {
     setInputFolder,
+    setBackupPassword,
     setOutputFolder,
     setContacts,
     setSelectedContact,
@@ -51,20 +58,30 @@ function SeedWizard({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setInputFolder("/messages");
+    setBackupPassword(backupPassword);
     setOutputFolder("/exports");
     setContacts([selectedChat]);
     setSelectedContact(selectedChat);
     setStartDate("2024-01-01");
     setEndDate("");
-  }, [setContacts, setEndDate, setInputFolder, setOutputFolder, setSelectedContact, setStartDate]);
+  }, [
+    backupPassword,
+    setBackupPassword,
+    setContacts,
+    setEndDate,
+    setInputFolder,
+    setOutputFolder,
+    setSelectedContact,
+    setStartDate,
+  ]);
 
   return children;
 }
 
-function renderStep4() {
+function renderStep4(options: { backupPassword?: string } = {}) {
   return render(
     <WizardProvider>
-      <SeedWizard>
+      <SeedWizard backupPassword={options.backupPassword || null}>
         <Step4Export />
       </SeedWizard>
     </WizardProvider>,
@@ -74,6 +91,10 @@ function renderStep4() {
 beforeEach(() => {
   localStorage.clear();
   electronAPI = installMockElectronAPI();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("Step4Export fallback recovery flow", () => {
@@ -131,6 +152,51 @@ describe("Step4Export fallback recovery flow", () => {
       expect(electronAPI.listContacts).toHaveBeenCalledTimes(2);
     });
     expect(electronAPI.runExporter).not.toHaveBeenCalled();
+  });
+
+  it("ignores no-chat fallback simulation outside development", async () => {
+    const user = userEvent.setup();
+    vi.stubEnv("DEV", false);
+    localStorage.setItem("simulateNoChatMatch", "true");
+    electronAPI.runExporter.mockResolvedValue({
+      success: true,
+      hasMessages: true,
+      zipPath: "/exports/book.zip",
+    });
+
+    renderStep4();
+
+    await user.click(await screen.findByRole("button", { name: "Export messages" }));
+
+    expect(await screen.findByText("Export complete!")).toBeInTheDocument();
+    expect(screen.queryByText("Possible matching chats")).not.toBeInTheDocument();
+    expect(electronAPI.runExporter).toHaveBeenCalled();
+    expect(electronAPI.listContacts).not.toHaveBeenCalled();
+  });
+
+  it("uses the backup password when refreshing fallback candidates and retrying export", async () => {
+    const user = userEvent.setup();
+    electronAPI.runExporter.mockResolvedValue({
+      success: false,
+      errorCode: "NO_CHAT_MATCH",
+      error: "No chats were found with the supplied contacts.",
+    });
+    electronAPI.listContacts.mockResolvedValue({ success: true, contacts: [fallbackChat] });
+
+    renderStep4({ backupPassword: "secret pass" });
+
+    await user.click(await screen.findByRole("button", { name: "Export messages" }));
+
+    expect(await screen.findByText("Possible matching chats")).toBeInTheDocument();
+    expect(electronAPI.listContacts).toHaveBeenCalledWith("/messages", {
+      backupPassword: "secret pass",
+    });
+    expect(electronAPI.runExporter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selectedChatIds: ["12"],
+        backupPassword: "secret pass",
+      }),
+    );
   });
 
   it("retries a selected fallback candidate with exact chat IDs even when dev simulation remains enabled", async () => {

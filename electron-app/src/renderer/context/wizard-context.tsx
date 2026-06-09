@@ -13,6 +13,7 @@ type WizardAction =
   | { type: "SET_STEP"; step: WizardStep }
   | { type: "SET_BACKUP_SOURCE"; source: BackupSource }
   | { type: "SET_INPUT_FOLDER"; folder: string }
+  | { type: "SET_BACKUP_PASSWORD"; password: string | null }
   | { type: "SET_OUTPUT_FOLDER"; folder: string }
   | { type: "SET_CONTACTS"; contacts: Contact[] }
   | { type: "SET_SELECTED_CONTACT"; contact: Contact | null }
@@ -28,6 +29,7 @@ const initialState: WizardState = {
   currentStep: 1,
   backupSource: null,
   inputFolder: "",
+  backupPassword: null,
   outputFolder: "",
   contacts: [],
   selectedContact: null,
@@ -47,6 +49,8 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
       return { ...state, backupSource: action.source };
     case "SET_INPUT_FOLDER":
       return { ...state, inputFolder: action.folder };
+    case "SET_BACKUP_PASSWORD":
+      return { ...state, backupPassword: action.password };
     case "SET_OUTPUT_FOLDER":
       return { ...state, outputFolder: action.folder };
     case "SET_CONTACTS":
@@ -88,6 +92,7 @@ interface WizardContextValue {
   prevStep: () => void;
   setBackupSource: (source: BackupSource) => void;
   setInputFolder: (folder: string) => void;
+  setBackupPassword: (password: string | null) => void;
   setOutputFolder: (folder: string) => void;
   setContacts: (contacts: Contact[]) => void;
   setSelectedContact: (contact: Contact | null) => void;
@@ -123,6 +128,10 @@ export function WizardProvider({ children }: { children: ReactNode }) {
 
   const setInputFolder = useCallback((folder: string) => {
     dispatch({ type: "SET_INPUT_FOLDER", folder });
+  }, []);
+
+  const setBackupPassword = useCallback((password: string | null) => {
+    dispatch({ type: "SET_BACKUP_PASSWORD", password });
   }, []);
 
   const setOutputFolder = useCallback((folder: string) => {
@@ -186,6 +195,7 @@ export function WizardProvider({ children }: { children: ReactNode }) {
       prevStep,
       setBackupSource,
       setInputFolder,
+      setBackupPassword,
       setOutputFolder,
       setContacts,
       setSelectedContact,
@@ -203,6 +213,7 @@ export function WizardProvider({ children }: { children: ReactNode }) {
       prevStep,
       setBackupSource,
       setInputFolder,
+      setBackupPassword,
       setOutputFolder,
       setContacts,
       setSelectedContact,

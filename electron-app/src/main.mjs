@@ -11,6 +11,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const store = new Store();
+const BACKUP_PASSWORD_ENV = "IMESSAGE_EXPORTER_BACKUP_PASSWORD";
+const BACKUP_PASSWORD_REQUIRED_ERROR =
+  "No terminal available to prompt for the iOS backup password";
+const INVALID_BACKUP_PASSWORD_ERROR = "The iOS backup password was incorrect";
 
 // Utility functions for filtering
 function normalizeIdentifier(identifier) {
@@ -325,14 +329,21 @@ ipcMain.handle("scan-iphone-backups", async () => {
 });
 
 // iMessage exporter operations
-ipcMain.handle("list-contacts", async (event, inputFolder) => {
+ipcMain.handle("list-contacts", async (event, inputFolder, options = {}) => {
   const executablePath = getResourcePath();
   const chatDbPath = getChatDbPath(inputFolder);
+  const env = getExporterEnv(options.backupPassword);
 
   return new Promise((resolve) => {
-    execFile(executablePath, ["-b", "-p", chatDbPath, "-n"], (error, stdout, stderr) => {
+    execFile(executablePath, ["-b", "-p", chatDbPath, "-n"], { env }, (error, stdout, stderr) => {
       if (error) {
-        resolve({ success: false, error: stderr || error.message });
+        const errorText = [stderr, error.message].filter(Boolean).join("\n");
+        const errorCode = getExporterErrorCode(errorText);
+        resolve({
+          success: false,
+          error: getFriendlyExporterError(errorText, "Failed to load contacts"),
+          ...(errorCode ? { errorCode } : {}),
+        });
       } else {
         const contacts = stdout
           .split("\n")
@@ -404,6 +415,7 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
     endDate,
     selectedContacts,
     selectedChatIds,
+    backupPassword,
     includeVideos = true,
     debugMode,
     isFullExport,
@@ -438,7 +450,7 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
     }
 
     return new Promise((resolve) => {
-      const exportProcess = spawn(executablePath, params);
+      const exportProcess = spawn(executablePath, params, { env: getExporterEnv(backupPassword) });
       let stdout = "";
       let stderr = "";
 
@@ -502,11 +514,14 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
             await fs.writeFile(debugLogPath, debugLogContent);
           }
           await deleteTempFolder(uniqueTempFolder);
+          const errorText = [stderr, stdout, error.message].filter(Boolean).join("\n");
+          const errorCode = getExporterErrorCode(errorText);
           resolve({
             success: false,
-            error:
-              error.message +
-              (debugMode ? " Debug log has been written to the export folder." : ""),
+            error: `${getFriendlyExporterError(errorText, error.message)}${
+              debugMode ? " Debug log has been written to the export folder." : ""
+            }`,
+            ...(errorCode ? { errorCode } : {}),
           });
         } else {
           try {
@@ -581,11 +596,14 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
               await fs.writeFile(debugLogPath, debugLogContent);
             }
             await deleteTempFolder(uniqueTempFolder);
+            const errorText = [stderr, stdout, err.message].filter(Boolean).join("\n");
+            const errorCode = getExporterErrorCode(errorText);
             resolve({
               success: false,
-              error:
-                err.message +
-                (debugMode ? " Debug log has been written to the export folder." : ""),
+              error: `${getFriendlyExporterError(errorText, err.message)}${
+                debugMode ? " Debug log has been written to the export folder." : ""
+              }`,
+              ...(errorCode ? { errorCode } : {}),
             });
           }
         }
@@ -597,6 +615,34 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
 });
 
 // Utility functions
+function getExporterEnv(backupPassword) {
+  if (!backupPassword) {
+    return process.env;
+  }
+  return { ...process.env, [BACKUP_PASSWORD_ENV]: backupPassword };
+}
+
+function getExporterErrorCode(output) {
+  if (output.includes(BACKUP_PASSWORD_REQUIRED_ERROR)) {
+    return "ENCRYPTED_BACKUP_PASSWORD_REQUIRED";
+  }
+  if (output.includes(INVALID_BACKUP_PASSWORD_ERROR)) {
+    return "INVALID_BACKUP_PASSWORD";
+  }
+  return null;
+}
+
+function getFriendlyExporterError(output, fallback) {
+  const errorCode = getExporterErrorCode(output);
+  if (errorCode === "ENCRYPTED_BACKUP_PASSWORD_REQUIRED") {
+    return "This iPhone backup is encrypted. Enter the backup password to continue.";
+  }
+  if (errorCode === "INVALID_BACKUP_PASSWORD") {
+    return "That backup password was not accepted. Try again.";
+  }
+  return output.trim() || fallback;
+}
+
 function getResourcePath() {
   const executableName = getExecutableName();
   return app.isPackaged

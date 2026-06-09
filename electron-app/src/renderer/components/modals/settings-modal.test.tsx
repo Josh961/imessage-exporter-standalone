@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WizardProvider, useWizard } from "../../context/wizard-context";
 import { installMockElectronAPI, type MockElectronAPI } from "../../test/mock-electron-api";
 import type { Contact } from "../../types";
@@ -46,6 +46,10 @@ beforeEach(() => {
   electronAPI = installMockElectronAPI();
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("SettingsModal", () => {
   it("saves a changed output folder", async () => {
     const user = userEvent.setup();
@@ -74,6 +78,82 @@ describe("SettingsModal", () => {
       expect(electronAPI.listContacts).toHaveBeenCalledWith("/custom-input");
     });
     expect(electronAPI.saveLastInputFolder).toHaveBeenCalledWith("/custom-input");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("prompts for a password when a custom input folder is encrypted", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    electronAPI.selectFolder.mockResolvedValue("/custom-input");
+    electronAPI.listContacts
+      .mockResolvedValueOnce({
+        success: false,
+        errorCode: "ENCRYPTED_BACKUP_PASSWORD_REQUIRED",
+        error: "This iPhone backup is encrypted. Enter the backup password to continue.",
+      })
+      .mockResolvedValueOnce({ success: true, contacts: [loadedChat] });
+
+    renderSettings(onClose);
+
+    await user.click(screen.getByRole("button", { name: "Advanced settings" }));
+    await user.click(screen.getAllByRole("button", { name: "Change" })[1]);
+
+    expect(await screen.findByText("Encrypted backup")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Backup password"), "secret pass");
+    await user.click(screen.getByRole("button", { name: "Unlock backup" }));
+
+    await waitFor(() => {
+      expect(electronAPI.listContacts).toHaveBeenNthCalledWith(2, "/custom-input", {
+        backupPassword: "secret pass",
+      });
+    });
+    expect(electronAPI.saveLastInputFolder).toHaveBeenCalledWith("/custom-input");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("uses the dev encrypted-backup toggle for a custom input folder", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    localStorage.setItem("simulateEncryptedBackup", "true");
+    electronAPI.selectFolder.mockResolvedValue("/custom-input");
+    electronAPI.listContacts.mockResolvedValue({ success: true, contacts: [loadedChat] });
+
+    renderSettings(onClose);
+
+    await user.click(screen.getByRole("button", { name: "Advanced settings" }));
+    await user.click(screen.getAllByRole("button", { name: "Change" })[1]);
+
+    expect(await screen.findByText("Encrypted backup")).toBeInTheDocument();
+    expect(electronAPI.listContacts).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText("Backup password"), "dev-password");
+    await user.click(screen.getByRole("button", { name: "Unlock backup" }));
+
+    await waitFor(() => {
+      expect(electronAPI.listContacts).toHaveBeenCalledWith("/custom-input", {
+        backupPassword: "dev-password",
+      });
+    });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("ignores the encrypted-backup simulation outside development", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    vi.stubEnv("DEV", false);
+    localStorage.setItem("simulateEncryptedBackup", "true");
+    electronAPI.selectFolder.mockResolvedValue("/custom-input");
+    electronAPI.listContacts.mockResolvedValue({ success: true, contacts: [loadedChat] });
+
+    renderSettings(onClose);
+
+    await user.click(screen.getByRole("button", { name: "Advanced settings" }));
+    await user.click(screen.getAllByRole("button", { name: "Change" })[1]);
+
+    await waitFor(() => {
+      expect(electronAPI.listContacts).toHaveBeenCalledWith("/custom-input");
+    });
+    expect(screen.queryByText("Encrypted backup")).not.toBeInTheDocument();
     expect(onClose).toHaveBeenCalled();
   });
 

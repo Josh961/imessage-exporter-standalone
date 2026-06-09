@@ -1,5 +1,5 @@
 use std::{
-    env::temp_dir,
+    env::{temp_dir, var},
     fs::File,
     io::{BufWriter, IsTerminal, Write, copy, stdin},
     path::{Path, PathBuf},
@@ -18,6 +18,7 @@ use crate::app::{
 };
 
 const MAX_IN_MEMORY_DECRYPT: u64 = 25 * 1024 * 1024;
+pub const BACKUP_PASSWORD_ENV: &str = "IMESSAGE_EXPORTER_BACKUP_PASSWORD";
 
 /// Open the iOS backup, prompting for a password if it is encrypted and one was not provided.
 ///
@@ -41,10 +42,7 @@ pub fn decrypt_backup(options: &Options) -> Result<Option<Backup>, RuntimeError>
         return Ok(None);
     }
 
-    let password = match options.cleartext_password.as_deref() {
-        Some(pw) => pw.to_string(),
-        None => prompt_for_password()?,
-    };
+    let password = get_backup_password(options)?;
 
     eprintln!("Decrypting iOS backup...");
     eprintln!("  [1/5] Deriving backup keys...");
@@ -59,6 +57,20 @@ pub fn decrypt_backup(options: &Options) -> Result<Option<Backup>, RuntimeError>
     };
 
     Ok(Some(backup))
+}
+
+fn get_backup_password(options: &Options) -> Result<String, RuntimeError> {
+    if let Some(password) = options.cleartext_password.as_deref() {
+        return Ok(password.to_string());
+    }
+
+    if let Ok(password) = var(BACKUP_PASSWORD_ENV) {
+        if !password.is_empty() {
+            return Ok(password);
+        }
+    }
+
+    prompt_for_password()
 }
 
 /// Prompt the user for the backup password, reading from the controlling terminal.

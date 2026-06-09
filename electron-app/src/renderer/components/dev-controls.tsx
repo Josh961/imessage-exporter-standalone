@@ -7,6 +7,10 @@ export function DevControls() {
     "simulateNoChatMatch",
     false,
   );
+  const [simulateEncryptedBackup, setSimulateEncryptedBackup] = useLocalStorage(
+    "simulateEncryptedBackup",
+    false,
+  );
 
   if (!import.meta.env.DEV) {
     return null;
@@ -23,23 +27,44 @@ export function DevControls() {
             </span>
           </div>
 
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <div className="font-medium text-slate-700">No-chat fallback</div>
-              <p className="text-xs text-slate-500">Force the recovery screen on export.</p>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="font-medium text-slate-700">No-chat fallback</div>
+                <p className="text-xs text-slate-500">Force the recovery screen on export.</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={simulateNoChatMatch}
+                aria-label="Toggle no-chat fallback simulation"
+                onClick={() => setSimulateNoChatMatch(!simulateNoChatMatch)}
+                className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${simulateNoChatMatch ? "bg-amber-500" : "bg-slate-300"}`}
+              >
+                <span
+                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${simulateNoChatMatch ? "left-[22px]" : "left-0.5"}`}
+                />
+              </button>
             </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={simulateNoChatMatch}
-              aria-label="Toggle no-chat fallback simulation"
-              onClick={() => setSimulateNoChatMatch(!simulateNoChatMatch)}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${simulateNoChatMatch ? "bg-amber-500" : "bg-slate-300"}`}
-            >
-              <span
-                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${simulateNoChatMatch ? "left-[22px]" : "left-0.5"}`}
-              />
-            </button>
+
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="font-medium text-slate-700">Encrypted backup prompt</div>
+                <p className="text-xs text-slate-500">Ask for a backup password on first load.</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={simulateEncryptedBackup}
+                aria-label="Toggle encrypted backup simulation"
+                onClick={() => setSimulateEncryptedBackup(!simulateEncryptedBackup)}
+                className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${simulateEncryptedBackup ? "bg-amber-500" : "bg-slate-300"}`}
+              >
+                <span
+                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${simulateEncryptedBackup ? "left-[22px]" : "left-0.5"}`}
+                />
+              </button>
+            </div>
           </div>
         </div>
       )}

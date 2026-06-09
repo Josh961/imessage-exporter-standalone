@@ -21,6 +21,7 @@ const force = options.has('--force');
 const contractFiles = [
   'imessage-exporter/Cargo.toml',
   'imessage-exporter/src/app/compatibility/attachment_manager.rs',
+  'imessage-exporter/src/app/compatibility/backup.rs',
   'imessage-exporter/src/app/options.rs',
   'imessage-exporter/src/app/progress.rs',
   'imessage-exporter/src/app/runtime.rs',

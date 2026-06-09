@@ -30,7 +30,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   scanIphoneBackups: () => ipcRenderer.invoke("scan-iphone-backups"),
 
   // iMessage exporter operations
-  listContacts: (inputFolder) => ipcRenderer.invoke("list-contacts", inputFolder),
+  listContacts: (inputFolder, options) => ipcRenderer.invoke("list-contacts", inputFolder, options),
   runExporter: (exportParams) => ipcRenderer.invoke("run-exporter", exportParams),
 
   // Progress updates

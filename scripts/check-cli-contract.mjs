@@ -43,6 +43,13 @@ const requiredChecks = [
     labels: [['images only attachment gate', 'images_only']],
   },
   {
+    file: 'exporter-cli/imessage-exporter/src/app/compatibility/backup.rs',
+    labels: [
+      ['backup password env name', 'IMESSAGE_EXPORTER_BACKUP_PASSWORD'],
+      ['backup password env reader', 'BACKUP_PASSWORD_ENV'],
+    ],
+  },
+  {
     file: 'electron-app/src/main.mjs',
     labels: [
       ['CONTACT parser', 'CONTACT|'],
@@ -50,6 +57,7 @@ const requiredChecks = [
       ['selected chat IDs export', '--chat-ids'],
       ['progress parser', 'PROGRESS_JSON:'],
       ['CLI no-chat sentinel mapping', 'No chatrooms were found with the supplied contacts.'],
+      ['backup password env passthrough', 'IMESSAGE_EXPORTER_BACKUP_PASSWORD'],
     ],
   },
 ];

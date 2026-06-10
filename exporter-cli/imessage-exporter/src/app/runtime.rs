@@ -874,12 +874,14 @@ impl Config {
         for chat in group_chats {
             let name = Self::list_field(&self.list_group_name(chat));
             let participants = Self::list_field(&self.list_participant_names(chat).join(","));
+            let participant_handles =
+                Self::list_field(&self.list_participant_identifiers(chat).join(","));
             let first_date = self.format_list_date(chat.first_message_date);
             let last_date = self.format_list_date(chat.last_message_date);
             let chat_ids = Self::chat_ids_field(&chat.chat_ids);
 
             println!(
-                "GROUP|{name}|{}|{first_date}|{last_date}|{participants}|{chat_ids}",
+                "GROUP|{name}|{}|{first_date}|{last_date}|{participants}|{chat_ids}|{participant_handles}",
                 chat.message_count()
             );
         }
@@ -944,6 +946,24 @@ impl Config {
                 self.participants
                     .get(participant_id)
                     .map(|participant| participant.get_display_name().to_string())
+                    .unwrap_or_else(|| UNKNOWN.to_string())
+            })
+            .collect()
+    }
+
+    fn list_participant_identifiers(&self, chat: &ListedChat) -> Vec<String> {
+        chat.participant_ids
+            .iter()
+            .map(|participant_id| {
+                self.participants
+                    .get(participant_id)
+                    .map(|participant| {
+                        if participant.details.is_empty() {
+                            participant.get_display_name().to_string()
+                        } else {
+                            participant.details.clone()
+                        }
+                    })
                     .unwrap_or_else(|| UNKNOWN.to_string())
             })
             .collect()
@@ -1399,6 +1419,50 @@ mod filename_tests {
         for c in filename.chars() {
             assert!(c == '你');
         }
+    }
+}
+
+#[cfg(test)]
+mod list_contacts_tests {
+    use std::collections::HashSet;
+
+    use crate::{
+        Config, Options,
+        app::{contacts::Name, export_type::ExportType},
+    };
+
+    use super::ListedChat;
+
+    #[test]
+    fn group_list_output_keeps_names_and_searchable_identifiers_separate() {
+        let options = Options::fake_options(ExportType::Html);
+        let mut app = Config::fake_app(options);
+
+        app.participants.insert(
+            10,
+            Name {
+                first: "Taylor".to_string(),
+                last: String::new(),
+                full: "Taylor".to_string(),
+                details: "+15556667777".to_string(),
+                handle_ids: HashSet::new(),
+            },
+        );
+        app.participants
+            .insert(11, Name::from_details("mom@example.com"));
+
+        let mut chat = ListedChat::default();
+        chat.participant_ids.insert(10);
+        chat.participant_ids.insert(11);
+
+        assert_eq!(
+            app.list_participant_names(&chat),
+            vec!["Taylor".to_string(), "mom@example.com".to_string()]
+        );
+        assert_eq!(
+            app.list_participant_identifiers(&chat),
+            vec!["+15556667777".to_string(), "mom@example.com".to_string()]
+        );
     }
 }
 

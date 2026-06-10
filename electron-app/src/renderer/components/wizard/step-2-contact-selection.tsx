@@ -39,6 +39,10 @@ function getContactKey(contact: Contact): string {
   ].join(":");
 }
 
+function normalizeSearchValue(value: string): string {
+  return value.toLowerCase().replace(/[+\s().-]/g, "");
+}
+
 export function Step2ContactSelection() {
   const { state, setSelectedContact, setStartDate, setEndDate, nextStep, prevStep } = useWizard();
   const [searchTerm, setSearchTerm] = useState("");
@@ -47,13 +51,20 @@ export function Step2ContactSelection() {
   );
 
   const filteredContacts = useMemo(() => {
-    const term = searchTerm.toLowerCase().replace(/[()-\s]/g, "");
+    const term = normalizeSearchValue(searchTerm);
     if (!term) return state.contacts;
 
     return state.contacts.filter((contact) => {
-      const name = (contact.displayName || contact.contact).toLowerCase().replace(/[()-\s]/g, "");
-      const participants = contact.participants?.toLowerCase().replace(/[()-\s]/g, "") || "";
-      return name.includes(term) || participants.includes(term);
+      const displayName = normalizeSearchValue(contact.displayName || "");
+      const contactValue = normalizeSearchValue(contact.contact);
+      const participants = normalizeSearchValue(contact.participants || "");
+      const participantHandles = normalizeSearchValue(contact.participantHandles || "");
+      return (
+        displayName.includes(term) ||
+        contactValue.includes(term) ||
+        participants.includes(term) ||
+        participantHandles.includes(term)
+      );
     });
   }, [state.contacts, searchTerm]);
 
@@ -99,7 +110,7 @@ export function Step2ContactSelection() {
           type="text"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Search by phone number or group name..."
+          placeholder="Search by name, phone number, or group name..."
           className="w-full rounded-xl border border-slate-300 py-3 pl-10 pr-4 text-slate-700 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
         />
       </div>

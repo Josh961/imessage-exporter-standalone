@@ -12,7 +12,8 @@ const familyChat: Contact = {
   messageCount: 1250,
   firstMessageDate: "2024-01-01T12:00:00Z",
   lastMessageDate: "2024-12-31T12:00:00Z",
-  participants: "+15551112222,+15553334444,mom@example.com",
+  participants: "Taylor,Jordan,mom@example.com",
+  participantHandles: "+15556667777,+15551112222,mom@example.com",
   chatIds: "12",
 };
 
@@ -76,7 +77,7 @@ describe("wizard workflows", () => {
     expect(screen.queryByText("Tiny Thread")).not.toBeInTheDocument();
 
     await user.type(
-      screen.getByPlaceholderText("Search by phone number or group name..."),
+      screen.getByPlaceholderText("Search by name, phone number, or group name..."),
       "family",
     );
     expect(screen.getByRole("button", { name: /Family Chat/i })).toBeInTheDocument();
@@ -100,9 +101,37 @@ describe("wizard workflows", () => {
         startDate: "2024-01-01",
         endDate: "",
         selectedChatIds: ["12"],
-        selectedContacts: [["+15551112222", "+15553334444", "mom@example.com"]],
+        selectedContacts: [["+15556667777", "+15551112222", "mom@example.com"]],
       }),
     );
+  });
+
+  it("searches chats by display name, direct phone number, and group participant phone number", async () => {
+    const user = userEvent.setup();
+    electronAPI.listContacts.mockResolvedValue({
+      success: true,
+      contacts: [directChat, familyChat],
+    });
+
+    renderWizard("darwin");
+
+    await user.click(await screen.findByRole("button", { name: /Mac messages/i }));
+
+    const searchInput = await screen.findByLabelText("Search contacts");
+
+    await user.type(searchInput, "taylor");
+    expect(screen.getByRole("button", { name: /Taylor/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Family Chat/i })).toBeInTheDocument();
+
+    await user.clear(searchInput);
+    await user.type(searchInput, "5556667777");
+    expect(screen.getByRole("button", { name: /Taylor/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Family Chat/i })).toBeInTheDocument();
+
+    await user.clear(searchInput);
+    await user.type(searchInput, "5551112222");
+    expect(screen.getByRole("button", { name: /Family Chat/i })).toBeInTheDocument();
+    expect(screen.queryByText("Taylor")).not.toBeInTheDocument();
   });
 
   it("shows backup instructions when none are found, then rescans and loads a newly found backup", async () => {

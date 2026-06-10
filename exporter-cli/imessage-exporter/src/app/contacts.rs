@@ -268,6 +268,13 @@ impl ContactsIndex {
             result
                 .entry(deduped_id)
                 .and_modify(|name| {
+                    if !details.is_empty() && !name.details.split(',').any(|value| value == details)
+                    {
+                        if !name.details.is_empty() {
+                            name.details.push(',');
+                        }
+                        name.details.push_str(details);
+                    }
                     name.handle_ids.insert(handle_id);
                 })
                 .or_insert_with(|| {
@@ -418,6 +425,8 @@ fn macos_sources_dir() -> PathBuf {
 // MARK: Tests
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
@@ -803,5 +812,24 @@ mod tests {
         // Looking up two separate phone numbers should NOT match the concatenated one
         let result = index.lookup("+15551234567 +15559876543");
         assert_eq!(result, Some(correct_contact.clone()));
+    }
+
+    #[test]
+    fn test_build_participants_map_keeps_all_deduped_handle_details() {
+        let index = ContactsIndex::default();
+        let participants = HashMap::from([
+            (1, "+15551234567".to_string()),
+            (2, "person@example.com".to_string()),
+        ]);
+        let deduped_handles = HashMap::from([(1, 10), (2, 10)]);
+
+        let participant_map = index.build_participants_map(&participants, &deduped_handles);
+        let details = participant_map.get(&10).unwrap().details.clone();
+        let detail_parts = details.split(',').collect::<HashSet<_>>();
+
+        assert_eq!(
+            detail_parts,
+            HashSet::from(["+15551234567", "person@example.com"])
+        );
     }
 }

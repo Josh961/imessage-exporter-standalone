@@ -7,6 +7,7 @@ export interface Contact {
   firstMessageDate: string;
   lastMessageDate: string;
   participants?: string;
+  participantHandles?: string;
   chatIds?: string;
   displayName?: string;
 }

@@ -128,8 +128,9 @@ export function Step4Export() {
 
       // Prepare selected contacts for export
       let selectedContacts: (string | string[])[];
-      if (contact.type === "GROUP" && contact.participants) {
-        selectedContacts = [contact.participants.split(",").map((p) => p.trim())];
+      const groupParticipantHandles = contact.participantHandles || contact.participants;
+      if (contact.type === "GROUP" && groupParticipantHandles) {
+        selectedContacts = [groupParticipantHandles.split(",").map((p) => p.trim())];
       } else {
         selectedContacts = [contact.contact];
       }

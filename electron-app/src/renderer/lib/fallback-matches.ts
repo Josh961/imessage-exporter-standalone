@@ -19,12 +19,18 @@ function normalizeParticipant(value: string): string {
 }
 
 function getParticipantSet(contact: Contact): Set<string> {
-  const rawParticipants =
-    contact.type === "GROUP" && contact.participants
-      ? contact.participants.split(",")
-      : [contact.contact];
+  if (contact.type === "GROUP") {
+    const rawParticipants: string[] = [];
+    if (contact.participants) {
+      rawParticipants.push(...contact.participants.split(","));
+    }
+    if (contact.participantHandles) {
+      rawParticipants.push(...contact.participantHandles.split(","));
+    }
+    return new Set(rawParticipants.map(normalizeParticipant).filter(Boolean));
+  }
 
-  return new Set(rawParticipants.map(normalizeParticipant).filter(Boolean));
+  return new Set([contact.contact].map(normalizeParticipant).filter(Boolean));
 }
 
 export function scoreFallbackCandidate(

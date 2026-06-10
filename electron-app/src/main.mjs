@@ -371,7 +371,7 @@ ipcMain.handle("list-contacts", async (event, inputFolder, options = {}) => {
                 displayName: displayName || undefined,
               };
             } else if (parts[0] === "GROUP") {
-              // GROUP format: GROUP|name|message_count|first_date|last_date|participants|chat_ids
+              // GROUP format: GROUP|name|message_count|first_date|last_date|participants|chat_ids|participant_handles
               const [
                 type,
                 contact,
@@ -380,6 +380,7 @@ ipcMain.handle("list-contacts", async (event, inputFolder, options = {}) => {
                 lastMessageDate,
                 participants,
                 chatIds,
+                participantHandles,
               ] = parts;
               return {
                 type,
@@ -389,6 +390,7 @@ ipcMain.handle("list-contacts", async (event, inputFolder, options = {}) => {
                 lastMessageDate,
                 participants,
                 chatIds,
+                participantHandles: participantHandles || undefined,
               };
             } else {
               // Skip any other lines (like Total DMs, Total Group Chats, etc.)

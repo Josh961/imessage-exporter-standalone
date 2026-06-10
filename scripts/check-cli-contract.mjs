@@ -26,6 +26,7 @@ const requiredChecks = [
       ['list contacts dispatch', 'self.options.list_contacts'],
       ['list contacts implementation', 'list_contacts_and_chats'],
       ['list contacts exact chat IDs field', 'chat_ids_field'],
+      ['list contacts group participant handles field', 'list_participant_identifiers'],
       ['DM output protocol', 'CONTACT|'],
       ['group output protocol', 'GROUP|'],
       ['empty filter app error sentinel', 'No chatrooms were found with the supplied contacts.'],
@@ -54,6 +55,7 @@ const requiredChecks = [
     labels: [
       ['CONTACT parser', 'CONTACT|'],
       ['GROUP parser', 'GROUP|'],
+      ['GROUP participant handles parser', 'participantHandles'],
       ['selected chat IDs export', '--chat-ids'],
       ['progress parser', 'PROGRESS_JSON:'],
       ['CLI no-chat sentinel mapping', 'No chatrooms were found with the supplied contacts.'],

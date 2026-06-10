@@ -8,7 +8,8 @@ const selectedFamilyChat: Contact = {
   messageCount: 1250,
   firstMessageDate: "2024-01-01T00:00:00Z",
   lastMessageDate: "2024-12-31T00:00:00Z",
-  participants: "+1 (555) 111-2222,+1 (555) 333-4444,mom@example.com",
+  participants: "Taylor,Jordan,mom@example.com",
+  participantHandles: "+1 (555) 111-2222,+1 (555) 333-4444,mom@example.com",
   chatIds: "12",
 };
 
@@ -31,14 +32,16 @@ describe("fallback chat matching", () => {
       messageCount: 1250,
       firstMessageDate: "2024-01-01T00:00:00Z",
       lastMessageDate: "2024-12-31T00:00:00Z",
-      participants: "5551112222,5553334444,mom@example.com",
+      participants: "Taylor,Jordan,mom@example.com",
+      participantHandles: "5551112222,5553334444,mom@example.com",
       chatIds: "12",
     });
     const weak = contact({
       type: "GROUP",
       contact: "Family",
       messageCount: 1180,
-      participants: "5551112222,5559998888",
+      participants: "Taylor,Someone Else",
+      participantHandles: "5551112222,5559998888",
       chatIds: "99",
     });
 
@@ -55,7 +58,8 @@ describe("fallback chat matching", () => {
       type: "GROUP",
       contact: "Family Chat",
       messageCount: 1255,
-      participants: "5551112222,+15553334444,mom@example.com",
+      participants: "Person One,Person Two,mom@example.com",
+      participantHandles: "5551112222,+15553334444,mom@example.com",
       chatIds: "44",
     });
 
@@ -83,7 +87,8 @@ describe("fallback chat matching", () => {
       type: "GROUP",
       contact: "Work Chat",
       messageCount: 300,
-      participants: "+15559990000,+15558887777",
+      participants: "Work Person,Other Work Person",
+      participantHandles: "+15559990000,+15558887777",
       chatIds: "77",
     });
 

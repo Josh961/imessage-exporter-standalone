@@ -13,7 +13,8 @@ const selectedChat: Contact = {
   messageCount: 1250,
   firstMessageDate: "2024-01-01T00:00:00Z",
   lastMessageDate: "2024-12-31T00:00:00Z",
-  participants: "+15551112222,+15553334444,mom@example.com",
+  participants: "Taylor,Jordan,mom@example.com",
+  participantHandles: "+15551112222,+15553334444,mom@example.com",
   chatIds: "12",
 };
 
@@ -23,7 +24,8 @@ const fallbackChat: Contact = {
   messageCount: 1250,
   firstMessageDate: "2024-01-01T00:00:00Z",
   lastMessageDate: "2024-12-31T00:00:00Z",
-  participants: "5551112222,5553334444,mom@example.com",
+  participants: "Taylor,Jordan,mom@example.com",
+  participantHandles: "5551112222,5553334444,mom@example.com",
   chatIds: "44",
 };
 

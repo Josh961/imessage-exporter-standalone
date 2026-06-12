@@ -52,6 +52,7 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
           path: defaultFolder,
           folderName: "Dev iPhone backup",
           backupDate: new Date("2024-01-01T12:00:00Z"),
+          isComplete: true,
         },
       ];
     },
@@ -104,18 +105,23 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
       // No backups found - show help modal
       setRecheckFoundNothing(false);
       setShowNoBackupsModal(true);
-    } else if (backups.some(isDevBackup)) {
-      setShowBackupModal(true);
-    } else if (backups.length === 1) {
-      // Only one backup - select it directly
-      await selectBackup(backups[0]);
     } else {
-      // Multiple backups - show selection modal
+      await presentBackups(backups);
+    }
+  };
+
+  const presentBackups = async (backupList: IPhoneBackup[]) => {
+    if (backupList.length === 1 && backupList[0].isComplete && !isDevBackup(backupList[0])) {
+      // Only one usable backup - select it directly
+      await selectBackup(backupList[0]);
+    } else {
+      // Multiple backups, a dev backup, or an incomplete one - show selection modal
       setShowBackupModal(true);
     }
   };
 
   const selectBackup = async (backup: IPhoneBackup) => {
+    if (!backup.isComplete) return;
     setShowBackupModal(false);
     setLoading(true);
     setError(null);
@@ -236,11 +242,7 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
         setRecheckFoundNothing(true);
       } else {
         setShowNoBackupsModal(false);
-        if (backupsWithDevBackup.length === 1 && !isDevBackup(backupsWithDevBackup[0])) {
-          await selectBackup(backupsWithDevBackup[0]);
-        } else {
-          setShowBackupModal(true);
-        }
+        await presentBackups(backupsWithDevBackup);
       }
     } catch {
       setRecheckFoundNothing(true);
@@ -366,39 +368,53 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
           >
             <h2 className="mb-6 text-xl font-semibold text-slate-800">Select iPhone backup</h2>
             <div className="max-h-80 space-y-3 overflow-y-auto p-1">
-              {backups.map((backup, index) => (
-                <button
-                  key={backup.id}
-                  onClick={() => selectBackup(backup)}
-                  className={`flex w-full items-center justify-between rounded-xl border px-5 py-4 text-left transition-all hover:border-sky-500 hover:bg-sky-50 ${
-                    index === 0
-                      ? "border-sky-300 bg-sky-50/50 ring-1 ring-sky-200"
-                      : "border-slate-200"
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-slate-700">
-                      {isDevBackup(backup) ? "Dev iPhone backup" : formatDate(backup.backupDate)}
-                    </div>
-                    <div className="mt-1 truncate text-xs text-slate-500">
-                      {isDevBackup(backup)
-                        ? "Uses Mac Messages data in dev"
-                        : backup.folderName || backup.path}
-                    </div>
-                  </div>
-                  <span
-                    className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
-                      isDevBackup(backup)
-                        ? "bg-amber-100 text-amber-800"
-                        : index === 0
-                          ? "bg-sky-100 text-sky-700"
-                          : "hidden"
+              {backups.map((backup, index) => {
+                const highlight = index === 0 && backup.isComplete;
+                return (
+                  <button
+                    key={backup.id}
+                    onClick={() => selectBackup(backup)}
+                    disabled={!backup.isComplete}
+                    className={`flex w-full items-center justify-between rounded-xl border px-5 py-4 text-left transition-all ${
+                      backup.isComplete
+                        ? "hover:border-sky-500 hover:bg-sky-50"
+                        : "cursor-not-allowed opacity-60"
+                    } ${
+                      highlight
+                        ? "border-sky-300 bg-sky-50/50 ring-1 ring-sky-200"
+                        : "border-slate-200"
                     }`}
                   >
-                    {isDevBackup(backup) ? "DEV" : "Latest"}
-                  </span>
-                </button>
-              ))}
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-slate-700">
+                        {isDevBackup(backup) ? "Dev iPhone backup" : formatDate(backup.backupDate)}
+                      </div>
+                      <div
+                        className={`mt-1 truncate text-xs ${
+                          backup.isComplete ? "text-slate-500" : "text-amber-700"
+                        }`}
+                      >
+                        {!backup.isComplete
+                          ? "Backup in progress or incomplete"
+                          : isDevBackup(backup)
+                            ? "Uses Mac Messages data in dev"
+                            : backup.folderName || backup.path}
+                      </div>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+                        isDevBackup(backup)
+                          ? "bg-amber-100 text-amber-800"
+                          : highlight
+                            ? "bg-sky-100 text-sky-700"
+                            : "hidden"
+                      }`}
+                    >
+                      {isDevBackup(backup) ? "DEV" : "Latest"}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
             <div className="mt-6 flex justify-end">
               <button

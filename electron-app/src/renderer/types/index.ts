@@ -17,6 +17,7 @@ export interface IPhoneBackup {
   path: string;
   folderName: string;
   backupDate: Date;
+  isComplete: boolean;
 }
 
 export interface ExportProgress {

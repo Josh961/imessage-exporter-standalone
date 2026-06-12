@@ -141,6 +141,7 @@ describe("wizard workflows", () => {
       path: "/backups/backup-1",
       folderName: "backup-1",
       backupDate: new Date("2024-06-01T12:00:00Z"),
+      isComplete: true,
     };
 
     electronAPI.scanIphoneBackups
@@ -161,6 +162,67 @@ describe("wizard workflows", () => {
     });
     expect(await screen.findByText("Select a contact")).toBeInTheDocument();
     expect(electronAPI.saveLastInputFolder).toHaveBeenCalledWith("/backups/backup-1");
+  });
+
+  it("shows a single incomplete backup as a disabled card instead of selecting it", async () => {
+    const user = userEvent.setup();
+    const incompleteBackup: IPhoneBackup = {
+      id: "backup-incomplete",
+      path: "/backups/backup-incomplete",
+      folderName: "backup-incomplete",
+      backupDate: new Date("2024-06-01T12:00:00Z"),
+      isComplete: false,
+    };
+
+    electronAPI.scanIphoneBackups.mockResolvedValue({ success: true, backups: [incompleteBackup] });
+
+    renderWizard("win32");
+
+    await user.click(await screen.findByRole("button", { name: /iTunes backup/i }));
+
+    expect(await screen.findByText("Select iPhone backup")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Backup in progress or incomplete/i }),
+    ).toBeDisabled();
+    expect(electronAPI.listContacts).not.toHaveBeenCalled();
+  });
+
+  it("lets the user pick a complete backup when a newer one is incomplete", async () => {
+    const user = userEvent.setup();
+    const incompleteBackup: IPhoneBackup = {
+      id: "backup-incomplete",
+      path: "/backups/backup-incomplete",
+      folderName: "backup-incomplete",
+      backupDate: new Date("2024-06-02T12:00:00Z"),
+      isComplete: false,
+    };
+    const completeBackup: IPhoneBackup = {
+      id: "backup-complete",
+      path: "/backups/backup-complete",
+      folderName: "backup-complete",
+      backupDate: new Date("2024-06-01T12:00:00Z"),
+      isComplete: true,
+    };
+
+    electronAPI.scanIphoneBackups.mockResolvedValue({
+      success: true,
+      backups: [incompleteBackup, completeBackup],
+    });
+    electronAPI.listContacts.mockResolvedValue({ success: true, contacts: [familyChat] });
+
+    renderWizard("win32");
+
+    await user.click(await screen.findByRole("button", { name: /iTunes backup/i }));
+
+    expect(await screen.findByText("Select iPhone backup")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Backup in progress or incomplete/i }),
+    ).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: /backup-complete/i }));
+
+    expect(await screen.findByText("Select a contact")).toBeInTheDocument();
+    expect(electronAPI.listContacts).toHaveBeenCalledWith("/backups/backup-complete");
   });
 
   it("adds a selectable dev iPhone backup on macOS when no real backups are found", async () => {
@@ -215,6 +277,7 @@ describe("wizard workflows", () => {
       path: "/backups/backup-1",
       folderName: "backup-1",
       backupDate: new Date("2024-06-01T12:00:00Z"),
+      isComplete: true,
     };
 
     electronAPI.scanIphoneBackups
@@ -248,6 +311,7 @@ describe("wizard workflows", () => {
       path: "/backups/backup-1",
       folderName: "backup-1",
       backupDate: new Date("2024-06-01T12:00:00Z"),
+      isComplete: true,
     };
 
     electronAPI.scanIphoneBackups.mockResolvedValue({ success: true, backups: [backup] });
@@ -300,6 +364,7 @@ describe("wizard workflows", () => {
       path: "/backups/backup-1",
       folderName: "backup-1",
       backupDate: new Date("2024-06-01T12:00:00Z"),
+      isComplete: true,
     };
 
     localStorage.setItem("simulateEncryptedBackup", "true");
@@ -329,6 +394,7 @@ describe("wizard workflows", () => {
       path: "/backups/backup-1",
       folderName: "backup-1",
       backupDate: new Date("2024-06-01T12:00:00Z"),
+      isComplete: true,
     };
 
     vi.stubEnv("DEV", false);
@@ -352,6 +418,7 @@ describe("wizard workflows", () => {
       path: "/backups/backup-1",
       folderName: "backup-1",
       backupDate: new Date("2024-06-01T12:00:00Z"),
+      isComplete: true,
     };
 
     electronAPI.scanIphoneBackups.mockResolvedValue({ success: true, backups: [backup] });

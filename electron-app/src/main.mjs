@@ -11,6 +11,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const store = new Store();
+// Hashed storage name of Library/SMS/sms.db inside an iOS backup; present in both
+// encrypted and unencrypted backups once the backup has finished writing
+const IOS_BACKUP_MESSAGES_BLOB = path.join("3d", "3d0d7e5fb2ce288813306e4d4636395e047a3d28");
 const BACKUP_PASSWORD_ENV = "IMESSAGE_EXPORTER_BACKUP_PASSWORD";
 const BACKUP_PASSWORD_REQUIRED_ERROR =
   "No terminal available to prompt for the iOS backup password";
@@ -307,11 +310,30 @@ ipcMain.handle("scan-iphone-backups", async () => {
           const fullPath = path.join(backupPath, entry.name);
           const stats = await fs.stat(fullPath);
 
+          let isComplete = true;
+          try {
+            await fs.access(path.join(fullPath, IOS_BACKUP_MESSAGES_BLOB));
+          } catch {
+            isComplete = false;
+          }
+
+          // Finder reuses one folder per device, so the folder's birthtime is the
+          // first-ever backup. Status.plist is rewritten when each backup finishes,
+          // making its mtime the date of the latest backup.
+          let backupDate = stats.mtime;
+          try {
+            const statusStats = await fs.stat(path.join(fullPath, "Status.plist"));
+            backupDate = statusStats.mtime;
+          } catch {
+            // Incomplete backup without Status.plist; the folder itself is the best guess
+          }
+
           backups.push({
             id: entry.name,
             path: fullPath,
             folderName: entry.name,
-            backupDate: stats.birthtime,
+            backupDate,
+            isComplete,
           });
         }
       } catch {

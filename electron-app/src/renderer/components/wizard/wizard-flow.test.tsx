@@ -181,6 +181,16 @@ describe("wizard workflows", () => {
     expect(electronAPI.saveLastInputFolder).toHaveBeenCalledWith("/messages");
   });
 
+  it("does not add the dev iPhone backup when disabled via dev controls", async () => {
+    localStorage.setItem("devBackupEnabled", "false");
+    electronAPI.scanIphoneBackups.mockResolvedValue({ success: true, backups: [] });
+
+    renderWizard("darwin");
+
+    expect(await screen.findByText("No backups found")).toBeInTheDocument();
+    expect(screen.queryByText("Dev backup available")).not.toBeInTheDocument();
+  });
+
   it("does not add the dev iPhone backup outside development", async () => {
     const user = userEvent.setup();
     vi.stubEnv("DEV", false);

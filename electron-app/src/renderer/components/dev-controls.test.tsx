@@ -44,6 +44,22 @@ describe("DevControls", () => {
     expect(localStorage.getItem("simulateEncryptedBackup")).toBe("true");
   });
 
+  it("stores the dev iPhone backup toggle, which defaults to on", async () => {
+    const user = userEvent.setup();
+
+    render(<DevControls />);
+
+    await user.click(screen.getByRole("button", { name: "Open developer controls" }));
+
+    const devBackupSwitch = screen.getByRole("switch", { name: "Toggle dev iPhone backup" });
+    expect(devBackupSwitch).toHaveAttribute("aria-checked", "true");
+
+    await user.click(devBackupSwitch);
+
+    expect(localStorage.getItem("devBackupEnabled")).toBe("false");
+    expect(devBackupSwitch).toHaveAttribute("aria-checked", "false");
+  });
+
   it("reopens with the stored fallback simulation state", async () => {
     localStorage.setItem("simulateNoChatMatch", "true");
     localStorage.setItem("simulateEncryptedBackup", "true");

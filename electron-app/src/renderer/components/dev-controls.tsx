@@ -11,6 +11,7 @@ export function DevControls() {
     "simulateEncryptedBackup",
     false,
   );
+  const [devBackupEnabled, setDevBackupEnabled] = useLocalStorage("devBackupEnabled", true);
 
   if (!import.meta.env.DEV) {
     return null;
@@ -62,6 +63,27 @@ export function DevControls() {
               >
                 <span
                   className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${simulateEncryptedBackup ? "left-[22px]" : "left-0.5"}`}
+                />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="font-medium text-slate-700">Dev iPhone backup</div>
+                <p className="text-xs text-slate-500">
+                  Offer the simulated backup entry. Turn off to test real scans.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={devBackupEnabled}
+                aria-label="Toggle dev iPhone backup"
+                onClick={() => setDevBackupEnabled(!devBackupEnabled)}
+                className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${devBackupEnabled ? "bg-amber-500" : "bg-slate-300"}`}
+              >
+                <span
+                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${devBackupEnabled ? "left-[22px]" : "left-0.5"}`}
                 />
               </button>
             </div>

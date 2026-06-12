@@ -28,10 +28,11 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
   const [backupPasswordError, setBackupPasswordError] = useState<string | null>(null);
   const [unlockingBackup, setUnlockingBackup] = useState(false);
   const [simulateEncryptedBackup] = useLocalStorage("simulateEncryptedBackup", false);
+  const [devBackupEnabled] = useLocalStorage("devBackupEnabled", true);
 
   const isMac = platform === "darwin";
   const isDevelopment = import.meta.env.DEV;
-  const shouldAddDevBackup = isDevelopment && isMac;
+  const shouldAddDevBackup = isDevelopment && isMac && devBackupEnabled;
 
   const addDevBackup = useCallback(
     async (scannedBackups: IPhoneBackup[]) => {

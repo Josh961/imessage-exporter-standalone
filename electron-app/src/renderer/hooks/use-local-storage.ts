@@ -14,7 +14,11 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T)
     (value: T) => {
       try {
         setStoredValue(value);
-        window.localStorage.setItem(key, JSON.stringify(value));
+        const newValue = JSON.stringify(value);
+        window.localStorage.setItem(key, newValue);
+        // Browsers only fire "storage" in other windows; dispatch it here too so
+        // hooks for the same key elsewhere in this window stay in sync
+        window.dispatchEvent(new StorageEvent("storage", { key, newValue }));
       } catch (error) {
         console.error("Error saving to localStorage:", error);
       }

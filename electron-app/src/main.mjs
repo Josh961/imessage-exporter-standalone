@@ -359,7 +359,8 @@ ipcMain.handle("list-contacts", async (event, inputFolder, options = {}) => {
   return new Promise((resolve) => {
     execFile(executablePath, ["-b", "-p", chatDbPath, "-n"], { env }, (error, stdout, stderr) => {
       if (error) {
-        const errorText = [stderr, error.message].filter(Boolean).join("\n");
+        // error.message already embeds the command and stderr, so don't join them again
+        const errorText = error.message || stderr;
         const errorCode = getExporterErrorCode(errorText);
         resolve({
           success: false,

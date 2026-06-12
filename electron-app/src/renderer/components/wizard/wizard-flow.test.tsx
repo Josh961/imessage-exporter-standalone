@@ -197,6 +197,40 @@ describe("wizard workflows", () => {
     expect(screen.queryByText("Dev iPhone backup")).not.toBeInTheDocument();
   });
 
+  it("keeps the no-backups modal open with a notice when checking again still finds nothing", async () => {
+    const user = userEvent.setup();
+    vi.stubEnv("DEV", false);
+    const backup: IPhoneBackup = {
+      id: "backup-1",
+      path: "/backups/backup-1",
+      folderName: "backup-1",
+      backupDate: new Date("2024-06-01T12:00:00Z"),
+    };
+
+    electronAPI.scanIphoneBackups
+      .mockResolvedValueOnce({ success: true, backups: [] })
+      .mockResolvedValueOnce({ success: true, backups: [] })
+      .mockResolvedValueOnce({ success: true, backups: [backup] });
+    electronAPI.listContacts.mockResolvedValue({ success: true, contacts: [familyChat] });
+
+    renderWizard("darwin");
+
+    expect(await screen.findByText("No backups found")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /iPhone backup/i }));
+
+    expect(await screen.findByText("No iPhone backups found")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+
+    expect(await screen.findByText(/Still no backups found/)).toBeInTheDocument();
+    expect(screen.getByText("No iPhone backups found")).toBeInTheDocument();
+    expect(screen.queryByText("Select iPhone backup")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+
+    expect(await screen.findByText("Select a contact")).toBeInTheDocument();
+    expect(electronAPI.listContacts).toHaveBeenCalledWith("/backups/backup-1");
+  });
+
   it("prompts for an encrypted backup password, unlocks contacts, and exports with that password", async () => {
     const user = userEvent.setup();
     const backup: IPhoneBackup = {

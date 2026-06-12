@@ -22,6 +22,8 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
   const [backupScanComplete, setBackupScanComplete] = useState(false);
   const [showBackupModal, setShowBackupModal] = useState(false);
   const [showNoBackupsModal, setShowNoBackupsModal] = useState(false);
+  const [recheckingBackups, setRecheckingBackups] = useState(false);
+  const [recheckFoundNothing, setRecheckFoundNothing] = useState(false);
   const [encryptedBackup, setEncryptedBackup] = useState<IPhoneBackup | null>(null);
   const [backupPasswordError, setBackupPasswordError] = useState<string | null>(null);
   const [unlockingBackup, setUnlockingBackup] = useState(false);
@@ -99,6 +101,7 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
   const handleIphoneBackup = async () => {
     if (backups.length === 0) {
       // No backups found - show help modal
+      setRecheckFoundNothing(false);
       setShowNoBackupsModal(true);
     } else if (backups.some(isDevBackup)) {
       setShowBackupModal(true);
@@ -220,14 +223,18 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
   };
 
   const handleCheckAgain = async () => {
-    setShowNoBackupsModal(false);
+    setRecheckingBackups(true);
+    setRecheckFoundNothing(false);
     setBackupScanComplete(false);
     try {
       const result = await window.electronAPI.scanIphoneBackups();
-      if (result.success) {
-        const backupsWithDevBackup = await addDevBackup(result.backups);
-        setBackups(backupsWithDevBackup);
-        // If backups now found, select single or show modal
+      const backupsWithDevBackup = await addDevBackup(result.success ? result.backups : []);
+      setBackups(backupsWithDevBackup);
+      if (backupsWithDevBackup.length === 0) {
+        // Still nothing - keep the help modal open and let the user know
+        setRecheckFoundNothing(true);
+      } else {
+        setShowNoBackupsModal(false);
         if (backupsWithDevBackup.length === 1 && !isDevBackup(backupsWithDevBackup[0])) {
           await selectBackup(backupsWithDevBackup[0]);
         } else {
@@ -235,8 +242,9 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
         }
       }
     } catch {
-      // Silently fail
+      setRecheckFoundNothing(true);
     } finally {
+      setRecheckingBackups(false);
       setBackupScanComplete(true);
     }
   };
@@ -465,6 +473,12 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
               After creating a backup, click "Check again" below.
             </p>
 
+            {recheckFoundNothing && (
+              <div className="mt-4 rounded-xl bg-amber-50 p-3 text-center text-sm text-amber-800">
+                Still no backups found. Make sure the backup has finished, then check again.
+              </div>
+            )}
+
             <div className="mt-6 flex justify-end gap-3">
               <button
                 onClick={() => setShowNoBackupsModal(false)}
@@ -474,9 +488,10 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
               </button>
               <button
                 onClick={handleCheckAgain}
-                className="rounded-lg bg-sky-500 px-6 py-2 font-medium text-white hover:bg-sky-600"
+                disabled={recheckingBackups}
+                className="rounded-lg bg-sky-500 px-6 py-2 font-medium text-white hover:bg-sky-600 disabled:opacity-50"
               >
-                Check again
+                {recheckingBackups ? "Checking..." : "Check again"}
               </button>
             </div>
           </div>

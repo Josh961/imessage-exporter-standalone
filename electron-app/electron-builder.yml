@@ -12,6 +12,7 @@ extraResources:
     to: .
 mac:
   category: public.app-category.utilities
+  minimumSystemVersion: "10.15.0"
   target: dmg
   icon: assets/icon.icns
   hardenedRuntime: true

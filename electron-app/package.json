@@ -72,7 +72,8 @@
     "productName": "iMessage Exporter",
     "files": [
       "dist/**/*",
-      "src/main.mjs",
+      "src/*.mjs",
+      "!src/*.test.mjs",
       "src/preload.js",
       "package.json"
     ],

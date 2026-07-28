@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WizardProvider, useWizard } from "../../context/wizard-context";
 import { installMockElectronAPI, type MockElectronAPI } from "../../test/mock-electron-api";
 import type { Contact } from "../../types";
+import { Step1BackupSource } from "../wizard/step-1-backup-source";
 import { SettingsModal } from "./settings-modal";
 
 const loadedChat: Contact = {
@@ -155,6 +156,91 @@ describe("SettingsModal", () => {
     });
     expect(screen.queryByText("Encrypted backup")).not.toBeInTheDocument();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("shows the iPhone backup location section under advanced settings", async () => {
+    const user = userEvent.setup();
+    electronAPI.getBackupLocations.mockResolvedValue({
+      success: true,
+      locations: [
+        {
+          id: "win-apple-devices",
+          label: "Apple Devices & Microsoft Store iTunes",
+          defaultPath: "C:\\Users\\jane\\Apple\\MobileSync\\Backup",
+          exists: true,
+          isLink: false,
+          linkTarget: null,
+          targetExists: false,
+          backupCount: 1,
+          previousPaths: [],
+          previousBackupCount: 0,
+        },
+      ],
+    });
+
+    renderSettings();
+
+    // Hidden until the advanced section is opened
+    expect(screen.queryByText("iPhone backup location")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Advanced settings" }));
+
+    expect(await screen.findByText("iPhone backup location")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move…" })).toBeInTheDocument();
+  });
+
+  it("rescans backups on the main screen after the backup location changes", async () => {
+    const user = userEvent.setup();
+    const backupLocation = {
+      id: "win-apple-devices",
+      label: "Apple Devices & Microsoft Store iTunes",
+      defaultPath: "C:\\Users\\jane\\Apple\\MobileSync\\Backup",
+      exists: true,
+      isLink: false,
+      linkTarget: null,
+      targetExists: false,
+      backupCount: 1,
+      previousPaths: [],
+      previousBackupCount: 0,
+    };
+    electronAPI.getBackupLocations.mockResolvedValue({
+      success: true,
+      locations: [backupLocation],
+    });
+    electronAPI.selectFolder.mockResolvedValue("E:\\iPhone");
+    electronAPI.relocateBackupLocation.mockResolvedValue({
+      success: true,
+      location: {
+        ...backupLocation,
+        isLink: true,
+        linkTarget: "E:\\iPhone\\MobileSync\\Backup",
+        targetExists: true,
+        backupCount: 0,
+        previousPaths: ["C:\\Users\\jane\\Apple\\MobileSync\\Backup (old)"],
+        previousBackupCount: 1,
+      },
+    });
+
+    render(
+      <WizardProvider>
+        <Step1BackupSource platform="win32" />
+        <SettingsModal onClose={vi.fn()} />
+      </WizardProvider>,
+    );
+
+    // The main screen scans once on mount
+    await waitFor(() => {
+      expect(electronAPI.scanIphoneBackups).toHaveBeenCalledTimes(1);
+    });
+
+    await user.click(screen.getByRole("button", { name: "Advanced settings" }));
+    await user.click(await screen.findByRole("button", { name: "Move…" }));
+    await user.click(await screen.findByRole("button", { name: "Change location" }));
+
+    // Changing the backup location triggers a fresh scan on the main screen
+    await waitFor(() => {
+      expect(electronAPI.scanIphoneBackups).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("does not include development-only fallback controls", async () => {

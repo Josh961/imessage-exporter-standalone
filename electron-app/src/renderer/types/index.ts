@@ -55,6 +55,50 @@ export type ExporterErrorCode =
   | "ENCRYPTED_BACKUP_PASSWORD_REQUIRED"
   | "INVALID_BACKUP_PASSWORD";
 
+export interface BackupLocationStatus {
+  id: string;
+  label: string;
+  defaultPath: string;
+  exists: boolean;
+  isLink: boolean;
+  linkTarget: string | null;
+  targetExists: boolean;
+  backupCount: number;
+  previousPaths: string[];
+  previousBackupCount: number;
+}
+
+export interface BackupLocationsResult {
+  success: boolean;
+  locations: BackupLocationStatus[];
+  error?: string;
+}
+
+export type BackupLocationActionResult =
+  | { success: true; location: BackupLocationStatus }
+  | { success: false; location?: never; error: string };
+
+export type StoredBackupSource = "current" | "previous";
+
+export interface StoredBackup {
+  folderName: string;
+  path: string;
+  source: StoredBackupSource;
+  backupDate: Date;
+  sizeBytes: number;
+}
+
+export interface StoredBackupsResult {
+  success: boolean;
+  backups: StoredBackup[];
+  error?: string;
+}
+
+export interface DeleteStoredBackupResult {
+  success: boolean;
+  error?: string;
+}
+
 export interface ListContactsOptions {
   backupPassword?: string;
 }
@@ -93,7 +137,10 @@ export interface ElectronAPI {
   checkPathExists: (checkPath: string) => Promise<boolean>;
   getNestedFolders: (folderPath: string) => Promise<string[]>;
   getDocumentsFolder: () => Promise<string>;
-  selectFolder: (currentPath: string, type: "input" | "output") => Promise<string | null>;
+  selectFolder: (
+    currentPath: string,
+    type: "input" | "output" | "backup-target",
+  ) => Promise<string | null>;
   showItemInFolder: (filePath: string) => Promise<void>;
   getLastInputFolder: () => Promise<string>;
   getLastOutputFolder: () => Promise<string>;
@@ -101,6 +148,18 @@ export interface ElectronAPI {
   saveLastOutputFolder: (folder: string) => Promise<void>;
   getDefaultMessagesFolder: () => Promise<string>;
   scanIphoneBackups: () => Promise<{ success: boolean; backups: IPhoneBackup[]; error?: string }>;
+  getBackupLocations: () => Promise<BackupLocationsResult>;
+  relocateBackupLocation: (
+    locationId: string,
+    targetBase: string,
+  ) => Promise<BackupLocationActionResult>;
+  revertBackupLocation: (locationId: string) => Promise<BackupLocationActionResult>;
+  listStoredBackups: (locationId: string) => Promise<StoredBackupsResult>;
+  deleteStoredBackup: (
+    locationId: string,
+    source: StoredBackupSource,
+    folderName: string,
+  ) => Promise<DeleteStoredBackupResult>;
   listContacts: (inputFolder: string, options?: ListContactsOptions) => Promise<ListContactsResult>;
   runExporter: (exportParams: ExportParams) => Promise<ExportResult>;
   onExportProgress: (callback: (data: ExportProgress) => void) => () => void;

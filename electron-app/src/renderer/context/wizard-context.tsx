@@ -88,6 +88,11 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
 
 interface WizardContextValue {
   state: WizardState;
+  // Bumped whenever stored iPhone backups change outside the wizard (e.g. the
+  // backup location was moved or a backup was deleted in settings), so the
+  // backup-source step knows to rescan.
+  backupScanVersion: number;
+  refreshBackupScan: () => void;
   nextStep: () => void;
   prevStep: () => void;
   setBackupSource: (source: BackupSource) => void;
@@ -109,6 +114,7 @@ const WizardContext = createContext<WizardContextValue | null>(null);
 
 export function WizardProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(wizardReducer, initialState);
+  const [backupScanVersion, refreshBackupScan] = useReducer((version: number) => version + 1, 0);
 
   const nextStep = useCallback(() => {
     if (state.currentStep < 4) {
@@ -191,6 +197,8 @@ export function WizardProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       state,
+      backupScanVersion,
+      refreshBackupScan,
       nextStep,
       prevStep,
       setBackupSource,
@@ -209,6 +217,7 @@ export function WizardProvider({ children }: { children: ReactNode }) {
     }),
     [
       state,
+      backupScanVersion,
       nextStep,
       prevStep,
       setBackupSource,

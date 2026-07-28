@@ -25,6 +25,11 @@ export function installMockElectronAPI(overrides: Partial<MockElectronAPI> = {})
     saveLastOutputFolder: vi.fn().mockResolvedValue(undefined),
     getDefaultMessagesFolder: vi.fn().mockResolvedValue("/messages"),
     scanIphoneBackups: vi.fn().mockResolvedValue({ success: true, backups: [] }),
+    getBackupLocations: vi.fn().mockResolvedValue({ success: true, locations: [] }),
+    relocateBackupLocation: vi.fn().mockResolvedValue({ success: false, error: "not mocked" }),
+    revertBackupLocation: vi.fn().mockResolvedValue({ success: false, error: "not mocked" }),
+    listStoredBackups: vi.fn().mockResolvedValue({ success: true, backups: [] }),
+    deleteStoredBackup: vi.fn().mockResolvedValue({ success: true }),
     listContacts: vi.fn().mockResolvedValue({ success: true, contacts: [] }),
     runExporter: vi
       .fn()

@@ -7,6 +7,15 @@ import fs, { rm } from "fs/promises";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  deleteStoredBackup,
+  getBackupLocationStatus,
+  getDefaultBackupLocations,
+  getScannableBackupPaths,
+  listStoredBackups,
+  relocateBackupLocation,
+  revertBackupLocation,
+} from "./backup-location.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -276,20 +285,13 @@ ipcMain.handle("get-default-messages-folder", () => {
 });
 
 ipcMain.handle("scan-iphone-backups", async () => {
-  const backupPaths = [];
-
-  if (process.platform === "darwin") {
-    backupPaths.push(
-      path.join(app.getPath("home"), "Library", "Application Support", "MobileSync", "Backup"),
-    );
-  } else if (process.platform === "win32") {
-    // Apple Devices app / iTunes from Microsoft Store
-    backupPaths.push(path.join(app.getPath("home"), "Apple", "MobileSync", "Backup"));
-    // Classic iTunes desktop installer (from apple.com)
-    backupPaths.push(path.join(app.getPath("appData"), "Apple Computer", "MobileSync", "Backup"));
-  } else {
+  const locations = resolveBackupLocations();
+  if (locations.length === 0) {
     return { success: false, backups: [] };
   }
+  // Active folders (read through the link when the location was moved) plus
+  // any "Backup (old)" folders set aside by a location move
+  const backupPaths = await getScannableBackupPaths(locations);
 
   try {
     const backups = [];
@@ -347,6 +349,84 @@ ipcMain.handle("scan-iphone-backups", async () => {
     return { success: true, backups: sortedBackups };
   } catch (error) {
     return { success: false, backups: [], error: error.message };
+  }
+});
+
+// Backup location operations (move iTunes/Apple Devices/Finder backups to another drive)
+function resolveBackupLocations() {
+  return getDefaultBackupLocations({
+    platform: process.platform,
+    home: app.getPath("home"),
+    appData: app.getPath("appData"),
+  });
+}
+
+function findBackupLocation(locationId) {
+  return resolveBackupLocations().find((location) => location.id === locationId) || null;
+}
+
+function getBackupLocationErrorMessage(error) {
+  if (error?.friendly) return error.message;
+  if (error?.code === "EBUSY" || error?.code === "EPERM" || error?.code === "EACCES") {
+    return "A file in the backup folder is in use or protected. Quit iTunes, Apple Devices, or Finder, then try again.";
+  }
+  return error?.message || "Something went wrong while moving the backup folder.";
+}
+
+ipcMain.handle("get-backup-locations", async () => {
+  try {
+    const locations = await Promise.all(resolveBackupLocations().map(getBackupLocationStatus));
+    return { success: true, locations };
+  } catch (error) {
+    return { success: false, locations: [], error: getBackupLocationErrorMessage(error) };
+  }
+});
+
+ipcMain.handle("relocate-backup-location", async (event, locationId, targetBase) => {
+  const location = findBackupLocation(locationId);
+  if (!location) return { success: false, error: "Unknown backup location." };
+  try {
+    const status = await relocateBackupLocation({
+      location,
+      targetBase,
+      platform: process.platform,
+    });
+    return { success: true, location: status };
+  } catch (error) {
+    return { success: false, error: getBackupLocationErrorMessage(error) };
+  }
+});
+
+ipcMain.handle("revert-backup-location", async (event, locationId) => {
+  const location = findBackupLocation(locationId);
+  if (!location) return { success: false, error: "Unknown backup location." };
+  try {
+    const status = await revertBackupLocation({ location, platform: process.platform });
+    return { success: true, location: status };
+  } catch (error) {
+    return { success: false, error: getBackupLocationErrorMessage(error) };
+  }
+});
+
+ipcMain.handle("list-stored-backups", async (event, locationId) => {
+  const location = findBackupLocation(locationId);
+  if (!location) return { success: false, backups: [], error: "Unknown backup location." };
+  try {
+    const backups = await listStoredBackups(location);
+    return { success: true, backups };
+  } catch (error) {
+    return { success: false, backups: [], error: getBackupLocationErrorMessage(error) };
+  }
+});
+
+ipcMain.handle("delete-stored-backup", async (event, locationId, source, folderName) => {
+  const location = findBackupLocation(locationId);
+  if (!location) return { success: false, error: "Unknown backup location." };
+  try {
+    await deleteStoredBackup({ location, source, folderName });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: getBackupLocationErrorMessage(error) };
   }
 });
 

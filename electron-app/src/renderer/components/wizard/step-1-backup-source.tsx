@@ -15,7 +15,14 @@ function isDevBackup(backup: IPhoneBackup) {
 }
 
 export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
-  const { setBackupSource, setInputFolder, setBackupPassword, setContacts, nextStep } = useWizard();
+  const {
+    setBackupSource,
+    setInputFolder,
+    setBackupPassword,
+    setContacts,
+    nextStep,
+    backupScanVersion,
+  } = useWizard();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [backups, setBackups] = useState<IPhoneBackup[]>([]);
@@ -59,11 +66,14 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
     [shouldAddDevBackup],
   );
 
-  // Scan for backups on mount
+  // Scan for backups on mount, and again whenever the stored backups change
+  // elsewhere (e.g. the backup location was moved or a backup was deleted in
+  // settings — signalled via backupScanVersion)
   useEffect(() => {
     if (!platform) return;
 
     const scanBackups = async () => {
+      setBackupScanComplete(false);
       let scannedBackups: IPhoneBackup[] = [];
       try {
         const result = await window.electronAPI.scanIphoneBackups();
@@ -79,7 +89,7 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
       }
     };
     scanBackups();
-  }, [addDevBackup, platform]);
+  }, [addDevBackup, platform, backupScanVersion]);
 
   const handleMacMessages = async () => {
     setLoading(true);
@@ -456,10 +466,9 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
                   </li>
                   <li>
                     Select <span className="font-semibold">"Back up all data to this Mac"</span>
-                    <div className="ml-5 mt-1">
-                      <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-slate-700">
-                        If encrypted, keep the password handy
-                      </span>
+                    <div className="ml-5 mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-slate-700">
+                      Make sure <span className="font-semibold">"Encrypt local backup"</span> is
+                      unchecked
                     </div>
                   </li>
                   <li>
@@ -475,12 +484,19 @@ export function Step1BackupSource({ platform }: Step1BackupSourceProps) {
                   </li>
                   <li>
                     Click <span className="font-semibold">Back Up Now</span>
-                    <div className="ml-5 mt-1 space-y-1 text-xs">
-                      <div>Save locally (not iCloud)</div>
-                      <span className="rounded bg-amber-100 px-2 py-0.5 text-slate-700">
-                        If encrypted, keep the password handy
-                      </span>
-                    </div>
+                    <ul className="ml-5 mt-2 space-y-1 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-slate-700">
+                      <li className="flex gap-2">
+                        <span aria-hidden="true">•</span>
+                        <span>Save locally (not iCloud)</span>
+                      </li>
+                      <li className="flex gap-2">
+                        <span aria-hidden="true">•</span>
+                        <span>
+                          Make sure <span className="font-semibold">"Encrypt local backup"</span> is
+                          unchecked
+                        </span>
+                      </li>
+                    </ul>
                   </li>
                 </ol>
               )}

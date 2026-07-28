@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useWizard } from "../../context/wizard-context";
 import { useLocalStorage } from "../../hooks/use-local-storage";
+import { BackupLocationSettings } from "../backup-location-settings";
 import { BackupPasswordModal } from "./backup-password-modal";
 
 interface SettingsModalProps {
@@ -16,6 +17,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
     setContacts,
     setBackupSource,
     resetToContactSelect,
+    refreshBackupScan,
   } = useWizard();
   const [debugMode, setDebugMode] = useLocalStorage("debugMode", false);
   const [simulateEncryptedBackup] = useLocalStorage("simulateEncryptedBackup", false);
@@ -139,7 +141,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
         onClick={onClose}
       >
         <div
-          className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+          className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
           onClick={(e) => e.stopPropagation()}
         >
           <h2 className="mb-6 text-xl font-semibold text-slate-800">Settings</h2>
@@ -242,6 +244,9 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                     </div>
                     {contactsError && <p className="mt-2 text-xs text-red-600">{contactsError}</p>}
                   </div>
+
+                  {/* iPhone backup location */}
+                  <BackupLocationSettings onBackupsChanged={refreshBackupScan} />
                 </div>
               )}
             </div>

@@ -29,6 +29,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getDefaultMessagesFolder: () => ipcRenderer.invoke("get-default-messages-folder"),
   scanIphoneBackups: () => ipcRenderer.invoke("scan-iphone-backups"),
 
+  // Backup location operations
+  getBackupLocations: () => ipcRenderer.invoke("get-backup-locations"),
+  relocateBackupLocation: (locationId, targetBase) =>
+    ipcRenderer.invoke("relocate-backup-location", locationId, targetBase),
+  revertBackupLocation: (locationId) => ipcRenderer.invoke("revert-backup-location", locationId),
+  listStoredBackups: (locationId) => ipcRenderer.invoke("list-stored-backups", locationId),
+  deleteStoredBackup: (locationId, source, folderName) =>
+    ipcRenderer.invoke("delete-stored-backup", locationId, source, folderName),
+
   // iMessage exporter operations
   listContacts: (inputFolder, options) => ipcRenderer.invoke("list-contacts", inputFolder, options),
   runExporter: (exportParams) => ipcRenderer.invoke("run-exporter", exportParams),

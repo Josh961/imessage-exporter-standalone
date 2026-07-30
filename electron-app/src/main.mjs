@@ -19,6 +19,20 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Set by scripts/check-packaged-app.mjs to verify a packaged build boots:
+// the app runs hidden, and exits 0 once the renderer finishes loading
+const SMOKE_TEST = process.env.IMESSAGE_EXPORTER_SMOKE_TEST === "1";
+if (SMOKE_TEST) {
+  process.on("uncaughtException", (error) => {
+    console.error(`SMOKE_TEST_FAIL uncaught exception: ${error?.stack || error}`);
+    app.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error(`SMOKE_TEST_FAIL unhandled rejection: ${reason}`);
+    app.exit(1);
+  });
+}
+
 const store = new Store();
 // Hashed storage name of Library/SMS/sms.db inside an iOS backup; present in both
 // encrypted and unencrypted backups once the backup has finished writing
@@ -125,6 +139,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 950,
+    show: !SMOKE_TEST,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -142,7 +157,19 @@ function createWindow() {
     mainWindow.loadFile(indexPath);
   }
 
+  if (SMOKE_TEST) {
+    mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
+      console.error(`SMOKE_TEST_FAIL renderer did-fail-load: ${errorCode} ${errorDescription}`);
+      app.exit(1);
+    });
+  }
+
   mainWindow.webContents.on("did-finish-load", () => {
+    if (SMOKE_TEST) {
+      console.log("SMOKE_TEST_OK");
+      app.exit(0);
+      return;
+    }
     checkFullDiskAccess();
   });
 }

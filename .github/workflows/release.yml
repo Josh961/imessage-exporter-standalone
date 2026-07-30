@@ -158,6 +158,10 @@ jobs:
           mv dist-build/imessage-exporter-arm64.tmp.dmg dist-build/imessage-exporter.dmg
           rm -f dist-build/imessage-exporter.dmg.blockmap
 
+      - name: Verify packaged app
+        working-directory: electron-app
+        run: npm run check-packaged-app
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -217,6 +221,10 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm exec -- electron-builder build --win nsis --x64 --publish never
+
+      - name: Verify packaged app
+        working-directory: electron-app
+        run: npm run check-packaged-app
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7

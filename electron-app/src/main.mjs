@@ -1,5 +1,5 @@
 import archiver from "archiver";
-import { execFile, spawn } from "child_process";
+import { spawn } from "child_process";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import Store from "electron-store";
 import { createWriteStream } from "fs";
@@ -464,77 +464,102 @@ ipcMain.handle("list-contacts", async (event, inputFolder, options = {}) => {
   const env = getExporterEnv(options.backupPassword);
 
   return new Promise((resolve) => {
-    execFile(executablePath, ["-b", "-p", chatDbPath, "-n"], { env }, (error, stdout, stderr) => {
-      if (error) {
-        // error.message already embeds the command and stderr, so don't join them again
-        const errorText = error.message || stderr;
-        const errorCode = getExporterErrorCode(errorText);
-        resolve({
-          success: false,
-          error: getFriendlyExporterError(errorText, "Failed to load contacts"),
-          ...(errorCode ? { errorCode } : {}),
-        });
-      } else {
-        const contacts = stdout
-          .split("\n")
-          .filter((line) => line.trim().length > 0)
-          .map((line) => {
-            const parts = line.split("|");
-            if (parts[0] === "CONTACT") {
-              // CONTACT format: CONTACT|contact_id|message_count|first_date|last_date|chat_ids|display_name
-              const [
-                type,
-                contact,
-                messageCount,
-                firstMessageDate,
-                lastMessageDate,
-                chatIds,
-                displayName,
-              ] = parts;
-              return {
-                type,
-                contact,
-                messageCount: parseInt(messageCount),
-                firstMessageDate,
-                lastMessageDate,
-                chatIds,
-                displayName: displayName || undefined,
-              };
-            } else if (parts[0] === "GROUP") {
-              // GROUP format: GROUP|name|message_count|first_date|last_date|participants|chat_ids|participant_handles
-              const [
-                type,
-                contact,
-                messageCount,
-                firstMessageDate,
-                lastMessageDate,
-                participants,
-                chatIds,
-                participantHandles,
-              ] = parts;
-              return {
-                type,
-                contact,
-                messageCount: parseInt(messageCount),
-                firstMessageDate,
-                lastMessageDate,
-                participants,
-                chatIds,
-                participantHandles: participantHandles || undefined,
-              };
-            } else {
-              // Skip any other lines (like Total DMs, Total Group Chats, etc.)
-              return null;
-            }
-          })
-          .filter((contact) => contact !== null)
-          .toSorted((a, b) => {
-            const dateA = new Date(a.lastMessageDate).getTime() || 0;
-            const dateB = new Date(b.lastMessageDate).getTime() || 0;
-            return dateB - dateA;
-          });
-        resolve({ success: true, contacts });
+    // spawn streams output instead of buffering it like execFile, whose maxBuffer cap
+    // large contact lists exceed ("stdout maxBuffer length exceeded")
+    const listProcess = spawn(executablePath, ["-b", "-p", chatDbPath, "-n"], { env });
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    let settled = false;
+
+    const fail = (errorText) => {
+      if (settled) return;
+      settled = true;
+      const errorCode = getExporterErrorCode(errorText);
+      resolve({
+        success: false,
+        error: getFriendlyExporterError(errorText, "Failed to load contacts"),
+        ...(errorCode ? { errorCode } : {}),
+      });
+    };
+
+    // Collect raw Buffers and decode once at the end so multi-byte characters
+    // (emoji in contact names) split across chunk boundaries stay intact
+    listProcess.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
+    listProcess.stderr.on("data", (chunk) => stderrChunks.push(chunk));
+
+    listProcess.on("error", (error) => fail(error.message || "Failed to launch the exporter."));
+
+    listProcess.on("close", (code, signal) => {
+      if (settled) return;
+      if (code !== 0) {
+        const stderr = Buffer.concat(stderrChunks).toString("utf8");
+        const exitReason = signal
+          ? `Process terminated by signal ${signal}`
+          : `Process exited with code ${code}`;
+        fail([stderr, exitReason].filter(Boolean).join("\n"));
+        return;
       }
+      settled = true;
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+      const contacts = stdout
+        .split("\n")
+        .filter((line) => line.trim().length > 0)
+        .map((line) => {
+          const parts = line.split("|");
+          if (parts[0] === "CONTACT") {
+            // CONTACT format: CONTACT|contact_id|message_count|first_date|last_date|chat_ids|display_name
+            const [
+              type,
+              contact,
+              messageCount,
+              firstMessageDate,
+              lastMessageDate,
+              chatIds,
+              displayName,
+            ] = parts;
+            return {
+              type,
+              contact,
+              messageCount: parseInt(messageCount),
+              firstMessageDate,
+              lastMessageDate,
+              chatIds,
+              displayName: displayName || undefined,
+            };
+          } else if (parts[0] === "GROUP") {
+            // GROUP format: GROUP|name|message_count|first_date|last_date|participants|chat_ids|participant_handles
+            const [
+              type,
+              contact,
+              messageCount,
+              firstMessageDate,
+              lastMessageDate,
+              participants,
+              chatIds,
+              participantHandles,
+            ] = parts;
+            return {
+              type,
+              contact,
+              messageCount: parseInt(messageCount),
+              firstMessageDate,
+              lastMessageDate,
+              participants,
+              chatIds,
+              participantHandles: participantHandles || undefined,
+            };
+          } else {
+            // Skip any other lines (like Total DMs, Total Group Chats, etc.)
+            return null;
+          }
+        })
+        .filter((contact) => contact !== null)
+        .toSorted((a, b) => {
+          const dateA = new Date(a.lastMessageDate).getTime() || 0;
+          const dateB = new Date(b.lastMessageDate).getTime() || 0;
+          return dateB - dateA;
+        });
+      resolve({ success: true, contacts });
     });
   });
 });

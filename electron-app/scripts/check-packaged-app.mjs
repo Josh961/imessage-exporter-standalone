@@ -12,7 +12,7 @@
 //    renderer bundle all fail this gate.
 //
 // Usage: node scripts/check-packaged-app.mjs [--app-dir <unpacked dir or .app>] [--skip-smoke]
-import { spawn } from "child_process";
+import { execFileSync, spawn } from "child_process";
 import fs from "fs";
 import { builtinModules } from "module";
 import os from "os";
@@ -270,7 +270,15 @@ if (skipSmoke) {
     const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), "imessage-exporter-smoke-"));
     try {
       const stagedApp = path.join(stagingDir, path.basename(smokeApp));
-      fs.cpSync(smokeApp, stagedApp, { recursive: true });
+      if (process.platform === "darwin") {
+        // fs.cpSync resolves the relative symlinks inside
+        // Electron Framework.framework against the cwd, breaking the staged
+        // bundle (icudtl.dat unreachable, helpers crash-loop). ditto copies
+        // .app bundles faithfully: symlinks, xattrs, and code signature.
+        execFileSync("ditto", [smokeApp, stagedApp]);
+      } else {
+        fs.cpSync(smokeApp, stagedApp, { recursive: true });
+      }
       const executable = executableFor(stagedApp);
       console.log(`Smoke testing ${path.relative(appDir, smokeApp)} (staged in ${stagingDir})...`);
       const result = await smokeTest(executable);

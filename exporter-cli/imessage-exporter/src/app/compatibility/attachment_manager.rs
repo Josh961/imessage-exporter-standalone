@@ -135,12 +135,13 @@ impl AttachmentManager {
         config: &Config,
     ) -> Result<(), ConversionError> {
         if !matches!(self.mode, AttachmentManagerMode::Disabled) {
-            if config.options.images_only {
-                match attachment.mime_type() {
-                    MediaType::Image(_) => {}
-                    MediaType::Video(ext) if ext.eq_ignore_ascii_case("heics") => {}
-                    _ => return Ok(()),
-                }
+            // Videos are the only attachments large enough to matter for upload size.
+            // Live Photo sequences use a video MIME type but are small, so they stay.
+            if config.options.skip_videos
+                && let MediaType::Video(ext) = attachment.mime_type()
+                && !ext.eq_ignore_ascii_case("heics")
+            {
+                return Ok(());
             }
 
             // Resolve the path to the attachment
@@ -353,5 +354,87 @@ mod tests {
             Some(AttachmentManagerMode::Full)
         );
         assert_eq!(AttachmentManagerMode::from_cli("invalid"), None);
+    }
+}
+
+#[cfg(test)]
+mod skip_videos_tests {
+    use std::{fs, path::PathBuf};
+
+    use crate::{
+        Config, Options,
+        app::{
+            compatibility::attachment_manager::{AttachmentManager, AttachmentManagerMode},
+            export_type::ExportType,
+            test_dir::unique_test_dir,
+        },
+    };
+
+    /// Run one attachment through the manager and report where it was copied, if anywhere
+    fn copy_attachment(skip_videos: bool, mime_type: &str, file_name: &str) -> Option<PathBuf> {
+        let source = unique_test_dir("skip-videos-source").join(file_name);
+        fs::write(&source, b"attachment bytes").unwrap();
+
+        let mut options = Options::fake_options(ExportType::Txt);
+        options.attachment_manager = AttachmentManager::from(AttachmentManagerMode::Clone);
+        options.skip_videos = skip_videos;
+        let config = Config::fake_app(options);
+
+        let mut attachment = Config::fake_attachment();
+        attachment.filename = Some(source.to_string_lossy().into_owned());
+        attachment.mime_type = Some(mime_type.to_string());
+        attachment.transfer_name = Some(file_name.to_string());
+
+        config
+            .options
+            .attachment_manager
+            .handle_attachment(&Config::fake_message(), &mut attachment, &config)
+            .unwrap();
+
+        attachment.copied_path
+    }
+
+    fn assert_copied(copied: Option<PathBuf>, extension: &str) {
+        let copied = copied.expect("attachment should have been copied");
+        assert!(copied.is_file(), "missing copy at {}", copied.display());
+        assert_eq!(
+            copied.extension().and_then(|ext| ext.to_str()),
+            Some(extension)
+        );
+    }
+
+    #[test]
+    fn videos_are_copied_by_default() {
+        assert_copied(copy_attachment(false, "video/quicktime", "clip.mov"), "mov");
+        assert_copied(copy_attachment(false, "video/mp4", "clip.mp4"), "mp4");
+    }
+
+    #[test]
+    fn skip_videos_leaves_videos_out() {
+        assert_eq!(copy_attachment(true, "video/quicktime", "clip.mov"), None);
+        assert_eq!(copy_attachment(true, "video/mp4", "clip.mp4"), None);
+        assert_eq!(copy_attachment(true, "video/x-m4v", "clip.m4v"), None);
+    }
+
+    #[test]
+    fn skip_videos_keeps_images() {
+        assert_copied(copy_attachment(true, "image/jpeg", "photo.jpg"), "jpg");
+        assert_copied(copy_attachment(true, "image/gif", "reaction.gif"), "gif");
+    }
+
+    #[test]
+    fn skip_videos_keeps_audio() {
+        assert_copied(copy_attachment(true, "audio/x-m4a", "voice.m4a"), "m4a");
+    }
+
+    #[test]
+    fn skip_videos_keeps_documents_and_contacts() {
+        assert_copied(copy_attachment(true, "application/pdf", "form.pdf"), "pdf");
+        assert_copied(copy_attachment(true, "text/vcard", "friend.vcf"), "vcf");
+    }
+
+    #[test]
+    fn skip_videos_keeps_live_photo_sequences() {
+        assert_copied(copy_attachment(true, "video/heics", "live.heics"), "heics");
     }
 }

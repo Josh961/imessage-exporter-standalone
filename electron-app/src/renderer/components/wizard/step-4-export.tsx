@@ -167,7 +167,6 @@ export function Step4Export() {
           selectedContacts,
           selectedChatIds,
           ...(state.backupPassword ? { backupPassword: state.backupPassword } : {}),
-          includeVideos: true, // Always include videos in simplified version
           debugMode,
           isFullExport: false,
         });

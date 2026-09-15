@@ -9,24 +9,111 @@ index cb7bfe3..b0abe41 100644
 +serde = { version = "1.0", features = ["derive"] }
 +serde_json = "1.0"
 diff --git a/imessage-exporter/src/app/compatibility/attachment_manager.rs b/imessage-exporter/src/app/compatibility/attachment_manager.rs
-index 528a3f3..6a04a36 100644
+index 528a3f3..de63af9 100644
 --- a/imessage-exporter/src/app/compatibility/attachment_manager.rs
 +++ b/imessage-exporter/src/app/compatibility/attachment_manager.rs
-@@ -135,6 +135,14 @@ impl AttachmentManager {
+@@ -135,6 +135,15 @@ impl AttachmentManager {
          config: &Config,
      ) -> Result<(), ConversionError> {
          if !matches!(self.mode, AttachmentManagerMode::Disabled) {
-+            if config.options.images_only {
-+                match attachment.mime_type() {
-+                    MediaType::Image(_) => {}
-+                    MediaType::Video(ext) if ext.eq_ignore_ascii_case("heics") => {}
-+                    _ => return Ok(()),
-+                }
++            // Videos are the only attachments large enough to matter for upload size.
++            // Live Photo sequences use a video MIME type but are small, so they stay.
++            if config.options.skip_videos
++                && let MediaType::Video(ext) = attachment.mime_type()
++                && !ext.eq_ignore_ascii_case("heics")
++            {
++                return Ok(());
 +            }
 +
              // Resolve the path to the attachment
              let Some(attachment_path) = attachment.resolved_attachment_path(
                  &config.options.platform,
+@@ -347,3 +356,85 @@ mod tests {
+         assert_eq!(AttachmentManagerMode::from_cli("invalid"), None);
+     }
+ }
++
++#[cfg(test)]
++mod skip_videos_tests {
++    use std::{fs, path::PathBuf};
++
++    use crate::{
++        Config, Options,
++        app::{
++            compatibility::attachment_manager::{AttachmentManager, AttachmentManagerMode},
++            export_type::ExportType,
++            test_dir::unique_test_dir,
++        },
++    };
++
++    /// Run one attachment through the manager and report where it was copied, if anywhere
++    fn copy_attachment(skip_videos: bool, mime_type: &str, file_name: &str) -> Option<PathBuf> {
++        let source = unique_test_dir("skip-videos-source").join(file_name);
++        fs::write(&source, b"attachment bytes").unwrap();
++
++        let mut options = Options::fake_options(ExportType::Txt);
++        options.attachment_manager = AttachmentManager::from(AttachmentManagerMode::Clone);
++        options.skip_videos = skip_videos;
++        let config = Config::fake_app(options);
++
++        let mut attachment = Config::fake_attachment();
++        attachment.filename = Some(source.to_string_lossy().into_owned());
++        attachment.mime_type = Some(mime_type.to_string());
++        attachment.transfer_name = Some(file_name.to_string());
++
++        config
++            .options
++            .attachment_manager
++            .handle_attachment(&Config::fake_message(), &mut attachment, &config)
++            .unwrap();
++
++        attachment.copied_path
++    }
++
++    fn assert_copied(copied: Option<PathBuf>, extension: &str) {
++        let copied = copied.expect("attachment should have been copied");
++        assert!(copied.is_file(), "missing copy at {}", copied.display());
++        assert_eq!(
++            copied.extension().and_then(|ext| ext.to_str()),
++            Some(extension)
++        );
++    }
++
++    #[test]
++    fn videos_are_copied_by_default() {
++        assert_copied(copy_attachment(false, "video/quicktime", "clip.mov"), "mov");
++        assert_copied(copy_attachment(false, "video/mp4", "clip.mp4"), "mp4");
++    }
++
++    #[test]
++    fn skip_videos_leaves_videos_out() {
++        assert_eq!(copy_attachment(true, "video/quicktime", "clip.mov"), None);
++        assert_eq!(copy_attachment(true, "video/mp4", "clip.mp4"), None);
++        assert_eq!(copy_attachment(true, "video/x-m4v", "clip.m4v"), None);
++    }
++
++    #[test]
++    fn skip_videos_keeps_images() {
++        assert_copied(copy_attachment(true, "image/jpeg", "photo.jpg"), "jpg");
++        assert_copied(copy_attachment(true, "image/gif", "reaction.gif"), "gif");
++    }
++
++    #[test]
++    fn skip_videos_keeps_audio() {
++        assert_copied(copy_attachment(true, "audio/x-m4a", "voice.m4a"), "m4a");
++    }
++
++    #[test]
++    fn skip_videos_keeps_documents_and_contacts() {
++        assert_copied(copy_attachment(true, "application/pdf", "form.pdf"), "pdf");
++        assert_copied(copy_attachment(true, "text/vcard", "friend.vcf"), "vcf");
++    }
++
++    #[test]
++    fn skip_videos_keeps_live_photo_sequences() {
++        assert_copied(copy_attachment(true, "video/heics", "live.heics"), "heics");
++    }
++}
 diff --git a/imessage-exporter/src/app/compatibility/backup.rs b/imessage-exporter/src/app/compatibility/backup.rs
 index 9834e49..a27a1d1 100644
 --- a/imessage-exporter/src/app/compatibility/backup.rs
@@ -80,7 +167,7 @@ index 9834e49..a27a1d1 100644
  fn prompt_for_password() -> Result<String, RuntimeError> {
      if !stdin().is_terminal() {
 diff --git a/imessage-exporter/src/app/options.rs b/imessage-exporter/src/app/options.rs
-index dadd406..865e9e2 100644
+index dadd406..90cb4bc 100644
 --- a/imessage-exporter/src/app/options.rs
 +++ b/imessage-exporter/src/app/options.rs
 @@ -2,7 +2,7 @@
@@ -101,7 +188,7 @@ index dadd406..865e9e2 100644
  pub const OPTION_CUSTOM_CONTACTS_DB_PATH: &str = "contacts-path";
  pub const OPTION_NO_PROGRESS: &str = "no-progress";
 +pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
-+pub const OPTION_IGNORE_VIDEOS: &str = "images-only";
++pub const OPTION_SKIP_VIDEOS: &str = "skip-videos";
  
  // Other CLI Text
  pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
@@ -118,8 +205,8 @@ index dadd406..865e9e2 100644
      pub contacts_path: Option<PathBuf>,
      /// If false, suppress the export progress bar regardless of TTY state
      pub show_progress: bool,
-+    /// If true, only include image attachments in the export
-+    pub images_only: bool,
++    /// If true, do not copy video attachments
++    pub skip_videos: bool,
  }
  
  // Override Debug default impl to avoid printing the cleartext password if it's set
@@ -135,7 +222,7 @@ index dadd406..865e9e2 100644
              )
              .field("contacts_path", &self.contacts_path)
              .field("show_progress", &self.show_progress)
-+            .field("images_only", &self.images_only)
++            .field("skip_videos", &self.skip_videos)
              .finish()
      }
  }
@@ -155,7 +242,7 @@ index dadd406..865e9e2 100644
          let cleartext_password: Option<&String> = args.get_one(OPTION_CLEARTEXT_PASSWORD);
          let contacts_path: Option<&String> = args.get_one(OPTION_CUSTOM_CONTACTS_DB_PATH);
          let show_progress = !args.get_flag(OPTION_NO_PROGRESS);
-+        let images_only = args.get_flag(OPTION_IGNORE_VIDEOS);
++        let skip_videos = args.get_flag(OPTION_SKIP_VIDEOS);
  
          // Build the export type
          let export_type: Option<ExportType> = match export_file_type {
@@ -165,7 +252,7 @@ index dadd406..865e9e2 100644
                  (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
 +                (selected_chat_ids.is_some(), OPTION_SELECTED_CHAT_IDS),
                  (!show_progress, OPTION_NO_PROGRESS),
-+                (images_only, OPTION_IGNORE_VIDEOS),
++                (skip_videos, OPTION_SKIP_VIDEOS),
              ];
              for (set, opt) in format_deps {
                  if set {
@@ -175,7 +262,7 @@ index dadd406..865e9e2 100644
              (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
 +            (selected_chat_ids.is_some(), OPTION_SELECTED_CHAT_IDS),
              (!show_progress, OPTION_NO_PROGRESS),
-+            (images_only, OPTION_IGNORE_VIDEOS),
++            (skip_videos, OPTION_SKIP_VIDEOS),
          ];
          for (set, opt) in diag_conflicts {
              if diagnostic && set {
@@ -214,7 +301,7 @@ index dadd406..865e9e2 100644
              cleartext_password: cleartext_password.cloned(),
              contacts_path: contacts_path.cloned().map(PathBuf::from),
              show_progress,
-+            images_only,
++            skip_videos,
          })
      }
  
@@ -372,7 +459,7 @@ index dadd406..865e9e2 100644
                  .value_name("path"),
          )
          .arg(
-@@ -503,8 +544,49 @@ fn get_command() -> Command {
+@@ -503,8 +544,48 @@ fn get_command() -> Command {
                  .long(OPTION_NO_PROGRESS)
                  .help("Disable the on-screen progress bar regardless of context\nBy default, the progress bar is shown only when stderr is a terminal,\nso headless invocations (CI, output redirected to a logfile) stay clean automatically.\nUse this flag to suppress the bar even in an interactive terminal.\n")
                  .action(ArgAction::SetTrue)
@@ -380,10 +467,9 @@ index dadd406..865e9e2 100644
 +                .display_order(18),
          )
 +        .arg(
-+            Arg::new(OPTION_IGNORE_VIDEOS)
-+                .short('v')
-+                .long(OPTION_IGNORE_VIDEOS)
-+                .help("Only include image attachments in the export\nIncludes images, GIFs, and HEIC sequences\nSkips videos, audio, and other file types\n")
++            Arg::new(OPTION_SKIP_VIDEOS)
++                .long(OPTION_SKIP_VIDEOS)
++                .help("Do not copy video attachments\nEvery other attachment type is still copied\nLive Photo sequences are treated as images and kept\n")
 +                .action(ArgAction::SetTrue)
 +                .display_order(19),
 +        )
@@ -423,7 +509,7 @@ index dadd406..865e9e2 100644
  }
  
  #[cfg(test)]
-@@ -521,6 +603,7 @@ impl Options {
+@@ -521,6 +602,7 @@ impl Options {
              attachment_root: None,
              attachment_manager: AttachmentManager::default(),
              diagnostic: false,
@@ -431,15 +517,15 @@ index dadd406..865e9e2 100644
              export_type: Some(export_type),
              export_path: unique_test_dir("fake-options"),
              query_context: QueryContext::default(),
-@@ -533,6 +616,7 @@ impl Options {
+@@ -533,6 +615,7 @@ impl Options {
              cleartext_password: None,
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          }
      }
  }
-@@ -544,6 +628,8 @@ pub fn from_command_line() -> ArgMatches {
+@@ -544,6 +627,8 @@ pub fn from_command_line() -> ArgMatches {
  
  #[cfg(test)]
  mod arg_tests {
@@ -448,7 +534,7 @@ index dadd406..865e9e2 100644
      use imessage_database::util::{
          dirs::default_db_path, platform::Platform, query_context::QueryContext,
      };
-@@ -570,6 +656,7 @@ mod arg_tests {
+@@ -570,6 +655,7 @@ mod arg_tests {
              attachment_root: None,
              attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
              diagnostic: true,
@@ -456,15 +542,15 @@ index dadd406..865e9e2 100644
              export_type: None,
              export_path: validate_path(None, None).unwrap(),
              query_context: QueryContext::default(),
-@@ -582,6 +669,7 @@ mod arg_tests {
+@@ -582,6 +668,7 @@ mod arg_tests {
              cleartext_password: None,
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          };
  
          assert_eq!(actual, expected);
-@@ -653,6 +741,7 @@ mod arg_tests {
+@@ -653,6 +740,7 @@ mod arg_tests {
              attachment_root: None,
              attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
              diagnostic: false,
@@ -472,15 +558,15 @@ index dadd406..865e9e2 100644
              export_type: Some(ExportType::Html),
              export_path: validate_path(Some(&dir_str), None).unwrap(),
              query_context: QueryContext::default(),
-@@ -665,6 +754,7 @@ mod arg_tests {
+@@ -665,6 +753,7 @@ mod arg_tests {
              cleartext_password: None,
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          };
  
          assert_eq!(actual, expected);
-@@ -685,6 +775,7 @@ mod arg_tests {
+@@ -685,6 +774,7 @@ mod arg_tests {
              attachment_root: None,
              attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
              diagnostic: false,
@@ -488,15 +574,15 @@ index dadd406..865e9e2 100644
              export_type: Some(ExportType::Txt),
              export_path: validate_path(None, None).unwrap(),
              query_context: QueryContext::default(),
-@@ -697,6 +788,7 @@ mod arg_tests {
+@@ -697,6 +787,7 @@ mod arg_tests {
              cleartext_password: None,
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          };
  
          assert_eq!(actual, expected);
-@@ -766,6 +858,7 @@ mod arg_tests {
+@@ -766,6 +857,7 @@ mod arg_tests {
              attachment_root: None,
              attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
              diagnostic: false,
@@ -504,15 +590,15 @@ index dadd406..865e9e2 100644
              export_type: Some(ExportType::Txt),
              export_path: validate_path(None, None).unwrap(),
              query_context: QueryContext::default(),
-@@ -778,6 +871,7 @@ mod arg_tests {
+@@ -778,6 +870,7 @@ mod arg_tests {
              cleartext_password: None,
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          };
  
          assert_eq!(actual, expected);
-@@ -806,6 +900,7 @@ mod arg_tests {
+@@ -806,6 +899,7 @@ mod arg_tests {
              attachment_root: None,
              attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
              diagnostic: false,
@@ -520,15 +606,15 @@ index dadd406..865e9e2 100644
              export_type: Some(ExportType::Txt),
              export_path: validate_path(None, None).unwrap(),
              query_context: QueryContext::default(),
-@@ -818,6 +913,7 @@ mod arg_tests {
+@@ -818,6 +912,7 @@ mod arg_tests {
              cleartext_password: Some("password".to_string()),
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          };
  
          assert_eq!(actual, expected);
-@@ -862,6 +958,7 @@ mod arg_tests {
+@@ -862,6 +957,7 @@ mod arg_tests {
              attachment_root: None,
              attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
              diagnostic: false,
@@ -536,15 +622,15 @@ index dadd406..865e9e2 100644
              export_type: Some(ExportType::Txt),
              export_path: validate_path(None, None).unwrap(),
              query_context: QueryContext::default(),
-@@ -874,6 +971,7 @@ mod arg_tests {
+@@ -874,6 +970,7 @@ mod arg_tests {
              cleartext_password: None,
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          };
  
          assert_eq!(actual, expected);
-@@ -894,6 +992,7 @@ mod arg_tests {
+@@ -894,6 +991,7 @@ mod arg_tests {
              attachment_root: None,
              attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
              diagnostic: false,
@@ -552,15 +638,15 @@ index dadd406..865e9e2 100644
              export_type: Some(ExportType::Txt),
              export_path: validate_path(None, None).unwrap(),
              query_context: QueryContext::default(),
-@@ -906,6 +1005,7 @@ mod arg_tests {
+@@ -906,6 +1004,7 @@ mod arg_tests {
              cleartext_password: None,
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          };
  
          assert_eq!(actual, expected);
-@@ -927,6 +1027,7 @@ mod arg_tests {
+@@ -927,6 +1026,7 @@ mod arg_tests {
              attachment_root: None,
              attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
              diagnostic: false,
@@ -568,15 +654,15 @@ index dadd406..865e9e2 100644
              export_type: Some(ExportType::Txt),
              export_path: validate_path(None, None).unwrap(),
              query_context: QueryContext::default(),
-@@ -939,6 +1040,7 @@ mod arg_tests {
+@@ -939,6 +1039,7 @@ mod arg_tests {
              cleartext_password: None,
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          };
  
          assert_eq!(actual, expected);
-@@ -959,6 +1061,7 @@ mod arg_tests {
+@@ -959,6 +1060,7 @@ mod arg_tests {
              attachment_root: None,
              attachment_manager: AttachmentManager::from(AttachmentManagerMode::Full),
              diagnostic: false,
@@ -584,15 +670,15 @@ index dadd406..865e9e2 100644
              export_type: Some(ExportType::Txt),
              export_path: validate_path(None, None).unwrap(),
              query_context: QueryContext::default(),
-@@ -971,6 +1074,7 @@ mod arg_tests {
+@@ -971,6 +1073,7 @@ mod arg_tests {
              cleartext_password: None,
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          };
  
          assert_eq!(actual, expected);
-@@ -991,6 +1095,7 @@ mod arg_tests {
+@@ -991,6 +1094,7 @@ mod arg_tests {
              attachment_root: None,
              attachment_manager: AttachmentManager::from(AttachmentManagerMode::Clone),
              diagnostic: false,
@@ -600,15 +686,15 @@ index dadd406..865e9e2 100644
              export_type: Some(ExportType::Txt),
              export_path: validate_path(None, None).unwrap(),
              query_context: QueryContext::default(),
-@@ -1003,6 +1108,7 @@ mod arg_tests {
+@@ -1003,6 +1107,7 @@ mod arg_tests {
              cleartext_password: None,
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          };
  
          assert_eq!(actual, expected);
-@@ -1040,6 +1146,56 @@ mod arg_tests {
+@@ -1040,6 +1145,56 @@ mod arg_tests {
          assert!(Options::from_args(&args).is_err());
      }
  
@@ -665,7 +751,7 @@ index dadd406..865e9e2 100644
      #[test]
      fn cant_build_option_no_lazy_without_format() {
          let args = get_command().get_matches_from(["imessage-exporter", "-l"]);
-@@ -1065,6 +1221,7 @@ mod arg_tests {
+@@ -1065,6 +1220,7 @@ mod arg_tests {
              attachment_root: None,
              attachment_manager: AttachmentManager::from(AttachmentManagerMode::Disabled),
              diagnostic: false,
@@ -673,15 +759,15 @@ index dadd406..865e9e2 100644
              export_type: Some(ExportType::Txt),
              export_path: validate_path(None, None).unwrap(),
              query_context: QueryContext::default(),
-@@ -1077,6 +1234,7 @@ mod arg_tests {
+@@ -1077,6 +1233,7 @@ mod arg_tests {
              cleartext_password: None,
              contacts_path: None,
              show_progress: true,
-+            images_only: false,
++            skip_videos: false,
          };
  
          assert_eq!(actual, expected);
-@@ -1090,7 +1248,32 @@ mod arg_tests {
+@@ -1090,7 +1247,33 @@ mod arg_tests {
  
      #[test]
      fn cant_build_option_invalid_contacts_path() {
@@ -703,15 +789,16 @@ index dadd406..865e9e2 100644
 +    }
 +
 +    #[test]
-+    fn can_build_option_images_only_flag() {
-+        let args = get_command().get_matches_from(["imessage-exporter", "-f", "txt", "-v"]);
++    fn can_build_option_skip_videos_flag() {
++        let args =
++            get_command().get_matches_from(["imessage-exporter", "-f", "txt", "--skip-videos"]);
 +        let actual = Options::from_args(&args).unwrap();
-+        assert!(actual.images_only);
++        assert!(actual.skip_videos);
 +    }
 +
 +    #[test]
-+    fn cant_build_option_images_only_without_format() {
-+        let args = get_command().get_matches_from(["imessage-exporter", "-v"]);
++    fn cant_build_option_skip_videos_without_format() {
++        let args = get_command().get_matches_from(["imessage-exporter", "--skip-videos"]);
          assert!(Options::from_args(&args).is_err());
      }
  

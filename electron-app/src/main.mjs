@@ -573,7 +573,6 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
     selectedContacts,
     selectedChatIds,
     backupPassword,
-    includeVideos = true,
     debugMode,
     isFullExport,
     isFilteredExport,
@@ -586,8 +585,9 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
     const chatDbPath = getChatDbPath(inputFolder);
 
     let params = [];
-    params.push("-f", "txt", "-c", "basic", "-b");
-    if (!includeVideos) params.push("-v");
+    // Videos are skipped: the My Forever Books importer cannot use them and
+    // they are the only attachments large enough to bloat the upload.
+    params.push("-f", "txt", "-c", "basic", "-b", "--skip-videos");
     params.push("-p", chatDbPath, "-o", uniqueTempFolder);
     if (startDate) params.push("-s", startDate);
     if (endDate) params.push("-e", endDate);

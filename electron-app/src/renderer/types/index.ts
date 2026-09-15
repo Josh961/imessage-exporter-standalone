@@ -44,7 +44,6 @@ export interface ExportParams {
   selectedContacts: (string | string[])[];
   selectedChatIds?: string[];
   backupPassword?: string;
-  includeVideos: boolean;
   debugMode: boolean;
   isFullExport?: boolean;
   isFilteredExport?: boolean;

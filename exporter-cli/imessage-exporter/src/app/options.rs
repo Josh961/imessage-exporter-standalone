@@ -45,7 +45,7 @@ pub const OPTION_CLEARTEXT_PASSWORD: &str = "cleartext-password";
 pub const OPTION_CUSTOM_CONTACTS_DB_PATH: &str = "contacts-path";
 pub const OPTION_NO_PROGRESS: &str = "no-progress";
 pub const OPTION_LIST_CONTACTS: &str = "list-contacts";
-pub const OPTION_IGNORE_VIDEOS: &str = "images-only";
+pub const OPTION_SKIP_VIDEOS: &str = "skip-videos";
 
 // Other CLI Text
 pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
@@ -94,8 +94,8 @@ pub struct Options {
     pub contacts_path: Option<PathBuf>,
     /// If false, suppress the export progress bar regardless of TTY state
     pub show_progress: bool,
-    /// If true, only include image attachments in the export
-    pub images_only: bool,
+    /// If true, do not copy video attachments
+    pub skip_videos: bool,
 }
 
 // Override Debug default impl to avoid printing the cleartext password if it's set
@@ -123,7 +123,7 @@ impl std::fmt::Debug for Options {
             )
             .field("contacts_path", &self.contacts_path)
             .field("show_progress", &self.show_progress)
-            .field("images_only", &self.images_only)
+            .field("skip_videos", &self.skip_videos)
             .finish()
     }
 }
@@ -150,7 +150,7 @@ impl Options {
         let cleartext_password: Option<&String> = args.get_one(OPTION_CLEARTEXT_PASSWORD);
         let contacts_path: Option<&String> = args.get_one(OPTION_CUSTOM_CONTACTS_DB_PATH);
         let show_progress = !args.get_flag(OPTION_NO_PROGRESS);
-        let images_only = args.get_flag(OPTION_IGNORE_VIDEOS);
+        let skip_videos = args.get_flag(OPTION_SKIP_VIDEOS);
 
         // Build the export type
         let export_type: Option<ExportType> = match export_file_type {
@@ -175,7 +175,7 @@ impl Options {
                 (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
                 (selected_chat_ids.is_some(), OPTION_SELECTED_CHAT_IDS),
                 (!show_progress, OPTION_NO_PROGRESS),
-                (images_only, OPTION_IGNORE_VIDEOS),
+                (skip_videos, OPTION_SKIP_VIDEOS),
             ];
             for (set, opt) in format_deps {
                 if set {
@@ -199,7 +199,7 @@ impl Options {
             (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
             (selected_chat_ids.is_some(), OPTION_SELECTED_CHAT_IDS),
             (!show_progress, OPTION_NO_PROGRESS),
-            (images_only, OPTION_IGNORE_VIDEOS),
+            (skip_videos, OPTION_SKIP_VIDEOS),
         ];
         for (set, opt) in diag_conflicts {
             if diagnostic && set {
@@ -328,7 +328,7 @@ impl Options {
             cleartext_password: cleartext_password.cloned(),
             contacts_path: contacts_path.cloned().map(PathBuf::from),
             show_progress,
-            images_only,
+            skip_videos,
         })
     }
 
@@ -547,10 +547,9 @@ fn get_command() -> Command {
                 .display_order(18),
         )
         .arg(
-            Arg::new(OPTION_IGNORE_VIDEOS)
-                .short('v')
-                .long(OPTION_IGNORE_VIDEOS)
-                .help("Only include image attachments in the export\nIncludes images, GIFs, and HEIC sequences\nSkips videos, audio, and other file types\n")
+            Arg::new(OPTION_SKIP_VIDEOS)
+                .long(OPTION_SKIP_VIDEOS)
+                .help("Do not copy video attachments\nEvery other attachment type is still copied\nLive Photo sequences are treated as images and kept\n")
                 .action(ArgAction::SetTrue)
                 .display_order(19),
         )
@@ -616,7 +615,7 @@ impl Options {
             cleartext_password: None,
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         }
     }
 }
@@ -669,7 +668,7 @@ mod arg_tests {
             cleartext_password: None,
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         };
 
         assert_eq!(actual, expected);
@@ -754,7 +753,7 @@ mod arg_tests {
             cleartext_password: None,
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         };
 
         assert_eq!(actual, expected);
@@ -788,7 +787,7 @@ mod arg_tests {
             cleartext_password: None,
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         };
 
         assert_eq!(actual, expected);
@@ -871,7 +870,7 @@ mod arg_tests {
             cleartext_password: None,
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         };
 
         assert_eq!(actual, expected);
@@ -913,7 +912,7 @@ mod arg_tests {
             cleartext_password: Some("password".to_string()),
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         };
 
         assert_eq!(actual, expected);
@@ -971,7 +970,7 @@ mod arg_tests {
             cleartext_password: None,
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         };
 
         assert_eq!(actual, expected);
@@ -1005,7 +1004,7 @@ mod arg_tests {
             cleartext_password: None,
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         };
 
         assert_eq!(actual, expected);
@@ -1040,7 +1039,7 @@ mod arg_tests {
             cleartext_password: None,
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         };
 
         assert_eq!(actual, expected);
@@ -1074,7 +1073,7 @@ mod arg_tests {
             cleartext_password: None,
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         };
 
         assert_eq!(actual, expected);
@@ -1108,7 +1107,7 @@ mod arg_tests {
             cleartext_password: None,
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         };
 
         assert_eq!(actual, expected);
@@ -1234,7 +1233,7 @@ mod arg_tests {
             cleartext_password: None,
             contacts_path: None,
             show_progress: true,
-            images_only: false,
+            skip_videos: false,
         };
 
         assert_eq!(actual, expected);
@@ -1265,15 +1264,16 @@ mod arg_tests {
     }
 
     #[test]
-    fn can_build_option_images_only_flag() {
-        let args = get_command().get_matches_from(["imessage-exporter", "-f", "txt", "-v"]);
+    fn can_build_option_skip_videos_flag() {
+        let args =
+            get_command().get_matches_from(["imessage-exporter", "-f", "txt", "--skip-videos"]);
         let actual = Options::from_args(&args).unwrap();
-        assert!(actual.images_only);
+        assert!(actual.skip_videos);
     }
 
     #[test]
-    fn cant_build_option_images_only_without_format() {
-        let args = get_command().get_matches_from(["imessage-exporter", "-v"]);
+    fn cant_build_option_skip_videos_without_format() {
+        let args = get_command().get_matches_from(["imessage-exporter", "--skip-videos"]);
         assert!(Options::from_args(&args).is_err());
     }
 

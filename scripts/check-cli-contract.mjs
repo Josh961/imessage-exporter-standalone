@@ -12,12 +12,12 @@ const requiredChecks = [
     labels: [
       ['list contacts option name', 'OPTION_LIST_CONTACTS'],
       ['selected chat IDs option name', 'OPTION_SELECTED_CHAT_IDS'],
-      ['images only option name', 'OPTION_IGNORE_VIDEOS'],
+      ['skip videos option name', 'OPTION_SKIP_VIDEOS'],
       ['list contacts option field', 'list_contacts: bool'],
-      ['images only option field', 'images_only: bool'],
+      ['skip videos option field', 'skip_videos: bool'],
       ['list contacts clap arg', 'Arg::new(OPTION_LIST_CONTACTS)'],
       ['selected chat IDs clap arg', 'Arg::new(OPTION_SELECTED_CHAT_IDS)'],
-      ['images only clap arg', 'Arg::new(OPTION_IGNORE_VIDEOS)'],
+      ['skip videos clap arg', 'Arg::new(OPTION_SKIP_VIDEOS)'],
     ],
   },
   {
@@ -41,7 +41,7 @@ const requiredChecks = [
   },
   {
     file: 'exporter-cli/imessage-exporter/src/app/compatibility/attachment_manager.rs',
-    labels: [['images only attachment gate', 'images_only']],
+    labels: [['skip videos attachment gate', 'skip_videos']],
   },
   {
     file: 'exporter-cli/imessage-exporter/src/app/compatibility/backup.rs',
@@ -57,6 +57,7 @@ const requiredChecks = [
       ['GROUP parser', 'GROUP|'],
       ['GROUP participant handles parser', 'participantHandles'],
       ['selected chat IDs export', '--chat-ids'],
+      ['skip videos export', '--skip-videos'],
       ['progress parser', 'PROGRESS_JSON:'],
       ['CLI no-chat sentinel mapping', 'No chatrooms were found with the supplied contacts.'],
       ['backup password env passthrough', 'IMESSAGE_EXPORTER_BACKUP_PASSWORD'],

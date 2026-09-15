@@ -47,7 +47,7 @@ The Electron app depends on these fork-only CLI behaviors:
   - `GROUP|name|message_count|first_date|last_date|participants|chat_ids`
 - GUI exports pass list-contact `chat_ids` back to the CLI via `--chat-ids`, so selected rows export by exact `chat.ROWID` instead of re-matching names or phone numbers
 - export progress emits stdout lines prefixed with `PROGRESS_JSON: `
-- `--images-only` skips videos/audio while keeping image-like attachments
+- `--skip-videos` leaves video attachments out of the export; the app always passes it because the My Forever Books importer cannot use videos and they dominate upload size
 - no-match filtered exports emit `No chatrooms were found with the supplied contacts.`
 
 Run the contract check any time CLI code changes:

@@ -16,6 +16,15 @@ import {
   relocateBackupLocation,
   revertBackupLocation,
 } from "./backup-location.mjs";
+import {
+  cleanupProgress,
+  completeProgress,
+  createProgressThrottle,
+  finalizingProgress,
+  mapExporterProgress,
+  measureFolder,
+  zipProgress,
+} from "./export-progress.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -606,6 +615,15 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
       params.push("-t", contactsString);
     }
 
+    // One progress channel for the whole run: the CLI's own progress is scaled
+    // into the first part of the bar, and zipping/cleanup fill the rest, so the
+    // renderer never shows 100% while work is still happening.
+    const sendProgress = createProgressThrottle((progress) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("export-progress", progress);
+      }
+    });
+
     return new Promise((resolve) => {
       const exportProcess = spawn(executablePath, params, { env: getExporterEnv(backupPassword) });
       let stdout = "";
@@ -622,10 +640,7 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
           if (line.startsWith("PROGRESS_JSON: ")) {
             try {
               const progressData = JSON.parse(line.substring("PROGRESS_JSON: ".length));
-              // Send progress update to renderer
-              if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send("export-progress", progressData);
-              }
+              sendProgress(mapExporterProgress(progressData));
             } catch {
               // Ignore JSON parse errors
             }
@@ -643,10 +658,7 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
           if (line.startsWith("PROGRESS_JSON: ")) {
             try {
               const progressData = JSON.parse(line.substring("PROGRESS_JSON: ".length));
-              // Send progress update to renderer
-              if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send("export-progress", progressData);
-              }
+              sendProgress(mapExporterProgress(progressData));
             } catch {
               // Ignore JSON parse errors
             }
@@ -682,16 +694,9 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
           });
         } else {
           try {
-            // Keep progress bar at 100% during post-processing (zipping, filtering)
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send("export-progress", {
-                phase: "complete",
-                current: 0,
-                total: 0,
-                percentage: 100,
-                message: "Finalizing...",
-              });
-            }
+            // The CLI is done, but the export is not: files still need to be
+            // renamed, filtered, zipped, and cleaned up.
+            sendProgress(finalizingProgress(), { force: true });
 
             if (stdout.includes("No chatrooms were found with the supplied contacts.")) {
               if (debugMode) {
@@ -741,7 +746,8 @@ ipcMain.handle("run-exporter", async (event, exportParams) => {
               return;
             }
 
-            const finalZipPath = await zipFolder(uniqueTempFolder, uniqueZipPath);
+            const finalZipPath = await zipFolder(uniqueTempFolder, uniqueZipPath, sendProgress);
+            sendProgress(completeProgress(), { force: true });
             resolve({ success: true, zipPath: finalZipPath, hasMessages });
           } catch (err) {
             if (debugMode) {
@@ -900,16 +906,26 @@ function sanitizeFileName(fileName) {
     .replace(/\.{2,}/g, "."); // Replace multiple dots with a single one
 }
 
-async function zipFolder(folderPath, zipPath) {
+async function zipFolder(folderPath, zipPath, onProgress = () => {}) {
+  // Measure up front so zip progress has a stable denominator; archiver's own
+  // total grows while it is still discovering entries.
+  const { totalBytes } = await measureFolder(folderPath);
+  onProgress(zipProgress(0, totalBytes), { force: true });
+
   const output = createWriteStream(zipPath);
   const archive = archiver("zip");
 
   return new Promise((resolve, reject) => {
     output.on("close", async () => {
+      onProgress(zipProgress(totalBytes, totalBytes), { force: true });
+      onProgress(cleanupProgress(), { force: true });
       await deleteTempFolder(folderPath);
       resolve(zipPath);
     });
     archive.on("error", reject);
+    archive.on("progress", (data) => {
+      onProgress(zipProgress(data.fs.processedBytes, totalBytes));
+    });
 
     archive.pipe(output);
     archive.directory(folderPath, false);

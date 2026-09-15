@@ -1,8 +1,10 @@
 import { useCallback, useState } from "react";
 import { useWizard } from "../../context/wizard-context";
 import { useLocalStorage } from "../../hooks/use-local-storage";
+import { getExportSteps, getProgressDetail, getProgressText } from "../../lib/export-phase";
 import { rankFallbackCandidates, type FallbackCandidate } from "../../lib/fallback-matches";
 import type { Contact } from "../../types";
+import { ExportSteps } from "../export-steps";
 import { ProgressBar } from "../progress-bar";
 
 type FallbackStatus = "idle" | "loading" | "ready" | "none" | "error";
@@ -230,33 +232,23 @@ export function Step4Export() {
     prevStep();
   };
 
-  const getProgressText = (): string => {
-    if (!state.exportProgress) return "Initializing...";
-
-    switch (state.exportProgress.phase) {
-      case "scanning":
-        return (
-          state.exportProgress.message ||
-          `Scanning... found ${state.exportProgress.total.toLocaleString()} messages`
-        );
-      case "exporting":
-        return `Exporting: ${state.exportProgress.current.toLocaleString()} / ${state.exportProgress.total.toLocaleString()}`;
-      case "copying-attachments":
-        return `Copying attachments: ${state.exportProgress.current.toLocaleString()} / ${state.exportProgress.total.toLocaleString()}`;
-      case "complete":
-        return "Export complete!";
-      default:
-        return "Processing...";
-    }
-  };
-
   if (state.exportStatus === "exporting") {
+    const progress = state.exportProgress;
+    const detail = getProgressDetail(progress);
     return (
       <div className="rounded-3xl bg-white p-8 shadow-md ring-1 ring-slate-950/5">
         <h2 className="mb-6 text-center text-2xl font-semibold text-slate-800">
           Exporting messages
         </h2>
-        <ProgressBar percentage={state.exportProgress?.percentage || 0} text={getProgressText()} />
+        <ExportSteps steps={getExportSteps(progress?.phase ?? null)} />
+        <ProgressBar percentage={progress?.percentage || 0} text={getProgressText(progress)} />
+        <p
+          className="mt-3 min-h-10 text-center text-sm text-slate-500"
+          aria-live="polite"
+          data-testid="export-progress-detail"
+        >
+          {detail}
+        </p>
       </div>
     );
   }

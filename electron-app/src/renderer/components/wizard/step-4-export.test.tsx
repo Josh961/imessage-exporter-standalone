@@ -1,10 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WizardProvider, useWizard } from "../../context/wizard-context";
 import { installMockElectronAPI, type MockElectronAPI } from "../../test/mock-electron-api";
-import type { Contact } from "../../types";
+import type { Contact, ExportProgress, ExportResult } from "../../types";
 import { Step4Export } from "./step-4-export";
 
 const selectedChat: Contact = {
@@ -239,5 +239,90 @@ describe("Step4Export fallback recovery flow", () => {
       await screen.findByText("No messages found in the specified date range."),
     ).toBeInTheDocument();
     expect(screen.queryByText("Possible matching chats")).not.toBeInTheDocument();
+  });
+});
+
+describe("Step4Export progress display", () => {
+  function captureProgress() {
+    let progressCallback: ((data: ExportProgress) => void) | null = null;
+    electronAPI.onExportProgress.mockImplementation(
+      (callback: (data: ExportProgress) => void) => {
+        progressCallback = callback;
+        return vi.fn();
+      },
+    );
+    let resolveExport: (result: ExportResult) => void = () => {};
+    electronAPI.runExporter.mockReturnValue(
+      new Promise<ExportResult>((resolve) => {
+        resolveExport = resolve;
+      }),
+    );
+    const emit = (data: ExportProgress) => {
+      act(() => {
+        progressCallback?.(data);
+      });
+    };
+    return { emit, finish: (result: ExportResult) => resolveExport(result) };
+  }
+
+  it("keeps the bar below 100% and explains the zip step until the export actually finishes", async () => {
+    const user = userEvent.setup();
+    const { emit, finish } = captureProgress();
+
+    renderStep4();
+    await user.click(await screen.findByRole("button", { name: "Export messages" }));
+
+    expect(await screen.findByText("Starting export...")).toBeInTheDocument();
+    const [exportStep, compressStep, finishStep] = screen.getAllByRole("listitem");
+    expect(exportStep).toHaveAttribute("aria-current", "step");
+
+    emit({ phase: "exporting", current: 500, total: 1000, percentage: 37.5 });
+    expect(screen.getByText("Exporting messages: 500 / 1,000")).toBeInTheDocument();
+    expect(screen.getByText("38%")).toBeInTheDocument();
+    expect(screen.getByTestId("export-progress-detail")).toBeEmptyDOMElement();
+
+    emit({ phase: "finalizing", current: 0, total: 0, percentage: 75 });
+    expect(screen.getByText("Preparing files...")).toBeInTheDocument();
+    expect(exportStep).toHaveTextContent("Export messages (done)");
+    expect(compressStep).toHaveAttribute("aria-current", "step");
+
+    emit({
+      phase: "zipping",
+      current: 50 * 1024 * 1024,
+      total: 200 * 1024 * 1024,
+      percentage: 80.75,
+    });
+    expect(screen.getByText("Compressing: 50.0 MB of 200.0 MB")).toBeInTheDocument();
+    expect(screen.getByText("81%")).toBeInTheDocument();
+    expect(screen.getByTestId("export-progress-detail")).toHaveTextContent("Keep the app open");
+    expect(screen.queryByText("Export complete!")).not.toBeInTheDocument();
+    expect(screen.queryByText("100%")).not.toBeInTheDocument();
+
+    emit({ phase: "cleaning-up", current: 0, total: 0, percentage: 98 });
+    expect(screen.getByText("Cleaning up...")).toBeInTheDocument();
+    expect(finishStep).toHaveAttribute("aria-current", "step");
+    expect(compressStep).toHaveTextContent("Compress files (done)");
+    expect(screen.queryByText("Export complete!")).not.toBeInTheDocument();
+
+    finish({ success: true, hasMessages: true, zipPath: "/exports/book.zip" });
+    // The success screen only appears once the main process has resolved.
+    expect(await screen.findByText("/exports/book.zip")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Export complete!" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open folder" })).toBeInTheDocument();
+  });
+
+  it("never moves the bar backwards when a late event reports less progress", async () => {
+    const user = userEvent.setup();
+    const { emit } = captureProgress();
+
+    renderStep4();
+    await user.click(await screen.findByRole("button", { name: "Export messages" }));
+    await screen.findByText("Starting export...");
+
+    emit({ phase: "exporting", current: 800, total: 1000, percentage: 60 });
+    emit({ phase: "exporting", current: 700, total: 1000, percentage: 52.5 });
+
+    expect(screen.getByText("60%")).toBeInTheDocument();
+    expect(screen.getByText("Exporting messages: 800 / 1,000")).toBeInTheDocument();
   });
 });

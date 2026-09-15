@@ -21,7 +21,14 @@ export interface IPhoneBackup {
 }
 
 export interface ExportProgress {
-  phase: "scanning" | "exporting" | "copying-attachments" | "complete";
+  phase:
+    | "scanning"
+    | "exporting"
+    | "copying-attachments"
+    | "finalizing"
+    | "zipping"
+    | "cleaning-up"
+    | "complete";
   current: number;
   total: number;
   percentage: number;

@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const resourcesDir = path.join(__dirname, "..", "resources");
-const requiredFlags = ["--chat-ids", "--list-contacts", "--images-only"];
+const requiredFlags = ["--chat-ids", "--list-contacts", "--skip-videos"];
 
 const platformResources = {
   darwin: {

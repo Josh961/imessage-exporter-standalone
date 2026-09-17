@@ -37,7 +37,7 @@ describe("getExportSteps", () => {
   it("labels the steps in order", () => {
     expect(getExportSteps(null).map((step) => step.label)).toEqual([
       "Export messages",
-      "Compress files",
+      "Compress folder",
       "Finish up",
     ]);
   });
@@ -63,9 +63,9 @@ describe("getProgressText", () => {
       getProgressText(
         progress({ phase: "zipping", current: 50 * 1024 * 1024, total: 200 * 1024 * 1024 }),
       ),
-    ).toBe("Compressing: 50.0 MB of 200.0 MB");
+    ).toBe("Compressing folder: 50.0 MB of 200.0 MB");
     expect(getProgressText(progress({ phase: "zipping", current: 0, total: 0 }))).toBe(
-      "Compressing files...",
+      "Compressing folder...",
     );
   });
 
@@ -90,6 +90,7 @@ describe("getProgressDetail", () => {
     expect(getProgressDetail(progress({ phase: "exporting" }))).toBeNull();
     expect(getProgressDetail(progress({ phase: "complete" }))).toBeNull();
     expect(getProgressDetail(progress({ phase: "finalizing" }))).toMatch(/ready to compress/);
+    expect(getProgressDetail(progress({ phase: "zipping" }))).toMatch(/original quality/);
     expect(getProgressDetail(progress({ phase: "zipping" }))).toMatch(/Keep the app open/);
     expect(getProgressDetail(progress({ phase: "cleaning-up" }))).toMatch(/Almost done/);
   });

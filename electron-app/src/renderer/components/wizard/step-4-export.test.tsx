@@ -292,7 +292,7 @@ describe("Step4Export progress display", () => {
       total: 200 * 1024 * 1024,
       percentage: 80.75,
     });
-    expect(screen.getByText("Compressing: 50.0 MB of 200.0 MB")).toBeInTheDocument();
+    expect(screen.getByText("Compressing folder: 50.0 MB of 200.0 MB")).toBeInTheDocument();
     expect(screen.getByText("81%")).toBeInTheDocument();
     expect(screen.getByTestId("export-progress-detail")).toHaveTextContent("Keep the app open");
     expect(screen.queryByText("Export complete!")).not.toBeInTheDocument();
@@ -301,7 +301,7 @@ describe("Step4Export progress display", () => {
     emit({ phase: "cleaning-up", current: 0, total: 0, percentage: 98 });
     expect(screen.getByText("Cleaning up...")).toBeInTheDocument();
     expect(finishStep).toHaveAttribute("aria-current", "step");
-    expect(compressStep).toHaveTextContent("Compress files (done)");
+    expect(compressStep).toHaveTextContent("Compress folder (done)");
     expect(screen.queryByText("Export complete!")).not.toBeInTheDocument();
 
     finish({ success: true, hasMessages: true, zipPath: "/exports/book.zip" });

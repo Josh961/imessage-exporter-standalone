@@ -9,7 +9,7 @@ export interface ExportStep {
   status: ExportStepStatus;
 }
 
-const STEP_LABELS = ["Export messages", "Compress files", "Finish up"] as const;
+const STEP_LABELS = ["Export messages", "Compress folder", "Finish up"] as const;
 
 // Which of the three user-facing steps each phase belongs to. "complete" is
 // past the last step so every step reads as done.
@@ -45,8 +45,8 @@ export function getProgressText(progress: ExportProgress | null): string {
       return "Preparing files...";
     case "zipping":
       return progress.total > 0
-        ? `Compressing: ${formatBytes(progress.current)} of ${formatBytes(progress.total)}`
-        : "Compressing files...";
+        ? `Compressing folder: ${formatBytes(progress.current)} of ${formatBytes(progress.total)}`
+        : "Compressing folder...";
     case "cleaning-up":
       return "Cleaning up...";
     case "complete":
@@ -61,7 +61,7 @@ export function getProgressDetail(progress: ExportProgress | null): string | nul
     case "finalizing":
       return "Getting the export folder ready to compress.";
     case "zipping":
-      return "Packing photos and audio into a single ZIP file. Large exports can take a few minutes. Keep the app open.";
+      return "Packing the export into one ZIP file. Photos and audio keep their original quality. Large exports can take a few minutes. Keep the app open.";
     case "cleaning-up":
       return "Removing temporary files. Almost done.";
     default:

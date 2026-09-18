@@ -245,12 +245,10 @@ describe("Step4Export fallback recovery flow", () => {
 describe("Step4Export progress display", () => {
   function captureProgress() {
     let progressCallback: ((data: ExportProgress) => void) | null = null;
-    electronAPI.onExportProgress.mockImplementation(
-      (callback: (data: ExportProgress) => void) => {
-        progressCallback = callback;
-        return vi.fn();
-      },
-    );
+    electronAPI.onExportProgress.mockImplementation((callback: (data: ExportProgress) => void) => {
+      progressCallback = callback;
+      return vi.fn();
+    });
     let resolveExport: (result: ExportResult) => void = () => {};
     electronAPI.runExporter.mockReturnValue(
       new Promise<ExportResult>((resolve) => {
